@@ -57,8 +57,17 @@ func seek(t: float) -> void:
 	renderer.set_time(t)
 
 func _process(_delta: float) -> void:
+	# RT-03: the reference runtime proves live animation — presentation time
+	# follows the canonical screen clock every frame while playing, exactly
+	# like the lab shell. FREE_RUN stays separate and opt-in.
 	if _free_tick and renderer != null:
 		renderer.set_free_run(Time.get_ticks_msec() / 1000.0)
+	if renderer != null and runtime != null and runtime.screen != null:
+		var playing := true
+		if runtime.screen.has_method("lab_preview_is_paused"):
+			playing = not bool(runtime.screen.lab_preview_is_paused())
+		if playing:
+			renderer.set_time(maxf(runtime.elapsed(), 0.0))
 
 func reload_production() -> Dictionary:
 	# Resolve every registered target through the shared authority and render the
