@@ -90,9 +90,13 @@ func reload_production() -> Dictionary:
 		plan.append({"key": key_str, "look": loaded["doc"]})
 		plan_ids.append("%s:%s:r%d" % [key_str, look_id, int((loaded["doc"] as Dictionary).get("revision", 0))])
 	var applied: Dictionary = renderer.apply_composition(plan)
+	# RT-01: a missing effective Look is a broken authority, never ok=true.
+	# Review-withheld looks are intentionally excluded by design and stay
+	# informational (review_skipped) rather than failing the composition.
+	var missing: Array = skipped
 	last_summary = {
 		"plan_ids": plan_ids,
-		"ok": bool(applied.get("ok", false)),
+		"ok": bool(applied.get("ok", false)) and missing.is_empty(),
 		"styled_targets": plan.size(),
 		"missing_looks": skipped,
 		"review_skipped": review_skipped,

@@ -76,7 +76,10 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 	#   order, layer order within a target) -> per-target local planes in
 	#   canonical target order -> ALL composition-foreground layers -> cover/UI.
 	var errors: Array = []
-	clear_all()
+	# RT-02: build EVERYTHING before touching the live tree. clear_all() used
+	# to run first, so one invalid target committed a partial mixed frame.
+	# Now a failed build cleans up detached nodes and the last-known-good
+	# composition stays mounted untouched.
 	var root := screen.get_node_or_null("Root")
 	if root == null:
 		return {"ok": false, "errors": ["screen Root missing"], "targets": 0}
@@ -101,6 +104,11 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 			_cleanup_stack(stack.get("entry", {}))
 			continue
 		stacks.append(stack)
+	if not errors.is_empty():
+		for stack in stacks:
+			_cleanup_stack((stack as Dictionary).get("entry", {}))
+		return {"ok": false, "targets": 0, "background": 0, "foreground": 0, "errors": errors, "rolled_back": true}
+	clear_all()
 
 	# ---- pass 1: all composition-background layers (deterministic order) --------
 	var background_anchor := _background_anchor_index(root)
