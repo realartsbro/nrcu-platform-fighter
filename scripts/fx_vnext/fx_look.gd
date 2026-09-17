@@ -551,6 +551,24 @@ static func _validate_fx(fx, layer_id: String) -> Array:
 			errors.append("fx.%s: expected finite color (layer %s)" % [key, layer_id])
 	if f.has("time_source") and str(f.get("time_source", "")) not in TIME_SOURCES:
 		errors.append("fx.time_source: invalid (layer %s)" % layer_id)
+	# MK-02/MK-04: treatment-mask and edge-mask asset intents are validated
+	# here; a missing required asset fails closed at apply time.
+	if bool(f.get("effect_mask_enabled", false)):
+		if str(f.get("treatment_mask_path", "")).strip_edges() == "":
+			errors.append("fx.treatment_mask_path: required when effect_mask_enabled (layer %s)" % layer_id)
+		else:
+			errors.append_array(_validate_asset_path(f["treatment_mask_path"], "fx.treatment_mask_path", layer_id))
+	elif str(f.get("treatment_mask_path", "")).strip_edges() != "":
+		errors.append_array(_validate_asset_path(f["treatment_mask_path"], "fx.treatment_mask_path", layer_id))
+	# MK-02: the custom edge source is not wired to any live shader path
+	# (renderer drives procedural modes 0/1/2 only) — persisting a custom
+	# edge asset would pretend a semantic that never renders.
+	if str(f.get("edge_mask_path", "")).strip_edges() != "":
+		errors.append("fx.edge_mask_path: unsupported — custom edge source is not wired (layer %s)" % layer_id)
+	if f.has("edge_source_mode") and not _finite_number(f.get("edge_source_mode", null)):
+		errors.append("fx.edge_source_mode: non-finite (layer %s)" % layer_id)
+	elif float(f.get("edge_source_mode", 2.0)) < 0.0 or float(f.get("edge_source_mode", 2.0)) > 2.0:
+		errors.append("fx.edge_source_mode: supported modes are 0/1/2 (layer %s)" % layer_id)
 	return errors
 
 static func _validate_motion(motion, layer_id: String) -> Array:
@@ -653,6 +671,14 @@ static func _validate_mask(mask, layer_id: String) -> Array:
 			errors.append("mask.%s: must be >= 0 (layer %s)" % [key, layer_id])
 	if m.get("custom_mask") != null:
 		errors.append_array(_validate_asset_path(m["custom_mask"], "mask.custom_mask", layer_id))
+	# MK-03: an enabled CUSTOM_MASK without an asset must fail closed here —
+	# the shader/runtime must never silently fall back to full-mask behavior.
+	if bool(m.get("enabled", false)) and str(m.get("source", "")) == "CUSTOM_MASK":
+		if m.get("custom_mask") == null or str(m.get("custom_mask")).strip_edges() == "":
+			errors.append("mask.custom_mask: required when source is CUSTOM_MASK (layer %s)" % layer_id)
+	# MK-01: enabled with source NONE samples no field — documented no-op
+	# passthrough (the shader returns 1.0), not a hazard, so it validates.
+	# Authors should disable the mask instead; see MASK_CONTRACT.md P1.
 	return errors
 
 static func _validate_asset_path(path, label: String, layer_id: String) -> Array:
