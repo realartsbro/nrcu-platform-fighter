@@ -334,8 +334,26 @@ func set_time(t: float) -> void:
 				_refresh_envelope(quad)
 		_update_stack(str(key))
 
+# UI-04: debug view actually switches renderer output. The shader has long
+# implemented modes 0..6; the renderer never drove the uniform (silent no-op).
+const DEBUG_VIEWS := ["COMPOSITE", "BASE", "EFFECT", "EDGE", "COVERAGE", "MASK", "DRIVER"]
+var _debug_view := "COMPOSITE"
+
 # MK asset errors collected by _make_quad during one _construct_stack run.
 var _quad_asset_errors: Array = []
+
+func set_debug_view(mode: String) -> void:
+	# Unknown names fall back to COMPOSITE (fail-safe display, never an error).
+	_debug_view = mode if mode in DEBUG_VIEWS else "COMPOSITE"
+	var value := float(DEBUG_VIEWS.find(_debug_view))
+	for key in _stacks.keys():
+		for quad_entry in _all_quad_entries((_stacks[key] as Dictionary)):
+			var quad = (quad_entry as Dictionary).get("node", null)
+			if is_instance_valid(quad) and (quad as Control).material is ShaderMaterial:
+				((quad as Control).material as ShaderMaterial).set_shader_parameter("debug_view_mode", value)
+
+func debug_view() -> String:
+	return _debug_view
 
 # TM-04: explicit manual-trigger epochs per motion domain.
 var _manual_epochs: Dictionary = {}
@@ -546,6 +564,7 @@ func _make_quad(canonical: TextureRect, rect: Rect2, tint: Color, layer: Diction
 	var op := float(layer.get("opacity", 1.0))
 	material.set_shader_parameter("layer_opacity", op if is_finite(op) else 1.0)
 	material.set_shader_parameter("blend_mode", float(BLEND_INDEX.get(str(layer.get("blend_mode", "NORMAL")), 0)))
+	material.set_shader_parameter("debug_view_mode", float(DEBUG_VIEWS.find(_debug_view)))
 	_set_fx_uniforms(material, layer.get("fx", {}), layer.get("motion", {}), str(layer.get("layer_id", "")))
 	quad.material = material
 	# TM-03: envelope base amounts + motion ride on the quad so set_time can

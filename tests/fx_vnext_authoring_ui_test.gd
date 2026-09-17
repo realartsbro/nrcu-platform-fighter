@@ -58,7 +58,23 @@ func _spawn() -> Control:
 	root.add_child(node)
 	return node
 
+func _wipe_dir(abs_path: String) -> void:
+	if DirAccess.dir_exists_absolute(abs_path):
+		for entry in DirAccess.get_files_at(abs_path):
+			DirAccess.remove_absolute(abs_path.path_join(entry))
+		for sub in DirAccess.get_directories_at(abs_path):
+			_wipe_dir(abs_path.path_join(sub))
+			DirAccess.remove_absolute(abs_path.path_join(sub))
+	else:
+		DirAccess.make_dir_recursive_absolute(abs_path)
+
 func _seed() -> void:
+	# Full store isolation (see palette suite): wipe the shell's RESOLVED
+	# store dirs (honors NRCU_FX_DATA_DIR/_DRAFT_DIR overrides) before seeding.
+	_wipe_dir(ProjectSettings.globalize_path(shell.production.data_dir))
+	_wipe_dir(ProjectSettings.globalize_path(shell.drafts.base_dir))
+	# Draft slot isolation (see palette suite): clear the stable target slot.
+	shell.drafts.clear_target(shell.runtime.registry.signature_for_key("echo_left"))
 	# Unique look per run: user:// production persists across runs and the
 	# revision rule would reject re-seeding a fixed id.
 	var look_id := "UI01_%d" % int(Time.get_unix_time_from_system())

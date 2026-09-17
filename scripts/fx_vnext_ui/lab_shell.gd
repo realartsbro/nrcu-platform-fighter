@@ -2567,38 +2567,88 @@ func _inspector_slider(label_text: String, min_value: float, max_value: float, s
 	return row
 
 func _build_palette_page(tab_pages: Dictionary, layer: Dictionary, layer_id: String, protected: bool) -> void:
+	# UI-02: palette editing is canonical layer.fx state (strategy/locks/H/S/V
+	# author the intent; GENERATE materializes fringe_color_a/b; the shader
+	# only ever renders the materialized colors).
 	var page: VBoxContainer = _tab_page(tab_pages, "PALETTE")
-	var palette = layer.get("palette", {})
-	if not (palette is Dictionary) or (palette as Dictionary).is_empty():
-		var note := Label.new()
-		note.text = "No palette fields on this layer yet."
-		note.add_theme_font_size_override("font_size", UiTokens.T_HELP)
-		note.add_theme_color_override("font_color", UiTokens.DISABLED)
-		page.add_child(note)
-		return
-	for key in (palette as Dictionary).keys():
-		var value = (palette as Dictionary)[key]
-		if value is bool:
-			var check := CheckBox.new()
-			check.text = display_token(str(key)).to_upper()
-			check.button_pressed = bool(value)
-			check.disabled = protected
-			check.toggled.connect(func(pressed: bool) -> void: _edit_layer(layer_id, func(doc):
-				var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
-				(l["palette"] as Dictionary)[str(key)] = pressed
-			, false))
-			page.add_child(check)
-		elif value is float or value is int:
-			page.add_child(_inspector_slider(display_token(str(key)), -8.0, 8.0, 0.05, float(value), protected, func(new_value: float) -> void:
-				_edit_layer(layer_id, func(doc):
-					var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
-					(l["palette"] as Dictionary)[str(key)] = new_value
-				, false, true)
-			))
-		else:
-			page.add_child(_inspector_option(display_token(str(key)), [str(value)], str(value), true, Callable()))
+	var fx: Dictionary = layer.get("fx", {})
+	var names := ["DOMINANT + DISTANT", "COMPLEMENT", "SPLIT COMPLEMENT", "ANALOGOUS", "TRIADIC", "MONOCHROME"]
+	page.add_child(_inspector_option("Strategy", names, names[clampi(int(float(fx.get("palette_strategy", 0.0))), 0, 5)], protected, func(value: String) -> void:
+		_edit_layer(layer_id, func(doc):
+			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+			(l["fx"] as Dictionary)["palette_strategy"] = float(names.find(value))
+		, false)
+	))
+	var lockrow := HBoxContainer.new()
+	for pair in [["Lock A", "palette_lock_a"], ["Lock B", "palette_lock_b"], ["Swap A/B", "palette_swap"]]:
+		var check := CheckBox.new()
+		check.text = str(pair[0])
+		check.button_pressed = bool(fx.get(str(pair[1]), false))
+		check.disabled = protected
+		check.toggled.connect(func(pressed: bool) -> void: _edit_layer(layer_id, func(doc):
+			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+			(l["fx"] as Dictionary)[str(pair[1])] = pressed
+		, false))
+		lockrow.add_child(check)
+	page.add_child(lockrow)
+	var scol := HBoxContainer.new()
+	var slab := Label.new()
+	slab.text = "Source"
+	slab.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	slab.custom_minimum_size.x = 70
+	scol.add_child(slab)
+	var picker := ColorPickerButton.new()
+	var sc: Array = fx.get("palette_source_color", [0.5, 0.5, 0.5, 1.0])
+	picker.color = Color(float(sc[0]), float(sc[1]), float(sc[2]), 1.0)
+	picker.disabled = protected
+	picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	picker.color_changed.connect(func(color: Color) -> void: _edit_layer(layer_id, func(doc):
+		var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+		(l["fx"] as Dictionary)["palette_source_color"] = [color.r, color.g, color.b, 1.0]
+	, false))
+	scol.add_child(picker)
+	page.add_child(scol)
+	page.add_child(_fx_slider("Hue offset", "palette_hue_offset", -180.0, 180.0, 1.0, fx, layer_id, protected))
+	page.add_child(_fx_slider("Saturation", "palette_saturation", 0.0, 3.0, 0.05, fx, layer_id, protected))
+	page.add_child(_fx_slider("Value", "palette_value", 0.0, 2.0, 0.05, fx, layer_id, protected))
+	var gen := Button.new()
+	gen.text = "GENERATE A/B FROM STRATEGY"
+	gen.disabled = protected
+	gen.tooltip_text = "Materializes fringe_color_a/b from strategy + H/S/V (respects locks)"
+	gen.pressed.connect(func() -> void:
+		_edit_layer(layer_id, func(doc):
+			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+			var lfx: Dictionary = l["fx"]
+			var dom_arr: Array = lfx.get("palette_source_color", [0.5, 0.5, 0.5, 1.0])
+			var distant_arr: Array = lfx.get("fringe_color_b", [1.0, 0.4, 0.85, 1.0])
+			var generated: Dictionary = FxLookScript.generate_palette(doc, layer_id,
+				Color(float(dom_arr[0]), float(dom_arr[1]), float(dom_arr[2]), 1.0),
+				Color(float(distant_arr[0]), float(distant_arr[1]), float(distant_arr[2]), 1.0))
+			if not bool(generated.get("ok", false)):
+				action_status.text = "✗ palette generate: " + str(generated.get("errors", []))
+		, true)
+	)
+	page.add_child(gen)
+	var swatches := HBoxContainer.new()
+	for pair in [["A", "fringe_color_a"], ["B", "fringe_color_b"]]:
+		var cap := Label.new()
+		cap.text = str(pair[0])
+		cap.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+		swatches.add_child(cap)
+		var sw := ColorRect.new()
+		var carr: Array = fx.get(str(pair[1]), [1.0, 1.0, 1.0, 1.0])
+		sw.color = Color(float(carr[0]), float(carr[1]), float(carr[2]), 1.0)
+		sw.custom_minimum_size = Vector2(64, 22)
+		sw.tooltip_text = str(pair[1]) + " (materialized — edit via Generate)"
+		swatches.add_child(sw)
+	page.add_child(swatches)
 
 func _build_motion_page(tab_pages: Dictionary, layer: Dictionary, layer_id: String, protected: bool) -> void:
+	# UI-03: motion tracks fully authorable. Four canonical domains; each has
+	# an enable gate plus a full envelope track. Anchor is "manual" (fired via
+	# the TRIGGER button through the live renderer) or a match-flow event
+	# name. Ranges mirror validator + runtime clamps (TM-07): attack/release
+	# > 0, sustain in [0,1], times >= 0.
 	var page: VBoxContainer = _tab_page(tab_pages, "MOTION")
 	var motion = layer.get("motion", {})
 	var header := Label.new()
@@ -2613,34 +2663,101 @@ func _build_motion_page(tab_pages: Dictionary, layer: Dictionary, layer_id: Stri
 		note.add_theme_color_override("font_color", UiTokens.DISABLED)
 		page.add_child(note)
 		return
-	for effect_key in (motion as Dictionary).keys():
-		var envelope = (motion as Dictionary)[effect_key]
-		if not (envelope is Dictionary):
-			continue
-		var label := Label.new()
-		label.text = display_token(str(effect_key))
-		label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
-		label.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
-		page.add_child(label)
-		for field in (envelope as Dictionary).keys():
-			var field_value = (envelope as Dictionary)[field]
-			if field_value is bool:
-				var check := CheckBox.new()
-				check.text = display_token(str(field)).to_upper()
-				check.button_pressed = bool(field_value)
-				check.disabled = protected
-				check.toggled.connect(func(pressed: bool) -> void: _edit_layer(layer_id, func(doc):
-					var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
-					((l["motion"] as Dictionary)[str(effect_key)] as Dictionary)[str(field)] = pressed
-				, false))
-				page.add_child(check)
-			elif field_value is float or field_value is int:
-				page.add_child(_inspector_slider(display_token(str(field)), -8.0, 8.0, 0.01, float(field_value), protected, func(new_value: float) -> void:
-					_edit_layer(layer_id, func(doc):
-						var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
-						((l["motion"] as Dictionary)[str(effect_key)] as Dictionary)[str(field)] = new_value
-					, false, true)
-				))
+	var enabled: Dictionary = (motion as Dictionary).get("enabled", {})
+	var tracks: Dictionary = (motion as Dictionary).get("tracks", {})
+	var curves := ["linear", "cubic_in", "cubic_out", "sine_in_out", "back_out"]
+	for domain in ["dither", "fringe", "flow", "rgb"]:
+		var dhead := HBoxContainer.new()
+		var dlabel := Label.new()
+		dlabel.text = str(domain).to_upper()
+		dlabel.add_theme_font_size_override("font_size", UiTokens.T_META)
+		dlabel.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
+		dlabel.custom_minimum_size.x = 90
+		dhead.add_child(dlabel)
+		var en := CheckBox.new()
+		en.text = "ON"
+		en.button_pressed = bool(enabled.get(str(domain), false))
+		en.disabled = protected
+		en.toggled.connect(func(pressed: bool) -> void: _edit_layer(layer_id, func(doc):
+			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+			((l["motion"] as Dictionary)["enabled"] as Dictionary)[str(domain)] = pressed
+		, false))
+		dhead.add_child(en)
+		var trig := Button.new()
+		trig.text = "TRIGGER"
+		trig.tooltip_text = "Restart the manual-anchored %s envelope at the current clock (live preview)" % str(domain)
+		trig.disabled = protected
+		trig.pressed.connect(func() -> void:
+			if renderer != null and renderer.has_method("trigger_manual"):
+				renderer.trigger_manual(str(domain))
+			else:
+				action_status.text = "✗ live renderer unavailable for trigger"
+		)
+		dhead.add_child(trig)
+		page.add_child(dhead)
+		var track: Dictionary = tracks.get(str(domain), {})
+		# anchor: manual or event name (free string, validated structurally)
+		var arow := HBoxContainer.new()
+		var alab := Label.new()
+		alab.text = "Anchor"
+		alab.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+		alab.custom_minimum_size.x = 70
+		arow.add_child(alab)
+		var aedit := LineEdit.new()
+		aedit.text = str(track.get("anchor", "manual"))
+		aedit.placeholder_text = "manual or event name"
+		aedit.editable = not protected
+		aedit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		aedit.text_submitted.connect(func(text: String) -> void: _edit_layer(layer_id, func(doc):
+			_motion_track(doc, layer_id, str(domain))["anchor"] = text.strip_edges() if text.strip_edges() != "" else "manual"
+		, false))
+		arow.add_child(aedit)
+		page.add_child(arow)
+		var trow := HBoxContainer.new()
+		for spec in [["T0", "anchor_time", 0.0, 30.0, 0.05], ["Delay", "delay", 0.0, 10.0, 0.05], ["Atk", "attack", 0.001, 5.0, 0.01], ["Hold", "hold", 0.0, 10.0, 0.05], ["Rel", "release", 0.001, 5.0, 0.01], ["Sus", "sustain", 0.0, 1.0, 0.05]]:
+			var slab := Label.new()
+			slab.text = " " + str(spec[0])
+			slab.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+			trow.add_child(slab)
+			var spin := SpinBox.new()
+			spin.min_value = float(spec[2])
+			spin.max_value = float(spec[3])
+			spin.step = float(spec[4])
+			spin.value = clampf(float(track.get(str(spec[1]), 0.0)), float(spec[2]), float(spec[3]))
+			spin.custom_minimum_size.x = 76
+			spin.editable = not protected
+			spin.value_changed.connect(func(value: float) -> void: _edit_layer(layer_id, func(doc):
+				_motion_track(doc, layer_id, str(domain))[str(spec[1])] = value
+			, false, true))
+			trow.add_child(spin)
+		page.add_child(trow)
+		var crow := HBoxContainer.new()
+		for pair in [["Attack curve", "attack_curve"], ["Release curve", "release_curve"]]:
+			var clab := Label.new()
+			clab.text = " " + str(pair[0])
+			clab.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+			crow.add_child(clab)
+			var copt := OptionButton.new()
+			for item in curves:
+				copt.add_item(str(item))
+			copt.selected = maxi(0, curves.find(str(track.get(str(pair[1]), "cubic_out"))))
+			copt.disabled = protected
+			copt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			copt.item_selected.connect(func(selected: int) -> void: _edit_layer(layer_id, func(doc):
+				_motion_track(doc, layer_id, str(domain))[str(pair[1])] = str(curves[selected])
+			, false))
+			crow.add_child(copt)
+		page.add_child(crow)
+
+# UI-03: ensure the domain track dict exists before writing (sparse docs).
+func _motion_track(doc: Dictionary, layer_id: String, domain: String) -> Dictionary:
+	var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+	if not ((l["motion"] as Dictionary).get("tracks", {}) is Dictionary):
+		(l["motion"] as Dictionary)["tracks"] = {}
+	var tracks: Dictionary = (l["motion"] as Dictionary)["tracks"]
+	if not (tracks.get(domain, {}) is Dictionary):
+		tracks[domain] = {"anchor": "manual", "anchor_time": 0.0, "delay": 0.0, "attack": 0.1, "hold": 0.0, "release": 0.25, "sustain": 0.0, "attack_curve": "cubic_out", "release_curve": "sine_in_out"}
+	return tracks[domain]
 
 func _build_advanced_page(tab_pages: Dictionary, layer: Dictionary, layer_id: String, type: String, protected: bool) -> void:
 	var page: VBoxContainer = _tab_page(tab_pages, "ADVANCED")
@@ -2651,7 +2768,7 @@ func _build_advanced_page(tab_pages: Dictionary, layer: Dictionary, layer_id: St
 	page.add_child(debug_header)
 	page.add_child(_inspector_option("View", ["COMPOSITE", "BASE", "EFFECT", "EDGE", "COVERAGE", "MASK", "DRIVER"], debug_view, false, func(value: String) -> void:
 		debug_view = value
-		if renderer != null and renderer.has_method("set_debug_view"):
+		if renderer != null:
 			renderer.set_debug_view(value)
 	))
 	var raw_header := Label.new()
