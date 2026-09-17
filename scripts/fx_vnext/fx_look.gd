@@ -195,6 +195,17 @@ static func materialize(doc: Dictionary) -> Dictionary:
 		else:
 			layer.erase("input")
 		fixed_layers.append(layer)
+	# LG-04: the mandatory SOURCE layer is pinned at root index 0 — plane
+	# pinning alone does not fix dependency order. Stable for the rest.
+	var source_index := -1
+	for i in range(fixed_layers.size()):
+		if str((fixed_layers[i] as Dictionary).get("type", "")) == TYPE_SOURCE:
+			source_index = i
+			break
+	if source_index > 0:
+		var source_layer: Dictionary = fixed_layers[source_index]
+		fixed_layers.remove_at(source_index)
+		fixed_layers.push_front(source_layer)
 	out["layers"] = fixed_layers
 	out["schema"] = str(out.get("schema", SCHEMA))
 	out["look_id"] = str(out.get("look_id", ""))
@@ -462,7 +473,43 @@ static func validate(doc: Dictionary) -> Dictionary:
 		errors.append_array(_validate_motion(layer.get("motion", {}), layer_id))
 	if source_count != 1:
 		errors.append("layers: exactly one SOURCE layer required (found %d)" % source_count)
+	elif layers.is_empty() or not (layers[0] is Dictionary) or str((layers[0] as Dictionary).get("type", "")) != TYPE_SOURCE:
+		errors.append("layers: SOURCE must be at root index 0")
+	errors.append_array(validate_topology(doc))
 	return {"ok": errors.is_empty(), "errors": errors}
+
+# LG-03: render-topology constraints live in the MODEL, not only in renderer
+# construction — Production must reject what the renderer would reject.
+# Mirrors FxLayerRenderer SUPPORTED_INPUTS/SUPPORTED_BLENDS/OFFSET_INPUTS.
+static func validate_topology(doc: Dictionary) -> Array:
+	var errors: Array = []
+	var layers: Array = doc.get("layers", [])
+	var viewport_consumers := 0
+	var has_transformed_consumer := false
+	for raw in layers:
+		if not (raw is Dictionary):
+			continue
+		var layer: Dictionary = raw
+		if not bool(layer.get("enabled", true)):
+			continue
+		if str(layer.get("type", "")) != "FX":
+			continue
+		var input := str(layer.get("input", "ORIGINAL_SOURCE"))
+		var blend := str(layer.get("blend_mode", "NORMAL"))
+		var lid := str(layer.get("layer_id", ""))
+		if input not in ["ORIGINAL_SOURCE", "TRANSFORMED_SOURCE", "LAYER_BELOW", "COMPOSITE_BELOW"]:
+			errors.append("topology: unsupported input %s (layer %s)" % [input, lid])
+		if blend not in ["NORMAL", "ADD", "SCREEN", "MULTIPLY"]:
+			errors.append("topology: unsupported blend %s (layer %s)" % [blend, lid])
+		if input in ["LAYER_BELOW", "COMPOSITE_BELOW"]:
+			viewport_consumers += 1
+		if input == "TRANSFORMED_SOURCE":
+			has_transformed_consumer = true
+	if viewport_consumers > 1:
+		errors.append("topology: only one offscreen-input consumer per target is supported yet")
+	if has_transformed_consumer and viewport_consumers > 0:
+		errors.append("topology: mixing TRANSFORMED_SOURCE with LAYER_BELOW/COMPOSITE_BELOW needs nested stages (unsupported yet)")
+	return errors
 
 static func _validate_fx(fx, layer_id: String) -> Array:
 	var errors: Array = []
@@ -694,6 +741,67 @@ static func find_layer(doc: Dictionary, layer_id: String) -> Dictionary:
 		if layer is Dictionary and str(layer.get("layer_id", "")) == layer_id:
 			return layer
 	return {}
+
+# LG-02/LG-04/LG-05: document-level layer graph operations. Visual order IS
+# document order, so moves mutate raw indices directly; SOURCE is pinned at
+# root index 0 and refuses every reorder; drops never change planes.
+static func move_layer_in(doc: Dictionary, layer_id: String, direction: int) -> bool:
+	var layers: Array = doc.get("layers", [])
+	var index := -1
+	for i in range(layers.size()):
+		if str((layers[i] as Dictionary).get("layer_id", "")) == layer_id:
+			index = i
+			break
+	if index == -1:
+		return false
+	if str((layers[index] as Dictionary).get("type", "")) == TYPE_SOURCE:
+		return false
+	var target := index + direction
+	if target < 0 or target >= layers.size():
+		return false
+	if str((layers[target] as Dictionary).get("type", "")) == TYPE_SOURCE:
+		return false
+	var moved: Dictionary = layers[index]
+	layers.remove_at(index)
+	layers.insert(target, moved)
+	return true
+
+static func reorder_layer_in(doc: Dictionary, drag_id: String, target_id: String) -> bool:
+	if drag_id == target_id:
+		return false
+	var layers: Array = doc.get("layers", [])
+	var from := -1
+	var to := -1
+	for i in range(layers.size()):
+		var lid := str((layers[i] as Dictionary).get("layer_id", ""))
+		if lid == drag_id:
+			from = i
+		if lid == target_id:
+			to = i
+	if from == -1 or to == -1:
+		return false
+	if str((layers[from] as Dictionary).get("type", "")) == TYPE_SOURCE:
+		return false
+	if str((layers[to] as Dictionary).get("type", "")) == TYPE_SOURCE:
+		# SOURCE is pinned at 0: dropping "onto" it lands directly after.
+		to = 1
+		if from == 1:
+			return false
+	var moved: Dictionary = layers[from]
+	layers.remove_at(from)
+	if to > from:
+		to -= 1
+	layers.insert(to, moved)
+	return true
+
+static func set_layer_plane(doc: Dictionary, layer_id: String, plane: String) -> bool:
+	var layer := find_layer(doc, layer_id)
+	if layer.is_empty():
+		return false
+	if str(layer.get("type", "")) == TYPE_SOURCE:
+		return false
+	layer["plane"] = plane
+	return true
 
 static func source_layer(doc: Dictionary) -> Dictionary:
 	for layer in doc.get("layers", []):

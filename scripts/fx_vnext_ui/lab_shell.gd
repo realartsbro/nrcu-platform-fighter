@@ -1806,6 +1806,9 @@ func _rebuild_layers_panel() -> void:
 		"TARGET_UNDERLAY": "BEHIND TARGET",
 		"COMPOSITION_BACKGROUND": "BACKGROUND",
 	}
+	# LG-01: one order model — the panel shows global document order within
+	# each plane group (no reversal), so visual order IS the authoritative
+	# draw/dependency order the renderer resolves inputs against.
 	for plane in order:
 		var plane_rows: Array = []
 		for raw in layers:
@@ -1825,7 +1828,7 @@ func _rebuild_layers_panel() -> void:
 		head.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 		head.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
 		section_box.add_child(head)
-		for index in range(plane_rows.size() - 1, -1, -1):
+		for index in range(plane_rows.size()):
 			section_box.add_child(_layer_row(plane_rows[index]))
 		layers_rows.add_child(section)
 
@@ -1975,57 +1978,22 @@ func _action_paste_layer() -> void:
 		action_status.text = "✗ " + str(result.get("errors", []))
 
 func _move_layer(layer_id: String, direction: int) -> void:
+	# LG-02/LG-04: visual order is document order, so Up/Down moves in raw
+	# index space directly; SOURCE is pinned and refuses to move.
 	_edit_layer(layer_id, func(doc):
-		var layers: Array = doc["layers"]
-		var index := -1
-		for i in range(layers.size()):
-			if str((layers[i] as Dictionary).get("layer_id", "")) == layer_id:
-				index = i
-				break
-		if index == -1:
-			return
-		var target := index + direction
-		if target < 0 or target >= layers.size():
-			return
-		var moved: Dictionary = layers[index]
-		layers.remove_at(index)
-		layers.insert(target, moved)
+		FxLookScript.move_layer_in(doc, layer_id, direction)
 	)
 
 func _drop_layer_on_layer(drag_id: String, target_id: String) -> void:
-	if drag_id == target_id:
-		return
+	# LG-05: dropping onto a layer reorders dependency position ONLY — plane
+	# changes happen exclusively via plane-section drops, never implicitly.
 	_edit_layer(drag_id, func(doc):
-		var layers: Array = doc["layers"]
-		var from := -1
-		var to := -1
-		for i in range(layers.size()):
-			var lid := str((layers[i] as Dictionary).get("layer_id", ""))
-			if lid == drag_id:
-				from = i
-			if lid == target_id:
-				to = i
-		if from == -1 or to == -1:
-			return
-		var moved: Dictionary = layers[from]
-		var target_layer: Dictionary = layers[to]
-		layers.remove_at(from)
-		if to > from:
-			to -= 1
-		moved["plane"] = str(target_layer.get("plane", "TARGET_SOURCE"))
-		if str(moved.get("type", "")) == "SOURCE":
-			moved["plane"] = "TARGET_SOURCE"
-		layers.insert(to, moved)
+		FxLookScript.reorder_layer_in(doc, drag_id, target_id)
 	)
 
 func _drop_layer_on_plane(drag_id: String, plane: String) -> void:
 	_edit_layer(drag_id, func(doc):
-		var l: Dictionary = FxLookScript.find_layer(doc, drag_id)
-		if l.is_empty():
-			return
-		if str(l.get("type", "")) == "SOURCE":
-			return # SOURCE is pinned to TARGET_SOURCE (specs/02 §10)
-		l["plane"] = plane
+		FxLookScript.set_layer_plane(doc, drag_id, plane)
 	)
 
 func _rebuild_inspector() -> void:
