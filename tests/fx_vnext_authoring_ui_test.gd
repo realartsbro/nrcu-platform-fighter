@@ -253,10 +253,10 @@ func _flow_is_live(fx_id: String) -> void:
 	_check(_mean_diff(before, after) > 0.001, "UI-01 Flow drives the fringe field visibly", "mean=%.5f" % _mean_diff(before, after))
 
 func _dither_threshold_visible(fx_id: String) -> void:
-	# dither_threshold has no runtime semantic (declaration-only legacy field):
-	# macros must NOT present it as live (the MONO "Threshold" slider below is
-	# mono_threshold — setting it must leave dither_threshold untouched).
-	# Expert keeps raw typed access.
+	# CT-10 contract: dither_threshold is LEGACY_DEAD_SURFACE — persisted +
+	# validated + passed through, but no control anywhere and no render effect.
+	# (The MONO "Threshold" slider below is mono_threshold — setting it must
+	# leave dither_threshold untouched.)
 	var mono_thresh := _find_slider("Threshold")
 	_check(mono_thresh != null, "UI-01 mono Threshold macro slider reachable")
 	if mono_thresh == null:
@@ -264,8 +264,22 @@ func _dither_threshold_visible(fx_id: String) -> void:
 	mono_thresh.value = 0.2
 	await settle(5)
 	_check(absf(float(_fx().get("dither_threshold", 0.75)) - 0.75) < 0.001, "UI-01 Threshold macro writes mono only, never dither_threshold")
-	var expert_thresh := _find_spin("dither_threshold")
-	_check(expert_thresh != null, "UI-01 Threshold keeps raw expert access")
+	_check(_find_spin("dither_threshold") == null, "UI-01 dead Threshold has no expert control either")
+	# Vary through the full range via session: value round-trips, pixels identical.
+	shell.session.edit(func(doc):
+		(FxLookScript.find_layer(doc, shell.selected_layer_id)["fx"] as Dictionary)["dither_threshold"] = 0.0
+	)
+	shell._render_current_look()
+	await settle(5)
+	_check(absf(float(_fx().get("dither_threshold", -1.0)) - 0.0) < 0.001, "UI-01 dead Threshold value round-trips losslessly")
+	var img_zero: Image = await _capture("ui01_thresh_zero")
+	shell.session.edit(func(doc):
+		(FxLookScript.find_layer(doc, shell.selected_layer_id)["fx"] as Dictionary)["dither_threshold"] = 1.0
+	)
+	shell._render_current_look()
+	await settle(8)
+	var img_one: Image = await _capture("ui01_thresh_one")
+	_check(_mean_diff(img_zero, img_one) == 0.0, "UI-01 dead Threshold has zero render effect (CT-10)")
 	var dither := _find_slider("Dither")
 	if dither == null:
 		_check(false, "UI-01 Dither macro slider reachable")

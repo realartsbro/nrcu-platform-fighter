@@ -2,13 +2,14 @@
 
 - canonical_fx_109: 109 (scope check PASS)
 - full_authoring_surface rows: 47
-- canonical without any UI: 31 (UI-01 work list)
+- canonical without any UI: 32 (UI-01 work list)
 
 ## Canonical FX without UI (UI-01 work list)
 - fx.base_opacity (renderer_read=yes, behavioral=open)
 - fx.grade_black_point (renderer_read=yes, behavioral=open)
 - fx.grade_white_point (renderer_read=yes, behavioral=open)
 - fx.source_pixel_units (renderer_read=yes, behavioral=open)
+- fx.dither_threshold (renderer_read=yes, behavioral=compatibility_only/legacy_dead_surface (no control, no semantic))
 - fx.dither_bayer_level (renderer_read=yes, behavioral=open)
 - fx.dither_space (renderer_read=yes, behavioral=open)
 - fx.fringe_color_a (renderer_read=yes, behavioral=open)

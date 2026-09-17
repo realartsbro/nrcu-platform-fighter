@@ -2435,10 +2435,10 @@ func _rebuild_inspector() -> void:
 		for spec in [["RGB", "rgb", 0.0, 4.0, 0.05], ["Shift px", "rgb_shift_amount", 0.0, 64.0, 0.5], ["Shift angle", "rgb_shift_angle", -180.0, 180.0, 1.0], ["Shift alpha", "rgb_shift_alpha", 0.0, 1.0, 0.05]]:
 			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), float(spec[2]), float(spec[3]), float(spec[4]), fx, layer_id, protected))
 		look_page.add_child(_fx_group_header("DITHER"))
-		# NOTE: dither_threshold is intentionally NOT a macro slider: the field
-		# is persisted + validated but has no runtime semantic (declaration-only
-		# legacy surface). Presenting it as live would fake capability. Raw
-		# expert access stays available; see AUTHORING_INVENTORY.
+		# NOTE: dither_threshold has no control anywhere by contract (CT-10,
+		# LEGACY_DEAD_SURFACE): persisted + validated + passed through, but
+		# declaration-only in legacy AND vNEXT shaders — presenting it as
+		# editable would fake capability. See AUTHORING_INVENTORY.
 		for spec in [["Dither", "dither", 0.0, 4.0, 0.05], ["Pixel", "dither_pixel", 0.0, 16.0, 0.5], ["Levels", "dither_levels", 2.0, 16.0, 1.0], ["Mode", "dither_mode", 0.0, 2.0, 1.0]]:
 			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), float(spec[2]), float(spec[3]), float(spec[4]), fx, layer_id, protected))
 		look_page.add_child(_fx_group_header("FLOW"))
@@ -2689,9 +2689,6 @@ func _build_expert_fx(page: VBoxContainer, layer: Dictionary, layer_id: String, 
 		"dither_black_point": [0.0, 1.0, 0.01], "dither_white_point": [0.0, 1.0, 0.01],
 		"dither_gamma": [0.2, 4.0, 0.05], "dither_contrast": [0.0, 3.0, 0.05],
 		"dither_brightness": [-1.0, 1.0, 0.05],
-		# dither_threshold: declaration-only legacy field (no runtime
-		# semantic). Raw expert access only, never a live macro.
-		"dither_threshold": [0.0, 1.0, 0.01],
 		"fringe_coverage_mode": [0.0, 2.0, 1.0], "fringe_coverage_threshold": [0.0, 1.0, 0.01],
 		"fringe_bayer_level": [0.0, 2.0, 1.0], "fringe_pixel": [0.0, 32.0, 1.0],
 		"fringe_space": [0.0, 2.0, 1.0], "fringe_coverage_gain": [0.0, 4.0, 0.05],

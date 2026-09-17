@@ -27,10 +27,13 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv else os.path.join(ROOT, "docs", "vnext")
 
-# Documented non-semantics: persisted + validated but deliberately without
-# runtime effect (never present as live macro controls).
+# Compatibility-only fields: persisted + validated + passed through, but
+# deliberately WITHOUT runtime semantic and WITHOUT any creative control
+# (not even expert-raw — an editable no-op control would fake capability).
+# Normative basis: CT-10 + capability matrix LEGACY_DEAD_SURFACE
+# (declaration-only in legacy AND vNEXT shaders; v1 lacks it entirely).
 NOTED = {
-    "dither_threshold": "documented-no-semantic (macro-excluded, expert-raw)",
+    "dither_threshold": "compatibility_only/legacy_dead_surface (no control, no semantic)",
 }
 
 # Explicit proof registry: field -> suite that isolates its behavior.

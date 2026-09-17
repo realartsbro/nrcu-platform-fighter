@@ -23,7 +23,7 @@ canonical_fx_109,fx,mono_mode,yes,yes,yes,heuristic,no,no,yes,-,open,
 canonical_fx_109,fx,mono_bayer_level,yes,yes,yes,heuristic,no,no,yes,-,open,
 canonical_fx_109,fx,mono_pixel,yes,yes,yes,heuristic,no,no,yes,-,open,
 canonical_fx_109,fx,mono_space,yes,yes,yes,heuristic,no,no,yes,-,open,
-canonical_fx_109,fx,dither_threshold,yes,yes,yes,heuristic,no,no,yes,-,"documented-no-semantic (macro-excluded, expert-raw)",noted
+canonical_fx_109,fx,dither_threshold,yes,yes,yes,no,no,no,no,-,"compatibility_only/legacy_dead_surface (no control, no semantic)",noted
 canonical_fx_109,fx,dither_black_point,yes,yes,yes,heuristic,no,no,yes,-,open,
 canonical_fx_109,fx,dither_white_point,yes,yes,yes,heuristic,no,no,yes,-,open,
 canonical_fx_109,fx,dither_gamma,yes,yes,yes,heuristic,no,no,yes,-,open,
