@@ -57,8 +57,17 @@ func seek(t: float) -> void:
 	renderer.set_time(t)
 
 func _process(_delta: float) -> void:
+	# RT-03: the reference runtime proves live animation — presentation time
+	# follows the canonical screen clock every frame while playing, exactly
+	# like the lab shell. FREE_RUN stays separate and opt-in.
 	if _free_tick and renderer != null:
 		renderer.set_free_run(Time.get_ticks_msec() / 1000.0)
+	if renderer != null and runtime != null and runtime.screen != null:
+		var playing := true
+		if runtime.screen.has_method("lab_preview_is_paused"):
+			playing = not bool(runtime.screen.lab_preview_is_paused())
+		if playing:
+			renderer.set_time(maxf(runtime.elapsed(), 0.0))
 
 func reload_production() -> Dictionary:
 	# Resolve every registered target through the shared authority and render the
@@ -92,6 +101,10 @@ func reload_production() -> Dictionary:
 		plan.append({"key": key_str, "look": loaded["doc"]})
 		plan_ids.append("%s:%s:r%d" % [key_str, look_id, int((loaded["doc"] as Dictionary).get("revision", 0))])
 	var applied: Dictionary = renderer.apply_composition(plan)
+	# RT-03 acceptance 8: a reload never rewinds the running clock — freshly
+	# committed stacks inherit the current canonical time immediately.
+	if bool(applied.get("ok", false)) and runtime != null and runtime.has_method("elapsed"):
+		renderer.set_time(maxf(runtime.elapsed(), 0.0))
 	# RT-01: a missing effective Look is a broken authority, never ok=true.
 	# Review-withheld looks are intentionally excluded by design and stay
 	# informational (review_skipped) rather than failing the composition.

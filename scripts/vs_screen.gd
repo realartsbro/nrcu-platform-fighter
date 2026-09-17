@@ -176,6 +176,7 @@ var _family_nodes: Array = []
 var _stagger_offsets: Array = []
 
 var _state := STATE_IDLE
+var _started := false
 var _elapsed := 0.0
 var _exit_started_at := 0.0
 var _cover_closed := false
@@ -243,11 +244,20 @@ static func supports_fighter(fighter_id: String) -> bool:
 	return true
 
 
+# RT-03 lifecycle root cause: processing used to be toggled by raw
+# set_process() calls scattered across _ready/start/pause/resume/seek/
+# finish. When mount+start ran while the screen was still outside the tree
+# and _ready fired later on first tree entry, _ready's set_process(false)
+# silently killed an already-started clock with no error. All transitions
+# now go through one authority derived from started/paused/finished state.
+func _sync_process() -> void:
+	set_process(_started and not _lab_preview_paused and _state != STATE_DONE and _state != STATE_IDLE)
+
 # --- reads used by tests / evidence tooling ---------------------------------
 
 func _ready() -> void:
 	# The overlay is inert until start(): no per-frame work while idle.
-	set_process(false)
+	_sync_process()
 
 func state() -> String:
 	return _state
@@ -323,7 +333,7 @@ func cursor_suppressed() -> bool:
 # are unused.
 func lab_preview_pause() -> void:
 	_lab_preview_paused = true
-	set_process(false)
+	_sync_process()
 	if _entry_tween != null and is_instance_valid(_entry_tween):
 		_entry_tween.pause()
 
@@ -331,7 +341,7 @@ func lab_preview_resume() -> void:
 	_lab_preview_paused = false
 	if _entry_tween != null and is_instance_valid(_entry_tween):
 		_entry_tween.play()
-	set_process(true)
+	_sync_process()
 
 func lab_preview_is_paused() -> bool:
 	return _lab_preview_paused
@@ -413,12 +423,13 @@ func start(left_fighter_id: String, right_fighter_id: String, stage_id: String) 
 	_entry_events = _entry_event_schedule()
 	_state = STATE_ENTRY
 	_elapsed = 0.0
-	set_process(true)
+	_started = true
+	_sync_process()
 	_suppress_cursor(true)
 	_emit("vs_enter")
 	return true
 
-# --- start (multiplayer families, v1.3) -------------------------------------
+# --- start (multiplayer families, v1.3) ----------------------------------------
 
 func start_presentation(presentation_plan: Dictionary) -> bool:
 	# Render a normalized 2-4 fighter plan (scripts/vs_presentation_request.gd).
@@ -471,7 +482,8 @@ func start_presentation(presentation_plan: Dictionary) -> bool:
 	_entry_events = _family_event_schedule()
 	_state = STATE_ENTRY
 	_elapsed = 0.0
-	set_process(true)
+	_started = true
+	_sync_process()
 	_suppress_cursor(true)
 	_emit("vs_enter")
 	return true
@@ -1258,7 +1270,8 @@ func _finish() -> void:
 	if _state == STATE_DONE:
 		return
 	_state = STATE_DONE
-	set_process(false)
+	_started = false
+	_sync_process()
 	# Hidden before the signal: the overlay is never observable as still up once
 	# it has finished (the cover stays the last thing on screen until here).
 	visible = false
