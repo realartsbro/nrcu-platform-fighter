@@ -30,6 +30,8 @@ func _init() -> void:
 	await _track_spins_clamped()
 	await _curves_anchor()
 	await _trigger_animates_envelope()
+	await _domain_matrix()
+	await _geometry_no_overflow()
 	await _save_reopen_tracks()
 	print("[FX-MOTION-UI] done · checks=%d failures=%d" % [checks.size(), failures])
 	quit(1 if failures > 0 else 0)
@@ -213,7 +215,7 @@ func _enable_gate() -> void:
 	_check(bool((_motion().get("enabled", {}) as Dictionary).get("fringe", false)) and not bool((_motion().get("enabled", {}) as Dictionary).get("dither", false)), "UI-03 enable gate persists canonically on fringe only")
 
 func _track_spins_clamped() -> void:
-	var atk := _find_spin("Atk")
+	var atk := _find_spin("Attack")
 	_check(atk != null, "UI-03 attack spin reachable")
 	if atk == null:
 		return
@@ -222,19 +224,19 @@ func _track_spins_clamped() -> void:
 	atk.value = 2.0
 	await settle(5)
 	_check(absf(float(_track("fringe").get("attack", 0.0)) - 2.0) < 0.001, "UI-03 attack edits canonical track", str(_track("fringe").get("attack", "?")))
-	var sus := _find_spin("Sus")
+	var sus := _find_spin("Sustain")
 	_check(sus != null, "UI-03 sustain spin reachable")
 	if sus == null:
 		return
 	_check(absf(sus.min_value - 0.0) < 0.00001 and absf(sus.max_value - 1.0) < 0.00001, "UI-03 sustain editor range is [0, 1] like validator")
 
 func _curves_anchor() -> void:
-	var anchor := _find_lineedit("Anchor")
-	_check(anchor != null, "UI-03 anchor field reachable")
+	var anchor := _find_option("Anchor")
+	_check(anchor != null, "UI-03 anchor option reachable")
 	if anchor == null:
 		return
-	anchor.text = "manual"
-	anchor.text_submitted.emit("manual")
+	anchor.selected = 0
+	anchor.item_selected.emit(0)
 	await settle(5)
 	_check(str(_track("fringe").get("anchor", "")) == "manual", "UI-03 anchor edits canonically")
 	var curve := _find_option("Attack curve")
@@ -296,3 +298,64 @@ func _save_reopen_tracks() -> void:
 		if (layer as Dictionary).get("type", "") == "FX":
 			track = (((layer as Dictionary).get("motion", {}) as Dictionary).get("tracks", {}) as Dictionary).get("fringe", {})
 	_check(absf(float(track.get("attack", 0.0)) - 2.0) < 0.001 and str(track.get("attack_curve", "")) == "linear", "UI-03 tracks survive save/reopen", str(track))
+
+func _domain_matrix() -> void:
+	# Every domain independently: enable lands on its own dict, attack edit
+	# lands in its own track, nothing leaks across domains (loop/lambda wiring).
+	var idx := 0
+	for domain in ["DITHER", "FLOW", "RGB"]:
+		idx += 1
+		var box = _header_box(domain)
+		_check(box != null, "UI-03 %s header reachable" % domain)
+		if box == null:
+			continue
+		var kids := (box as HBoxContainer).get_children()
+		(kids[1] as CheckBox).button_pressed = true
+		(kids[1] as CheckBox).toggled.emit(true)
+		await settle(3)
+		var spin := _find_spin_in(domain, "Attack")
+		_check(spin != null, "UI-03 %s attack spin reachable" % domain)
+		if spin == null:
+			continue
+		spin.value = 1.0 + float(idx)
+		await settle(3)
+		var tracks: Dictionary = (_motion().get("tracks", {}) as Dictionary)
+		var got := absf(float((tracks.get(domain.to_lower(), {}) as Dictionary).get("attack", 0.0)) - (1.0 + float(idx))) < 0.01
+		_check(got, "UI-03 %s attack lands in own track" % domain, str((tracks.get(domain.to_lower(), {}) as Dictionary).get("attack", "?")))
+		var enabled: Dictionary = (_motion().get("enabled", {}) as Dictionary)
+		_check(bool(enabled.get(domain.to_lower(), false)), "UI-03 %s enable lands on own domain" % domain)
+
+func _header_box(domain: String):
+	for child in _walk(shell.inspector_content):
+		if child is HBoxContainer:
+			var kids := (child as HBoxContainer).get_children()
+			if kids.size() == 3 and kids[0] is Label and (kids[0] as Label).text == domain and kids[1] is CheckBox and kids[2] is Button:
+				return child
+	return null
+
+func _geometry_no_overflow() -> void:
+	# Layout acceptance at the running window size: no inspector row may
+	# overflow its page horizontally; interactive controls keep click height.
+	var page = _motion_page_node()
+	_check(page != null, "UI-03 MOTION page node found")
+	if page == null:
+		return
+	var page_right := (page as Control).get_global_rect().end.x
+	var bad := 0
+	var short := 0
+	for child in _walk(page):
+		if child is HBoxContainer:
+			var r: Rect2 = (child as Control).get_global_rect()
+			if r.end.x > page_right + 2.0:
+				bad += 1
+		if child is Button or child is HSlider or child is SpinBox or child is OptionButton or child is CheckBox:
+			if (child as Control).size.y < 16.0:
+				short += 1
+	_check(bad == 0, "UI-03 no horizontal overflow in MOTION page", "overflowing rows=%d" % bad)
+	_check(short == 0, "UI-03 interactive controls keep click height", "short=%d" % short)
+
+func _motion_page_node():
+	for child in _walk(shell.inspector_content):
+		if child is VBoxContainer and (child as VBoxContainer).name == "MOTION":
+			return child
+	return null

@@ -27,6 +27,7 @@ func _init() -> void:
 	shell.runtime.screen.lab_preview_pause()
 	await _debug_modes_switch_output()
 	await _selector_drives_renderer()
+	await _badge_and_state_leaks()
 	print("[FX-DEBUG-VIEW] done · checks=%d failures=%d" % [checks.size(), failures])
 	quit(1 if failures > 0 else 0)
 
@@ -127,6 +128,23 @@ func _selector_drives_renderer() -> void:
 	await settle(5)
 	_check(shell.debug_view == "EDGE", "UI-04 selector sets shell state", shell.debug_view)
 	_check(shell.renderer != null and shell.renderer.debug_view() == "EDGE", "UI-04 selector drives renderer state (not a no-op)")
+
+func _badge_and_state_leaks() -> void:
+	_check(shell.debug_badge != null and shell.debug_badge.visible and shell.debug_badge.text == "DEBUG: EDGE", "UI-04 DEBUG badge shows while not COMPOSITE")
+	# Rebuild path must neither leak nor drop the view.
+	shell._render_current_look()
+	await settle(5)
+	_check(shell.renderer.debug_view() == "EDGE", "UI-04 view survives preview rebuild")
+	_check(shell.debug_badge.visible, "UI-04 badge survives preview rebuild")
+	# Back to COMPOSITE: badge gone, frame exact.
+	var opt := _find_view_option()
+	opt.selected = 0
+	opt.item_selected.emit(0)
+	await settle(5)
+	_check(not shell.debug_badge.visible and shell.debug_badge.text == "", "UI-04 badge removed at COMPOSITE")
+	shell._render_current_look()
+	await settle(5)
+	_check(shell.renderer.debug_view() == "COMPOSITE", "UI-04 COMPOSITE stable across rebuild (no leak)")
 
 func _find_view_option() -> OptionButton:
 	for child in _walk(shell.inspector_content):

@@ -86,11 +86,18 @@ func _seed() -> void:
 func _fx() -> Dictionary:
 	return FxLookScript.find_layer(shell.session.look, shell.selected_layer_id)["fx"]
 
+
+func _palette_page():
+	for child in _walk(shell.inspector_content):
+		if child is VBoxContainer and (child as VBoxContainer).name == "PALETTE":
+			return child
+	return shell.inspector_content
+
 func _find_option(label_text: String) -> OptionButton:
-	return _find_labeled(shell.inspector_content, label_text, "OptionButton")
+	return _find_labeled(_palette_page(), label_text, "OptionButton")
 
 func _find_check(label_text: String) -> CheckBox:
-	return _find_check_under(shell.inspector_content, label_text)
+	return _find_check_under(_palette_page(), label_text)
 
 func _find_check_under(node: Node, label_text: String) -> CheckBox:
 	# CheckBox rows (e.g. lock row) carry no leading Label: match by button text.
@@ -103,7 +110,7 @@ func _find_check_under(node: Node, label_text: String) -> CheckBox:
 	return null
 
 func _find_button(prefix: String):
-	return _find_button_under(shell.inspector_content, prefix)
+	return _find_button_under(_palette_page(), prefix)
 
 func _find_button_under(node: Node, prefix: String):
 	for child in node.get_children():
@@ -128,7 +135,7 @@ func _find_labeled(node: Node, label_text: String, cls: String):
 	return null
 
 func _find_picker() -> ColorPickerButton:
-	return _find_picker_under(shell.inspector_content)
+	return _find_picker_under(_palette_page())
 
 func _find_picker_under(node: Node):
 	for child in node.get_children():
@@ -140,7 +147,7 @@ func _find_picker_under(node: Node):
 	return null
 
 func _find_slider(label_text: String) -> HSlider:
-	for child in _walk(shell.inspector_content):
+	for child in _walk(_palette_page()):
 		if child is HBoxContainer:
 			var kids := (child as HBoxContainer).get_children()
 			if kids.size() >= 2 and kids[0] is Label and (kids[0] as Label).text == label_text:
@@ -202,15 +209,8 @@ func _source_and_generate() -> void:
 	await settle(5)
 	var sc: Array = _fx().get("palette_source_color", [])
 	_check(sc.size() >= 3 and absf(float(sc[0]) - 0.9) < 0.01, "UI-02 Source color persists canonically", str(sc))
-	var gen = _find_button("GENERATE A/B")
-	_check(gen != null, "UI-02 Generate button reachable")
-	if gen == null:
-		return
-	gen.pressed.emit()
-	await settle(5)
-	# Wiring oracle: model-side generate on an identical intent doc must yield
-	# the same colors (proves the UI passed the right arguments; the contract
-	# suite proves the function itself).
+	# Live regeneration: intent edits regenerate unlocked colors immediately —
+	# no stale output behind intent, no separate Generate press required.
 	var oracle: Dictionary = FxLookScript.new_look("ORACLE", "o")
 	var ofx: Dictionary = FxLookScript.new_layer("FX", "o")
 	(oracle["layers"] as Array).append(ofx)
@@ -223,12 +223,23 @@ func _source_and_generate() -> void:
 	var ofb: Array = ((ores["doc"] as Dictionary)["layers"] as Array)[1]["fx"]["fringe_color_b"]
 	var fa: Array = _fx().get("fringe_color_a", [])
 	var fb: Array = _fx().get("fringe_color_b", [])
-	_check(fa.size() >= 3 and absf(float(fa[0]) - float(ofa[0])) < 0.001 and absf(float(fa[1]) - float(ofa[1])) < 0.001, "UI-02 Generate materializes A per contract", "%s vs oracle %s" % [str(fa), str(ofa)])
-	_check(fb.size() >= 3 and absf(float(fb[0]) - float(ofb[0])) < 0.001 and absf(float(fb[1]) - float(ofb[1])) < 0.001, "UI-02 Generate materializes B per contract", "%s vs oracle %s" % [str(fb), str(ofb)])
+	_check(fa.size() >= 3 and absf(float(fa[0]) - float(ofa[0])) < 0.001 and absf(float(fa[1]) - float(ofa[1])) < 0.001, "UI-02 intent edits regenerate A live per contract", "%s vs oracle %s" % [str(fa), str(ofa)])
+	_check(fb.size() >= 3 and absf(float(fb[0]) - float(ofb[0])) < 0.001 and absf(float(fb[1]) - float(ofb[1])) < 0.001, "UI-02 intent edits regenerate B live per contract", "%s vs oracle %s" % [str(fb), str(ofb)])
+
+func _find_slider_any(label_text: String) -> HSlider:
+	# Unscoped fallback for controls living on other tabs (e.g. LOOK Fringe).
+	for child in _walk(shell.inspector_content):
+		if child is HBoxContainer:
+			var kids := (child as HBoxContainer).get_children()
+			if kids.size() >= 2 and kids[0] is Label and (kids[0] as Label).text == label_text:
+				for sub in kids:
+					if sub is HSlider:
+						return sub
+	return null
 
 func _fringe_readback() -> void:
 	var before: Image = await _capture("ui02_before")
-	var slider := _find_slider("Fringe")
+	var slider := _find_slider_any("Fringe")
 	if slider == null:
 		_check(false, "UI-02 Fringe slider reachable")
 		return
@@ -239,27 +250,61 @@ func _fringe_readback() -> void:
 	_check(_preview_diff(before, after) > 0.002, "UI-02 generated palette visibly renders", "mean=%.5f" % _preview_diff(before, after))
 
 func _lock_a_stabilizes() -> void:
-	shell.session.edit(func(doc):
-		(FxLookScript.find_layer(doc, shell.selected_layer_id)["fx"] as Dictionary)["fringe_color_a"] = [0.1, 0.2, 0.3, 1.0]
-	)
-	await settle(3)
-	var lock := _find_check("Lock A")
-	_check(lock != null, "UI-02 Lock A checkbox reachable")
-	if lock == null:
+	# Honest end-to-end workflow, UI-only: choose A in the picker (auto-locks),
+	# change strategy, observe A stable + B reacting. No session.edit shortcut.
+	var pickers := _find_ab_pickers()
+	_check(pickers.size() == 2, "UI-02 A/B color pickers reachable")
+	if pickers.size() != 2:
 		return
-	lock.button_pressed = true
-	lock.toggled.emit(true)
+	(pickers[0] as ColorPickerButton).color = Color(0.1, 0.2, 0.3)
+	(pickers[0] as ColorPickerButton).color_changed.emit(Color(0.1, 0.2, 0.3))
 	await settle(5)
-	_check(bool(_fx().get("palette_lock_a", false)), "UI-02 Lock A persists")
+	var fa0: Array = _fx().get("fringe_color_a", [])
+	_check(fa0.size() >= 3 and absf(float(fa0[0]) - 0.1) < 0.01, "UI-02 choosing A sets authored color", str(fa0))
+	_check(bool(_fx().get("palette_lock_a", false)), "UI-02 choosing A auto-locks A")
 	var strat := _find_option("Strategy")
 	strat.selected = 4
 	strat.item_selected.emit(4)
 	await settle(5)
-	var gen = _find_button("GENERATE A/B")
+	var fa: Array = _fx().get("fringe_color_a", [])
+	var fb: Array = _fx().get("fringe_color_b", [])
+	_check(fa.size() >= 3 and absf(float(fa[0]) - 0.1) < 0.01 and absf(float(fa[1]) - 0.2) < 0.01, "UI-02 Lock A stabilizes authored color across strategy change", str(fa))
+	# Lock B mirror: choose B, change strategy, B stable.
+	(pickers[1] as ColorPickerButton).color = Color(0.7, 0.1, 0.1)
+	(pickers[1] as ColorPickerButton).color_changed.emit(Color(0.7, 0.1, 0.1))
+	await settle(5)
+	_check(bool(_fx().get("palette_lock_b", false)), "UI-02 choosing B auto-locks B")
+	strat.selected = 2
+	strat.item_selected.emit(2)
+	await settle(5)
+	var fb2: Array = _fx().get("fringe_color_b", [])
+	_check(fb2.size() >= 3 and absf(float(fb2[0]) - 0.7) < 0.01, "UI-02 Lock B stabilizes authored color", str(fb2))
+	# Unlock B via checkbox, regenerate: B must react again.
+	var lock := _find_check("Lock B")
+	_check(lock != null, "UI-02 Lock B checkbox reachable")
+	if lock == null:
+		return
+	lock.button_pressed = false
+	lock.toggled.emit(false)
+	await settle(5)
+	var gen = _find_button("REGENERATE UNLOCKED")
+	_check(gen != null, "UI-02 regenerate button reachable")
+	if gen == null:
+		return
 	gen.pressed.emit()
 	await settle(5)
-	var fa: Array = _fx().get("fringe_color_a", [])
-	_check(fa.size() >= 3 and absf(float(fa[0]) - 0.1) < 0.01 and absf(float(fa[1]) - 0.2) < 0.01, "UI-02 Lock A stabilizes authored color across regenerate", str(fa))
+	var fb3: Array = _fx().get("fringe_color_b", [])
+	_check(fb3.size() >= 3 and absf(float(fb3[0]) - 0.7) > 0.05, "UI-02 unlocked B regenerates on demand", str(fb3))
+
+func _find_ab_pickers() -> Array:
+	var out: Array = []
+	for child in _walk(_palette_page()):
+		if child is HBoxContainer:
+			var kids := (child as HBoxContainer).get_children()
+			if kids.size() == 4 and kids[0] is Label and (kids[0] as Label).text == "A" and kids[1] is ColorPickerButton and kids[2] is Label and (kids[2] as Label).text == "B" and kids[3] is ColorPickerButton:
+				out = [kids[1], kids[3]]
+				break
+	return out
 
 func _hsv_visible() -> void:
 	var before: Array = (_fx().get("fringe_color_b", []) as Array).duplicate()
@@ -269,12 +314,35 @@ func _hsv_visible() -> void:
 		return
 	hue.value = 90.0
 	await settle(5)
-	var gen = _find_button("GENERATE A/B")
-	gen.pressed.emit()
+	var after_hue: Array = _fx().get("fringe_color_b", [])
+	var hue_changed := before.size() >= 3 and after_hue.size() >= 3 and (absf(float(before[0]) - float(after_hue[0])) + absf(float(before[1]) - float(after_hue[1])) + absf(float(before[2]) - float(after_hue[2]))) > 0.05
+	_check(hue_changed, "UI-02 Hue visibly changes generated color", "%s -> %s" % [str(before), str(after_hue)])
+	var sat := _find_slider("Saturation")
+	_check(sat != null, "UI-02 Saturation slider reachable")
+	if sat == null:
+		return
+	sat.value = 0.0
 	await settle(5)
-	var after: Array = _fx().get("fringe_color_b", [])
-	var changed := before.size() >= 3 and after.size() >= 3 and (absf(float(before[0]) - float(after[0])) + absf(float(before[1]) - float(after[1])) + absf(float(before[2]) - float(after[2]))) > 0.05
-	_check(changed, "UI-02 H/S/V visibly changes generated color", "%s -> %s" % [str(before), str(after)])
+	var after_sat: Array = _fx().get("fringe_color_b", [])
+	_check(after_sat.size() >= 3 and absf(float(after_sat[0]) - float(after_sat[1])) < 0.02 and absf(float(after_sat[1]) - float(after_sat[2])) < 0.02, "UI-02 Saturation 0 grays the color", str(after_sat))
+	var val := _find_slider("Value")
+	_check(val != null, "UI-02 Value slider reachable")
+	if val == null:
+		return
+	val.value = 2.0
+	await settle(5)
+	_check(absf(float(_fx().get("palette_value", 0.0)) - 2.0) < 0.01, "UI-02 Value persists canonically")
+	var swap := _find_check("Swap A/B")
+	_check(swap != null, "UI-02 Swap checkbox reachable")
+	if swap == null:
+		return
+	var img_pre: Image = await _capture("ui02_swap_before")
+	swap.button_pressed = true
+	swap.toggled.emit(true)
+	await settle(8)
+	_check(bool(_fx().get("palette_swap", false)), "UI-02 Swap persists canonically")
+	var img_post: Image = await _capture("ui02_swap_after")
+	_check(_preview_diff(img_pre, img_post) > 0.002, "UI-02 Swap visibly swaps render output", "mean=%.5f" % _preview_diff(img_pre, img_post))
 
 func _save_reopen_persists() -> void:
 	var before_a: Array = (_fx().get("fringe_color_a", []) as Array).duplicate()
