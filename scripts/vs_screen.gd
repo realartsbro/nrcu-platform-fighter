@@ -347,8 +347,11 @@ func lab_preview_is_paused() -> bool:
 	return _lab_preview_paused
 
 func lab_preview_seek(seconds: float) -> bool:
-	if _state == STATE_IDLE or _state == STATE_DONE:
+	if _state == STATE_IDLE:
 		return false
+	# Preview resurrection: a DONE screen (exit finished, no teardown under
+	# fx_preview_no_teardown) must still scrub — reset to ENTRY and let the
+	# phase reconstruction below pick the frame matching t (TM-05).
 	var t := maxf(seconds, 0.0)
 	visible = true
 	_match_ready = false
@@ -1279,6 +1282,13 @@ func _finish() -> void:
 	# (the frontend scope decides whether the hand is drawn again).
 	_release_cursor()
 	_emit("exit_finished")
+	# Preview-owned screens (lab + reference runtime) freeze on the
+	# deterministic EXIT frame instead of self-teardown: scrubbing past
+	# minimum_exposure must never free the composition out from under the
+	# shared renderer (fail-closed lifetime belongs to the consumer).
+	# The game path never sets this meta and keeps exact legacy behavior.
+	if bool(get_meta("fx_preview_no_teardown", false)):
+		return
 	queue_free()
 
 # --- helpers ----------------------------------------------------------------

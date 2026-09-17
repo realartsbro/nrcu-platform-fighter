@@ -22,10 +22,11 @@ func _init() -> void:
 	var fx_id := str((layers[1] as Dictionary).get("layer_id", ""))
 	shell.selected_layer_id = fx_id
 	# Setup (not asserted): arm one motion domain so MOTION shows live rows.
+	# Canonical domain keys are lowercase (neutral_motion).
 	shell.session.edit(func(doc):
 		var FxLookScript = load("res://scripts/fx_vnext/fx_look.gd")
 		var l: Dictionary = FxLookScript.find_layer(doc, fx_id)
-		((l["motion"] as Dictionary)["enabled"] as Dictionary)["FRINGE"] = true
+		((l["motion"] as Dictionary)["enabled"] as Dictionary)["fringe"] = true
 	)
 	shell._rebuild_inspector()
 	await settle(10)
@@ -36,8 +37,8 @@ func _init() -> void:
 		for tab in ["LOOK", "MOTION", "PALETTE", "ADVANCED"]:
 			_select_tab(tab)
 			await settle(15)
-			_assert_tab(tab, size)
-			_shot(tab, size)
+			await _assert_tab(tab, size)
+			await _shot(tab, size)
 	print("[FX-RESPONSIVE] done · checks=%d failures=%d" % [checks.size(), failures])
 	quit(1 if failures > 0 else 0)
 
@@ -100,13 +101,18 @@ func _active_page(tab_name: String) -> Control:
 
 func _assert_tab(tab_name: String, size: Vector2i) -> void:
 	var tag := "%s@%dx%d" % [tab_name, size.x, size.y]
+	_check(root.size == size, "UI-Resp %s window size applied" % tag, str(root.size))
 	var page := _active_page(tab_name)
 	_check(page != null, "UI-Resp %s page found" % tag)
 	if page == null:
 		return
+	# Geometry authority: the inspector ScrollContainer's visible rect, NOT
+	# the whole window (a 600px control can overflow a 390px dock while the
+	# window is 1280px wide — the old assertion was a false green).
+	var view := _inspector_view_rect()
+	_check(view.size.x > 50.0, "UI-Resp %s inspector viewport found" % tag, str(view))
 	var bad_w := 0
 	var bad_h := 0
-	var bad_x := 0
 	var n := 0
 	for child in _walk(page):
 		if child is Button or child is OptionButton or child is SpinBox or child is CheckBox or child is HSlider or child is ColorPickerButton or child is LineEdit:
@@ -114,7 +120,12 @@ func _assert_tab(tab_name: String, size: Vector2i) -> void:
 				continue
 			n += 1
 			var r: Rect2 = (child as Control).get_global_rect()
-			if r.size.x > float(size.x) + 1.0:
+			# Left AND right clip edges against the visible viewport.
+			if r.position.x < view.position.x - 1.0 or r.end.x > view.end.x + 1.0:
+				bad_w += 1
+			# Horizontal scroll is disabled by design: anything wider than
+			# the viewport can never be reached.
+			if r.size.x > view.size.x + 1.0:
 				bad_w += 1
 			# Horizontal sliders are thin tracks by design (grab area spans
 			# the full row width); other controls need full click height.
@@ -125,14 +136,64 @@ func _assert_tab(tab_name: String, size: Vector2i) -> void:
 			# as overflowing ones — this caught the side-by-side A/B pickers.
 			if r.size.x < 20.0:
 				bad_w += 1
-			if r.position.x < -1.0:
-				bad_x += 1
-			if (r.size.y < need_h or r.size.x > float(size.x) + 1.0 or r.position.x < -1.0) and n < 60:
+			if (r.size.y < need_h or r.size.x > view.size.x + 1.0 or r.size.x < 20.0) and n < 60:
 				print("OFFENDER %s %s h=%.1f w=%.1f x=%.1f parent=%s" % [tag, (child as Control).get_class(), r.size.y, r.size.x, r.position.x, (child as Control).get_parent().get_class()])
 	_check(n > 5, "UI-Resp %s has interactive controls" % tag, str(n))
-	_check(bad_w == 0, "UI-Resp %s no horizontal overflow" % tag, "bad=%d/%d" % [bad_w, n])
+	_check(bad_w == 0, "UI-Resp %s inside inspector viewport (left+right)" % tag, "bad=%d/%d" % [bad_w, n])
 	_check(bad_h == 0, "UI-Resp %s sane click heights" % tag, "bad=%d/%d" % [bad_h, n])
-	_check(bad_x == 0, "UI-Resp %s nothing clipped left" % tag, "bad=%d/%d" % [bad_x, n])
+	_check(_no_sibling_overlap(page), "UI-Resp %s no label/control overlap" % tag)
+	_check(_scroll_reaches_ends(), "UI-Resp %s scroll reaches first+last control" % tag)
+
+func _inspector_view_rect() -> Rect2:
+	var node: Node = shell.inspector_content
+	while node != null:
+		node = node.get_parent()
+		if node is ScrollContainer:
+			return (node as Control).get_global_rect()
+	return Rect2()
+
+func _no_sibling_overlap(page: Control) -> bool:
+	for child in _walk(page):
+		if child is HBoxContainer or child is VBoxContainer:
+			var rects: Array = []
+			for sub in (child as BoxContainer).get_children():
+				if sub is Control and (sub as Control).is_visible_in_tree():
+					rects.append((sub as Control).get_global_rect())
+			for i in range(rects.size()):
+				for j in range(i + 1, rects.size()):
+					var a: Rect2 = rects[i]
+					var b: Rect2 = rects[j]
+					# Touching edges are fine; positive-area overlap is not.
+					var inter: Rect2 = a.intersection(b)
+					if inter.size.x > 1.0 and inter.size.y > 1.0:
+						print("OVERLAP %s vs %s" % [str(a), str(b)])
+						return false
+	return true
+
+func _scroll_reaches_ends() -> bool:
+	var node: Node = shell.inspector_content
+	var scroll: ScrollContainer = null
+	while node != null:
+		node = node.get_parent()
+		if node is ScrollContainer:
+			scroll = node
+			break
+	if scroll == null:
+		return false
+	var bar := scroll.get_v_scroll_bar()
+	bar.value = bar.max_value
+	await process_frame
+	await process_frame
+	var view: Rect2 = scroll.get_global_rect()
+	var last_ok := false
+	for child in _walk(shell.inspector_content):
+		if child is Control and not (child is Label) and not (child is Container) and (child as Control).is_visible_in_tree():
+			if view.intersects((child as Control).get_global_rect()):
+				last_ok = true
+	bar.value = bar.min_value
+	await process_frame
+	await process_frame
+	return last_ok
 
 func _shot(tab_name: String, size: Vector2i) -> void:
 	await process_frame

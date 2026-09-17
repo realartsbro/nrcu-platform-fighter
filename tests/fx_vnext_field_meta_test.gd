@@ -63,5 +63,44 @@ func _init() -> void:
 		if str((meta[key] as Dictionary).get("kind", "")) == "rejected":
 			rejected_count += 1
 	_check(compat_count == 1 and rejected_count == 1, "UI-05 exactly one compat + one rejected", "compat=%d rejected=%d" % [compat_count, rejected_count])
+	# ---- semantic parity (UI <-> shader/runtime, not just UI <-> UI) ------
+	# Every neutral canonical value must sit inside the exposed range.
+	var out_of_range: Array = []
+	for key in neutral.keys():
+		var spec: Dictionary = meta.get(str(key), {})
+		var kind := str(spec.get("kind", ""))
+		if kind == "amount" or kind == "int":
+			var v := float(neutral[key]) if not (neutral[key] is String) else 0.0
+			if not (neutral[key] is String) and (v < float(spec.get("min", 0.0)) - 0.0001 or v > float(spec.get("max", 0.0)) + 0.0001):
+				out_of_range.append(str(key) + "=" + str(v))
+	_check(out_of_range.is_empty(), "UI-05 neutral values inside exposed ranges", str(out_of_range))
+	# String enums must match the runtime enum lists exactly.
+	_check(str((meta.get("time_source", {}) as Dictionary).get("options", [])) == str(FxLookScript.TIME_SOURCES), "UI-05 time_source options equal runtime TIME_SOURCES")
+	# Integer-discrete fields expose only whole steps.
+	var non_discrete: Array = []
+	for key in meta.keys():
+		if str((meta[key] as Dictionary).get("kind", "")) == "int" and float((meta[key] as Dictionary).get("step", 0.0)) != 1.0:
+			non_discrete.append(str(key))
+	_check(non_discrete.is_empty(), "UI-05 int fields step by 1", str(non_discrete))
+	# Bayer levels: the shader dispatches 1..5 and normalizes 0 -> 1, so 0
+	# must not be offered and 3..5 must not be hidden.
+	for key in ["mono_bayer_level", "dither_bayer_level", "fringe_bayer_level"]:
+		var spec: Dictionary = meta.get(key, {})
+		_check(float(spec.get("min", 0.0)) == 1.0 and float(spec.get("max", 0.0)) == 5.0, "UI-05 %s exposes shader levels 1..5" % key, str(spec))
+	# Enum index counts mirror shader branches (pattern_value 6 modes,
+	# mono_stamp hard + 4 pattern + inverse, blend mix/add/screen, ...).
+	var counts := {"dither_mode": 6, "fringe_coverage_mode": 6, "mono_mode": 6, "fringe_blend_mode": 3, "mono_space": 3, "dither_space": 3, "fringe_space": 3, "edge_source_mode": 3, "driver_sampling_mode": 2, "base_mode": 2, "geometry_units": 2, "rgb_shift_units": 2, "source_pixel_units": 2}
+	var count_bad: Array = []
+	for key in counts.keys():
+		if ((meta.get(key, {}) as Dictionary).get("options", []) as Array).size() != int(counts[key]):
+			count_bad.append(key)
+	_check(count_bad.is_empty(), "UI-05 enum counts match shader branches", str(count_bad))
+	# No creative control kind on compat/rejected fields.
+	var creative_leak: Array = []
+	for key in meta.keys():
+		var kind := str((meta[key] as Dictionary).get("kind", ""))
+		if (kind == "compat" or kind == "rejected") and kind in ["amount", "int", "option", "check", "color", "asset"]:
+			creative_leak.append(str(key))
+	_check(creative_leak.is_empty(), "UI-05 compat/rejected expose no creative control", str(creative_leak))
 	print("[FX-FIELD-META] done · checks=%d failures=%d" % [_checks, _failures])
 	quit(_failures)

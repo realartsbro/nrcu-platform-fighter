@@ -44,6 +44,9 @@ func _ready() -> void:
 		stage = "debug"
 	runtime.mount(format, stage, "ice_mage", "doge_man")
 	renderer = FxLayerRendererScript.new(runtime.screen, runtime.registry)
+	# P0: the reference runtime consumes the SAME event authority as the lab —
+	# an anchor name means the same presentation time on every path.
+	renderer.set_event_marks(runtime.event_marks())
 	var seek_target := 1.5
 	var seek_env := OS.get_environment("NRCU_VS_SEEK")
 	if seek_env != "":
@@ -101,6 +104,9 @@ func reload_production() -> Dictionary:
 		plan.append({"key": key_str, "look": loaded["doc"]})
 		plan_ids.append("%s:%s:r%d" % [key_str, look_id, int((loaded["doc"] as Dictionary).get("revision", 0))])
 	var applied: Dictionary = renderer.apply_composition(plan)
+	# P0: freshly committed stacks inherit the current canonical event table
+	# (remount/reload can never silently drop back to fixed-anchor fallback).
+	renderer.set_event_marks(runtime.event_marks())
 	# RT-03 acceptance 8: a reload never rewinds the running clock — freshly
 	# committed stacks inherit the current canonical time immediately.
 	if bool(applied.get("ok", false)) and runtime != null and runtime.has_method("elapsed"):

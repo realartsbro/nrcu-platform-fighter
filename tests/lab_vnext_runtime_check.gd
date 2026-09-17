@@ -45,9 +45,9 @@ func _init() -> void:
 	# ---- 2. write Production authority to disk -----------------------------------
 	var prod := FxProductionScript.new()
 	prod.data_dir = data_dir
-	var echo_look: Dictionary = FxLookScript.new_look("ICE_MAGE_ECHO_LEFT", "Ice Echo");
+	var echo_look: Dictionary = FxLookScript.new_look("ICE_MAGE_ECHO_LEFT", "Ice Echo", "PRODUCTION");
 	echo_look["layers"].append(_fx_layer("Echo rgb", {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": 18.0}))
-	var mark_look: Dictionary = FxLookScript.new_look("DOGE_MAN_MARK", "Doge Mark");
+	var mark_look: Dictionary = FxLookScript.new_look("DOGE_MAN_MARK", "Doge Mark", "PRODUCTION");
 	mark_look["layers"].append(_fx_layer("Mark fringe", {"fringe": 1.0, "intensity": 1.4, "edge_width": 10.0, "wind_reach": 30.0, "wind_trail": 0.8}))
 	var applied: Dictionary = prod.apply({"look": echo_look})
 	_check(bool(applied["ok"]), "production accepts echo look", str(applied.get("errors", [])))

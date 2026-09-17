@@ -176,8 +176,7 @@ var timeline_time_label: Label
 var timeline_ruler: TimelineRuler
 var timeline_resize_handle: ColorRect
 
-var _timing_1v1: Dictionary = {}
-var _timing_mp: Dictionary = {}
+var _timing_retired := true # P0: timing tables live in FxScreenRuntime now
 
 func _ready() -> void:
 	# R3 §17: the workspace layout guarantees every primary control is inside the
@@ -189,8 +188,7 @@ func _ready() -> void:
 		win.min_size = Vector2i(1280, 720)
 	ws = WorkspaceStateScript.new()
 	ws.load_state()
-	_timing_1v1 = _load_json("res://assets/vs/schema/motion_timing.json")
-	_timing_mp = _load_json("res://assets/vs/schema/multiplayer_motion_timing.json")
+	pass # P0: timing loads retired (FxScreenRuntime.event_marks owns them)
 	runtime = ScreenRuntimeScript.new()
 	production = FxProductionScript.new()
 	var data_override := OS.get_environment("NRCU_FX_DATA_DIR")
@@ -3140,26 +3138,9 @@ func _notification(what: int) -> void:
 			action_status.text = "✗ Draft stash failed on close: " + str(close_stash.get("errors", []))
 
 func _compute_event_marks() -> Dictionary:
-	var out := {}
-	if runtime.mode_format == "1v1":
-		var entry: Dictionary = _timing_1v1.get("entry", {})
-		out["vs_enter"] = 0.0
-		out["stage_reveal"] = float((entry.get("stage", {}) as Dictionary).get("start", 0.0))
-		out["fighter_reveal"] = float((entry.get("primaries", {}) as Dictionary).get("start", 0.18))
-		out["clash_impact"] = float(((entry.get("vs", {}) as Dictionary).get("impact_flash", {}) as Dictionary).get("center_time", 0.615))
-		out["hold_enter"] = float(entry.get("hold_start", 0.93))
-	else:
-		var shared: Dictionary = _timing_mp.get("shared", {})
-		out["vs_enter"] = 0.0
-		out["stage_reveal"] = float((shared.get("stage", [0.0, 0.18]) as Array)[0])
-		out["fighter_reveal"] = float((shared.get("primaries", [0.14, 0.46]) as Array)[0])
-		out["clash_impact"] = float((shared.get("vs", [0.52, 0.66]) as Array)[1])
-		out["hold_enter"] = float(shared.get("hold_start", 0.88))
-	return out
+	# P0: the shell owns NO timing table — the ScreenRuntime is the single
+	# event authority for lab preview and reference/game runtime alike.
+	return runtime.event_marks() if runtime != null else {}
 
-func _load_json(path: String) -> Dictionary:
-	var f := FileAccess.open(path, FileAccess.READ)
-	if f == null:
-		return {}
-	var parsed = JSON.parse_string(f.get_as_text())
-	return parsed if parsed is Dictionary else {}
+# (P0: shell timing helpers retired; FxScreenRuntime.event_marks is the
+# single authority. This space intentionally left blank.)
