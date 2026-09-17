@@ -406,6 +406,29 @@ func _harvest_external_assets(look: Dictionary) -> Dictionary:
 				import_errors.append("%s.%s: %s" % [field, key, str(result.get("errors", []))])
 				continue
 			(block as Dictionary)[key] = str(result["ref"])
+		# MK-04: nested influence-mask asset + fx treatment/edge assets are
+		# production assets too — an unharvested external ref would leave
+		# Production non-self-contained.
+		var disp = (layer as Dictionary).get("displacement", null)
+		if disp is Dictionary:
+			var infl = (disp as Dictionary).get("influence_mask", null)
+			if infl is Dictionary and (infl as Dictionary).get("custom_mask") != null and str((infl as Dictionary).get("custom_mask")).strip_edges() != "":
+				var iresult: Dictionary = FxAssetsScript.ensure_project_ref(str((infl as Dictionary)["custom_mask"]), data_dir)
+				if not bool(iresult.get("ok", false)):
+					import_errors.append("displacement.influence_mask.custom_mask: %s" % str(iresult.get("errors", [])))
+				else:
+					(infl as Dictionary)["custom_mask"] = str(iresult["ref"])
+		var fx = (layer as Dictionary).get("fx", null)
+		if fx is Dictionary:
+			for fx_key in ["treatment_mask_path"]:
+				var fx_ref = (fx as Dictionary).get(fx_key, null)
+				if fx_ref == null or str(fx_ref).strip_edges() == "":
+					continue
+				var fresult: Dictionary = FxAssetsScript.ensure_project_ref(str(fx_ref), data_dir)
+				if not bool(fresult.get("ok", false)):
+					import_errors.append("fx.%s: %s" % [fx_key, str(fresult.get("errors", []))])
+				else:
+					(fx as Dictionary)[fx_key] = str(fresult["ref"])
 	if not import_errors.is_empty():
 		return {"ok": false, "errors": import_errors, "doc": look}
 	return {"ok": true, "errors": [], "doc": look}

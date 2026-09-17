@@ -62,6 +62,21 @@ uniform float mask_width_px = 0.0;
 uniform float mask_feather_px = 0.0;
 uniform float mask_invert = 0.0;
 
+// MK-05 displacement influence gate: scales the displacement offset by a mask
+// field evaluated PRE-displacement (earns its semantics instead of only
+// being persisted). Same source/region/space contract as layer.mask; shares
+// no uniforms with it so both can be active independently.
+uniform float disp_infl_enabled = 0.0;
+uniform float disp_infl_source = 0.0;
+uniform float disp_infl_region = 0.0;
+uniform float disp_infl_space = 1.0;
+uniform float disp_infl_expand_contract_px = 0.0;
+uniform float disp_infl_width_px = 0.0;
+uniform float disp_infl_feather_px = 0.0;
+uniform float disp_infl_invert = 0.0;
+uniform sampler2D disp_infl_custom_tex : filter_linear, repeat_disable;
+uniform float disp_infl_custom_loaded = 0.0;
+
 // OPACITY / output
 uniform float layer_opacity = 1.0;
 uniform float preview_emphasis = 1.0;
@@ -499,7 +514,10 @@ float mask_factor(vec2 final_uv, vec2 uv_pre, vec2 pres_px) {
 		} else if (mask_space < 1.5) {
 			custom_uv = final_uv;
 		}
-		float a = 1.0;
+		float a = 0.0;
+		// MK-03 fail-closed: a CUSTOM_MASK source with no loaded asset samples
+		// EMPTY, never full. Production validation rejects such docs at apply
+		// time; this is the last line of defense for unvalidated render paths.
 		if (mask_custom_loaded > 0.5) {
 			a = texture(mask_custom_tex, clamp(custom_uv, vec2(0.0), vec2(1.0))).a;
 		}
@@ -561,6 +579,75 @@ float mask_factor(vec2 final_uv, vec2 uv_pre, vec2 pres_px) {
 		f = smoothstep(-feather * 0.5, feather * 0.5, d_adj) * (1.0 - smoothstep(mask_width_px - feather, mask_width_px + feather, d_adj));
 	}
 	return mask_invert > 0.5 ? 1.0 - f : f;
+}
+
+// MK-05: displacement influence gate. Same field contract as mask_factor but
+// evaluated PRE-displacement (caller passes the transform-only uv as
+// final_uv) and driven by the disp_infl_* uniforms, so layer.mask and the
+// influence gate compose independently. Disabled = 1.0 (full displacement,
+// backward compatible). CUSTOM asset missing = 0.0 (fail-closed, mirrors
+// mask_factor).
+float influence_factor(vec2 final_uv, vec2 uv_pre, vec2 pres_px) {
+	if (disp_infl_enabled < 0.5) {
+		return 1.0;
+	}
+	if (disp_infl_source > 2.5) {
+		vec2 custom_uv = pres_px / max(canvas_size, vec2(1.0));
+		if (disp_infl_space < 0.5) {
+			custom_uv = uv_pre;
+		} else if (disp_infl_space < 1.5) {
+			custom_uv = final_uv;
+		}
+		float a = 0.0;
+		if (disp_infl_custom_loaded > 0.5) {
+			a = texture(disp_infl_custom_tex, clamp(custom_uv, vec2(0.0), vec2(1.0))).a;
+		}
+		float soft = max(disp_infl_feather_px, 0.001) * 0.01 + 0.001;
+		float f = smoothstep(0.5 - soft, 0.5 + soft, a);
+		if (disp_infl_region > 2.5) {
+			f = 1.0 - f;
+		} else if (disp_infl_region > 1.5) {
+			f = 1.0 - f;
+		}
+		return disp_infl_invert > 0.5 ? 1.0 - f : f;
+	}
+	if (disp_infl_source < 0.5) {
+		return 1.0;
+	}
+	if (disp_infl_region < 0.5) {
+		return disp_infl_invert > 0.5 ? 0.0 : 1.0;
+	}
+	vec2 basis_uv = final_uv;
+	vec2 scan_uv = final_uv;
+	bool pres_scan = false;
+	if (disp_infl_space < 0.5) {
+		basis_uv = uv_pre;
+		scan_uv = uv_pre;
+	} else if (disp_infl_space > 1.5) {
+		pres_scan = true;
+	}
+	if (disp_infl_source < 1.5 && disp_infl_space < 1.5) {
+		basis_uv = (disp_infl_space < 0.5) ? uv_pre : inverse_transform_uv_clamped(pres_px);
+		scan_uv = basis_uv;
+	}
+	float scan = max(disp_infl_width_px + disp_infl_feather_px + abs(disp_infl_expand_contract_px), 1.0) + 2.0;
+	float d_adj = 0.0;
+	if (pres_scan) {
+		d_adj = silhouette_distance_pres(pres_px, scan) + disp_infl_expand_contract_px;
+	} else {
+		d_adj = silhouette_distance_px(scan_uv, scan) + disp_infl_expand_contract_px;
+	}
+	float feather = max(disp_infl_feather_px, 0.001);
+	float f = 0.0;
+	if (disp_infl_region < 1.5) {
+		float half_w = max(disp_infl_width_px, 0.001) * 0.5;
+		f = 1.0 - smoothstep(half_w - feather * 0.5, half_w + feather * 0.5, abs(d_adj));
+	} else if (disp_infl_region < 2.5) {
+		f = smoothstep(-disp_infl_width_px - feather, -disp_infl_width_px + feather, d_adj) * (1.0 - smoothstep(-feather * 0.5, feather * 0.5, d_adj));
+	} else {
+		f = smoothstep(-feather * 0.5, feather * 0.5, d_adj) * (1.0 - smoothstep(disp_infl_width_px - feather, disp_infl_width_px + feather, d_adj));
+	}
+	return disp_infl_invert > 0.5 ? 1.0 - f : f;
 }
 
 // ============================ v0.3 flow/driver catalogue ============================
@@ -1438,7 +1525,9 @@ void fragment() {
 	// shader that assigns COLOR would discard it, so fold it in explicitly.
 	vec4 modulate_col = COLOR;
 	vec2 pres_px = UV * canvas_size;
-	vec2 offset = displacement_offset(pres_px, 1.0);
+	vec2 uv_nodisp = inverse_transform_uv(pres_px);
+	vec2 uv_pre_nodisp = (pres_px - source_rect.xy) / max(source_rect.zw, vec2(1.0));
+	vec2 offset = displacement_offset(pres_px, 1.0) * influence_factor(uv_nodisp, uv_pre_nodisp, pres_px);
 	vec2 uv = inverse_transform_uv(pres_px - offset);
 	// Pre-Transform/-Displacement asset coordinate (SOURCE_SPACE mask basis and
 	// the TRANSFORMED_SOURCE stage output).

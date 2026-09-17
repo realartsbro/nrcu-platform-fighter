@@ -48,9 +48,13 @@ func _init() -> void:
 	var mounted: bool = sr.mount("1v1", "debug", "ice_mage", "doge_man")
 	await settle(60)
 	_check(mounted, "screen mounts")
-	sr.seek(1.5)
+	# Parity needs a frozen transport: the suite outlives the presentation
+	# (DONE frees the screen by design) and EXIT animation would confound
+	# ref/proxy pairs. HOLD + pause makes every capture comparable.
+	sr.seek(1.1)
+	sr.screen.lab_preview_pause()
 	renderer = FxLayerRendererScript.new(sr.screen, sr.registry)
-	renderer.set_time(1.5)
+	renderer.set_time(1.1)
 	await settle(8)
 	screen_root = sr.screen.get_node("Root")
 
@@ -100,7 +104,7 @@ func _init() -> void:
 		layer["fx"] = {"rgb": 1.0, "intensity": 1.2, "rgb_shift_amount": 22.0}
 		look["layers"].append(layer)
 		var applied: Dictionary = renderer.apply_look(str(element["key"]), look)
-		renderer.set_time(1.5)
+		renderer.set_time(1.1)
 		await settle(8)
 		_check(bool(applied.get("ok", false)), "%s: FX applies" % fx_tag, str(applied.get("errors", [])))
 		var fx_img: Image = await capture("fx_" + fx_tag)

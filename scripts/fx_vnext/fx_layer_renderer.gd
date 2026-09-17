@@ -174,6 +174,7 @@ func _construct_stack(target_key: String, look: Dictionary) -> Dictionary:
 	var rect: Rect2 = FxTargetsScript.presentation_rect(canonical)
 	var tint: Color = canonical.get_meta("fx_source_tint", Color.WHITE)
 	var entry := {"quads": [], "input_quads": [], "input_viewports": [], "backbuffer_copies": [], "canonical": canonical}
+	_quad_asset_errors.clear()
 
 	var enabled_layers: Array = []
 	for raw in look.get("layers", []):
@@ -239,6 +240,8 @@ func _construct_stack(target_key: String, look: Dictionary) -> Dictionary:
 			"layer_flip_x": bool(transform.get("flip_x", false)),
 			"layer_flip_y": bool(transform.get("flip_y", false)),
 		})
+	errors.append_array(_quad_asset_errors)
+	_quad_asset_errors.clear()
 	return {"ok": errors.is_empty(), "errors": errors, "entry": entry, "key": target_key}
 
 func _pin_if_blend(entry: Dictionary, quad_entry: Dictionary) -> void:
@@ -330,6 +333,9 @@ func set_time(t: float) -> void:
 				(quad.material as ShaderMaterial).set_shader_parameter("fx_time", t)
 				_refresh_envelope(quad)
 		_update_stack(str(key))
+
+# MK asset errors collected by _make_quad during one _construct_stack run.
+var _quad_asset_errors: Array = []
 
 # TM-04: explicit manual-trigger epochs per motion domain.
 var _manual_epochs: Dictionary = {}
@@ -496,6 +502,28 @@ func _make_quad(canonical: TextureRect, rect: Rect2, tint: Color, layer: Diction
 		if tex is Texture2D:
 			material.set_shader_parameter("disp_custom_tex", tex)
 			material.set_shader_parameter("disp_custom_loaded", 1.0)
+		else:
+			_quad_asset_errors.append("displacement.custom_texture: asset not loadable: %s (%s)" % [str(disp_custom), str(layer.get("layer_id", ""))])
+	# MK-05: influence gate wiring — same source/region/space contract as
+	# layer.mask, evaluated pre-displacement in the shader.
+	var infl = displacement.get("influence_mask", null)
+	var infl_dict: Dictionary = infl if infl is Dictionary else {}
+	material.set_shader_parameter("disp_infl_enabled", 1.0 if bool(infl_dict.get("enabled", false)) else 0.0)
+	material.set_shader_parameter("disp_infl_source", float(_mask_source_index(str(infl_dict.get("source", "NONE")))))
+	material.set_shader_parameter("disp_infl_region", float(_mask_region_index(str(infl_dict.get("region", "FULL")))))
+	material.set_shader_parameter("disp_infl_space", float(_mask_space_index(str(infl_dict.get("space", "LAYER_SPACE")))))
+	material.set_shader_parameter("disp_infl_expand_contract_px", float(infl_dict.get("expand_contract_px", 0.0)))
+	material.set_shader_parameter("disp_infl_width_px", float(infl_dict.get("width_px", 0.0)))
+	material.set_shader_parameter("disp_infl_feather_px", float(infl_dict.get("feather_px", 0.0)))
+	material.set_shader_parameter("disp_infl_invert", 1.0 if bool(infl_dict.get("invert", false)) else 0.0)
+	var infl_custom = infl_dict.get("custom_mask", null)
+	if infl_custom != null and str(infl_custom) != "":
+		var infl_tex = load(str(infl_custom))
+		if infl_tex is Texture2D:
+			material.set_shader_parameter("disp_infl_custom_tex", infl_tex)
+			material.set_shader_parameter("disp_infl_custom_loaded", 1.0)
+		elif bool(infl_dict.get("enabled", false)) and str(infl_dict.get("source", "")) == "CUSTOM_MASK":
+			_quad_asset_errors.append("displacement.influence_mask.custom_mask: asset not loadable: %s (%s)" % [str(infl_custom), str(layer.get("layer_id", ""))])
 	material.set_shader_parameter("mask_enabled", 1.0 if bool(mask.get("enabled", false)) else 0.0)
 	material.set_shader_parameter("mask_source", float(_mask_source_index(str(mask.get("source", "NONE")))))
 	material.set_shader_parameter("mask_region", float(_mask_region_index(str(mask.get("region", "FULL")))))
@@ -510,13 +538,15 @@ func _make_quad(canonical: TextureRect, rect: Rect2, tint: Color, layer: Diction
 		if mask_tex is Texture2D:
 			material.set_shader_parameter("mask_custom_tex", mask_tex)
 			material.set_shader_parameter("mask_custom_loaded", 1.0)
+		elif bool(mask.get("enabled", false)) and str(mask.get("source", "")) == "CUSTOM_MASK":
+			_quad_asset_errors.append("mask.custom_mask: asset not loadable: %s (%s)" % [str(mask_custom), str(layer.get("layer_id", ""))])
 	# R3 §12: renderer-side finite gate — a non-finite opacity must never reach
 	# the shader (the validator rejects such docs at apply time; this is the
 	# last line of defense for any render path that bypasses validation).
 	var op := float(layer.get("opacity", 1.0))
 	material.set_shader_parameter("layer_opacity", op if is_finite(op) else 1.0)
 	material.set_shader_parameter("blend_mode", float(BLEND_INDEX.get(str(layer.get("blend_mode", "NORMAL")), 0)))
-	_set_fx_uniforms(material, layer.get("fx", {}), layer.get("motion", {}))
+	_set_fx_uniforms(material, layer.get("fx", {}), layer.get("motion", {}), str(layer.get("layer_id", "")))
 	quad.material = material
 	# TM-03: envelope base amounts + motion ride on the quad so set_time can
 	# recompute the live multiplier every frame.
@@ -530,7 +560,7 @@ func _make_quad(canonical: TextureRect, rect: Rect2, tint: Color, layer: Diction
 	quad.set_meta("fx_motion", (layer.get("motion", {}) as Dictionary).duplicate(true) if layer.get("motion", {}) is Dictionary else {})
 	return quad
 
-func _set_fx_uniforms(material: ShaderMaterial, fx, motion := {}) -> void:
+func _set_fx_uniforms(material: ShaderMaterial, fx, motion := {}, layer_id := "") -> void:
 	var f_raw: Dictionary = fx if fx is Dictionary else {}
 	# R3 §23 hardening: sanitize once. A hostile non-numeric value in ANY fx field
 	# used to abort float() mid-way and silently drop every uniform after it.
@@ -624,15 +654,19 @@ func _set_fx_uniforms(material: ShaderMaterial, fx, motion := {}) -> void:
 	var edge_path: String = str(f.get("edge_mask_path", ""))
 	var treatment_path: String = str(f.get("treatment_mask_path", ""))
 	if edge_path != "":
+		# MK-02: the custom edge source is not wired to any live shader path.
 		var edge_tex = load(edge_path)
 		if edge_tex is Texture2D:
 			material.set_shader_parameter("custom_edge_mask_tex", edge_tex)
 			material.set_shader_parameter("custom_edge_mask_loaded", 1.0)
+		_quad_asset_errors.append("fx.edge_mask_path: unsupported — custom edge source is not wired (%s)" % layer_id)
 	if treatment_path != "":
 		var treatment_tex = load(treatment_path)
 		if treatment_tex is Texture2D:
 			material.set_shader_parameter("treatment_mask_tex", treatment_tex)
 			material.set_shader_parameter("treatment_mask_loaded", 1.0)
+		elif bool(f.get("effect_mask_enabled", false)):
+			_quad_asset_errors.append("fx.treatment_mask_path: asset not loadable: %s (%s)" % [treatment_path, layer_id])
 
 func _motion_multiplier(motion, domain: String) -> float:
 	if not (motion is Dictionary) or (motion as Dictionary).is_empty():
