@@ -76,10 +76,10 @@ func _init() -> void:
 	((pair["layers"][0] as Dictionary))["opacity"] = 0.0
 	var fx_a: Dictionary = FxLookScript.new_layer("FX", "A original")
 	fx_a["input"] = "ORIGINAL_SOURCE"
-	fx_a["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift": 14.0}
+	fx_a["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": 14.0}
 	var fx_b: Dictionary = FxLookScript.new_layer("FX", "B transformed")
 	fx_b["input"] = "TRANSFORMED_SOURCE"
-	fx_b["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift": 14.0}
+	fx_b["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": 14.0}
 	var look_a: Dictionary = pair.duplicate(true)
 	(look_a["layers"] as Array).append(fx_a.duplicate(true))
 	var look_b: Dictionary = pair.duplicate(true)

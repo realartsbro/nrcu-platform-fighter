@@ -56,7 +56,7 @@ func _init() -> void:
 	prod.data_dir = data_dir
 	var echo_look: Dictionary = FxLookScript.new_look("ICE_MAGE_ECHO_LEFT", "Ice Echo")
 	var fx: Dictionary = FxLookScript.new_layer("FX", "Echo rgb")
-	fx["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift": 20.0}
+	fx["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": 20.0}
 	echo_look["layers"].append(fx)
 	var applied: Dictionary = prod.apply({"look": echo_look})
 	_check(bool(applied["ok"]), "production accepts echo look", str(applied.get("errors", [])))

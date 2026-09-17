@@ -45,7 +45,7 @@ func _init() -> void:
 	var look_b: Dictionary = look_a.duplicate(true)
 	look_b["revision"] = int(look_a.get("revision", 1)) + 1
 	((look_b["layers"][0] as Dictionary)["fx"] as Dictionary)["rgb"] = 1.0
-	((look_b["layers"][0] as Dictionary)["fx"] as Dictionary)["rgb_shift"] = 20.0
+	((look_b["layers"][0] as Dictionary)["fx"] as Dictionary)["rgb_shift_amount"] = 20.0
 
 	# ---- crash apply --------------------------------------------------------------
 	print("[CRASH-PROBE] starting crashing apply at stage=%s" % stage)

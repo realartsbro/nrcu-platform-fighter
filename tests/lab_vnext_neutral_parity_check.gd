@@ -97,7 +97,7 @@ func _init() -> void:
 		var element: Dictionary = refs[fx_tag]["element"]
 		var look: Dictionary = FxLookScript.new_look("NP_" + str(element["tag"]).to_upper(), "NP")
 		var layer: Dictionary = FxLookScript.new_layer("FX", "rgb")
-		layer["fx"] = {"rgb": 1.0, "intensity": 1.2, "rgb_shift": 22.0}
+		layer["fx"] = {"rgb": 1.0, "intensity": 1.2, "rgb_shift_amount": 22.0}
 		look["layers"].append(layer)
 		var applied: Dictionary = renderer.apply_look(str(element["key"]), look)
 		renderer.set_time(1.5)

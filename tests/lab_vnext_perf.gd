@@ -58,7 +58,7 @@ func _init() -> void:
 
 	var rgb_look: Dictionary = FxLookScript.new_look("PERF_RGB", "RGB")
 	var rgb_fx: Dictionary = FxLookScript.new_layer("FX", "RGB Tear")
-	rgb_fx["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift": 14.0}
+	rgb_fx["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": 14.0}
 	rgb_look["layers"].append(rgb_fx)
 
 	var dither_look: Dictionary = FxLookScript.new_look("PERF_DITHER", "Dither")
@@ -68,7 +68,7 @@ func _init() -> void:
 
 	var fringe_look: Dictionary = FxLookScript.new_look("PERF_FRINGE", "Fringe")
 	var fringe_fx: Dictionary = FxLookScript.new_layer("FX", "Fringe")
-	fringe_fx["fx"] = {"fringe": 1.0, "intensity": 1.6, "pure_continuous": true, "edge_width": 12.0, "wind_reach": 54.0, "wind_trail": 1.0, "fringe_bleed": 1.0, "color_blur": 2.0, "rgb": 1.0, "rgb_shift": 18.0}
+	fringe_fx["fx"] = {"fringe": 1.0, "intensity": 1.6, "pure_continuous": true, "edge_width": 12.0, "wind_reach": 54.0, "wind_trail": 1.0, "fringe_bleed": 1.0, "color_blur": 2.0, "rgb": 1.0, "rgb_shift_amount": 18.0}
 	fringe_look["layers"].append(fringe_fx)
 
 	var displacement_look: Dictionary = FxLookScript.new_look("PERF_DISPLACE", "Displace")
@@ -127,7 +127,7 @@ func _init() -> void:
 		var ffa_fx: Dictionary = FxLookScript.new_layer("FX", "fx")
 		ffa_fx["fx"] = {"fringe": 1.0, "intensity": 1.2, "edge_width": 10.0, "wind_reach": 32.0, "wind_trail": 0.5}
 		if i % 2 == 0:
-			ffa_fx["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift": 10.0}
+			ffa_fx["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": 10.0}
 		ffa_look["layers"].append(ffa_fx)
 		var res: Dictionary = renderer.apply_look(str(ffa_keys[i]), ffa_look)
 		if bool(res.get("ok", false)):

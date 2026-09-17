@@ -127,7 +127,7 @@ func _init() -> void:
 		for key in keys:
 			var look: Dictionary = FxLookScript.new_look("ADV_%s_%s" % [format, str(key).to_upper()], "adv")
 			var layer: Dictionary = FxLookScript.new_layer("FX", "rgb")
-			layer["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift": 16.0}
+			layer["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": 16.0}
 			look["layers"].append(layer)
 			plan.append({"key": str(key), "look": look})
 		var applied: Dictionary = renderer.apply_composition(plan)
@@ -151,7 +151,7 @@ func _init() -> void:
 func _look(look_id: String, shift: float) -> Dictionary:
 	var look: Dictionary = FxLookScript.new_look(look_id, look_id)
 	var fx: Dictionary = FxLookScript.new_layer("FX", "rgb")
-	fx["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift": shift}
+	fx["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": shift}
 	look["layers"].append(fx)
 	return look
 

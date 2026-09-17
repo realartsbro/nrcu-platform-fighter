@@ -211,10 +211,10 @@ func _init() -> void:
 	pair_disp["scale"] = 2.0
 	var fx_a: Dictionary = FxLookScript.new_layer("FX", "A original")
 	fx_a["input"] = "ORIGINAL_SOURCE"
-	fx_a["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift": 14.0}
+	fx_a["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": 14.0}
 	var fx_b: Dictionary = FxLookScript.new_layer("FX", "B transformed")
 	fx_b["input"] = "TRANSFORMED_SOURCE"
-	fx_b["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift": 14.0}
+	fx_b["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": 14.0}
 	var look_a: Dictionary = base_pair.duplicate(true)
 	(look_a["layers"] as Array).append(fx_a.duplicate(true))
 	var look_b: Dictionary = base_pair.duplicate(true)
@@ -288,7 +288,7 @@ func _init() -> void:
 
 	# ---- fx stage: rgb tear / fringe / dither --------------------------------
 	var rgb_look: Dictionary = FxLookScript.new_look("T_RGB", "RGB tear")
-	rgb_look["layers"][0]["fx"] = {"rgb": 1.0, "rgb_shift": 24.0, "intensity": 1.0}
+	rgb_look["layers"][0]["fx"] = {"rgb": 1.0, "rgb_shift_amount": 24.0, "intensity": 1.0}
 	applied = renderer.apply_look("echo_left", rgb_look)
 	_check(bool(applied["ok"]), "rgb fx applies")
 	renderer.set_time(1.5)
@@ -361,7 +361,7 @@ func _init() -> void:
 	(below["layers"][0]["transform"] as Dictionary)["position_px"] = [40.0, 0.0]
 	var below_fx: Dictionary = FxLookScript.new_layer("FX", "Consumes below")
 	below_fx["input"] = "LAYER_BELOW"
-	below_fx["fx"] = {"rgb": 1.0, "rgb_shift": 20.0, "intensity": 1.0}
+	below_fx["fx"] = {"rgb": 1.0, "rgb_shift_amount": 20.0, "intensity": 1.0}
 	below["layers"].append(below_fx)
 	applied = renderer.apply_look("echo_left", below)
 	_check(bool(applied["ok"]), "LAYER_BELOW applies", str(applied["errors"]))

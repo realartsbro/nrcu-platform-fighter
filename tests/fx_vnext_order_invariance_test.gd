@@ -69,7 +69,7 @@ func _init() -> void:
 			if index % 2 == 1:
 				var fg: Dictionary = FxLookScript.new_layer("FX", "FG rgb")
 				fg["plane"] = "COMPOSITION_FOREGROUND"
-				fg["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift": 12.0}
+				fg["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": 12.0}
 				(look["layers"] as Array).append(fg)
 			var local: Dictionary = FxLookScript.new_layer("FX", "Local fringe")
 			local["fx"] = {"fringe": 1.0, "intensity": 1.2, "edge_width": 8.0, "wind_reach": 24.0, "wind_trail": 0.7}

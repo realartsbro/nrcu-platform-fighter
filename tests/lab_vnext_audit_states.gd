@@ -1,5 +1,6 @@
 extends SceneTree
-# vNext audit states — builds, applies and serializes the three required example
+const FxEvidenceScript := preload("res://scripts/fx_vnext/fx_evidence.gd")
+var evidence_failures := 0
 # states through the real app shell, dumps the AS-WRITTEN production files and
 # labeled screenshots. Windowed: needs rendering.
 
@@ -106,31 +107,32 @@ func _init() -> void:
 		if node != null:
 			var rect: Rect2 = FxTargetsScript.presentation_rect(node)
 			rects[key] = {"position": [rect.position.x, rect.position.y], "size": [rect.size.x, rect.size.y]}
-	var rect_file := FileAccess.open(out_dir.path_join("geometry_rects.json"), FileAccess.WRITE)
-	if rect_file != null:
-		rect_file.store_string(JSON.stringify(rects, "  "))
-		rect_file.close()
+	var rect_file_path := out_dir.path_join("geometry_rects.json")
+	if not FxEvidenceScript.write_json(rect_file_path, rects):
+		evidence_failures += 1
+		print("[STATES] evidence write failed: geometry_rects.json")
 	print("[STATES] geometry rects: ", rects)
 
 	# ============ dump the AS-WRITTEN production files ============================
 	var prod_dir := ProjectSettings.globalize_path(shell.production.data_dir)
-	_copy_tree(prod_dir, out_dir.path_join("production_files"))
+	if not _copy_tree(prod_dir, out_dir.path_join("production_files")):
+		evidence_failures += 1
+		print("[STATES] evidence copy failed: production_files")
 	# example states as standalone JSON documents (from disk)
 	var state_index := {}
 	for look_id in shell.production.list_look_ids():
 		var loaded: Dictionary = shell.production.load_look(look_id)
 		if bool(loaded.get("ok", false)):
-			var f := FileAccess.open(out_dir.path_join("state_%s.json" % str(look_id).to_lower()), FileAccess.WRITE)
-			if f != null:
-				f.store_string(FxLookScript.to_json(loaded["doc"]))
-				f.close()
+			var state_path := out_dir.path_join("state_%s.json" % str(look_id).to_lower())
+			if not FxEvidenceScript.write_text(state_path, FxLookScript.to_json(loaded["doc"])):
+				evidence_failures += 1
+				print("[STATES] evidence write failed: ", state_path)
 			state_index[str(look_id)] = {"revision": int((loaded["doc"] as Dictionary).get("revision", 0)), "status": str((loaded["doc"] as Dictionary).get("status", ""))}
-	var idx_file := FileAccess.open(out_dir.path_join("states_index.json"), FileAccess.WRITE)
-	if idx_file != null:
-		idx_file.store_string(JSON.stringify(state_index, "  "))
-		idx_file.close()
-	print("[STATES] done · looks=", state_index.keys())
-	quit(0)
+	if not FxEvidenceScript.write_json(out_dir.path_join("states_index.json"), state_index):
+		evidence_failures += 1
+		print("[STATES] evidence write failed: states_index.json")
+	print("[STATES] done · looks=", state_index.keys(), " evidence_failures=", evidence_failures)
+	quit(1 if evidence_failures > 0 else 0)
 
 func settle(n: int) -> void:
 	for i in n:
@@ -139,24 +141,34 @@ func settle(n: int) -> void:
 func still(name: String) -> void:
 	await RenderingServer.frame_post_draw
 	var img: Image = root.get_texture().get_image()
-	img.save_png(out_dir.path_join(name + ".png"))
+	if not FxEvidenceScript.save_png(img, out_dir.path_join(name + ".png")):
+		evidence_failures += 1
+		print("[STATES] evidence write failed: ", name, ".png")
 
-func _copy_tree(from: String, to: String) -> void:
+func _copy_tree(from: String, to: String) -> bool:
 	var dir := DirAccess.open(from)
 	if dir == null:
-		return
+		return false
+	DirAccess.make_dir_recursive_absolute(to)
+	var ok := true
 	for file_name in dir.get_files():
 		var src := from.path_join(file_name)
 		var dst := to.path_join(file_name)
 		var f := FileAccess.open(src, FileAccess.READ)
 		if f == null:
+			ok = false
 			continue
 		var bytes := f.get_buffer(f.get_length())
 		f.close()
 		var out := FileAccess.open(dst, FileAccess.WRITE)
-		if out != null:
-			out.store_buffer(bytes)
-			out.close()
+		if out == null:
+			ok = false
+			continue
+		out.store_buffer(bytes)
+		out.close()
+		if not FileAccess.file_exists(dst) or FileAccess.get_file_as_bytes(dst) != bytes:
+			ok = false
 	for sub in dir.get_directories():
-		DirAccess.make_dir_recursive_absolute(to.path_join(sub))
-		_copy_tree(from.path_join(sub), to.path_join(sub))
+		if not _copy_tree(from.path_join(sub), to.path_join(sub)):
+			ok = false
+	return ok

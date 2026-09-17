@@ -44,7 +44,7 @@ func _init() -> void:
 	echo_bg["fx"] = {"dither": 1.0, "intensity": 1.4, "dither_levels": 3.0, "dither_pixel": 4.0}
 	echo_look["layers"].append(echo_bg)
 	var echo_fx: Dictionary = FxLookScript.new_layer("FX", "Echo rgb")
-	echo_fx["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift": 16.0}
+	echo_fx["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": 16.0}
 	echo_look["layers"].append(echo_fx)
 
 	var mark_look: Dictionary = FxLookScript.new_look("C_MARK", "Mark")
@@ -53,7 +53,7 @@ func _init() -> void:
 	mark_look["layers"].append(mark_fx)
 	var mark_fg: Dictionary = FxLookScript.new_layer("FX", "Mark FG rgb")
 	mark_fg["plane"] = "COMPOSITION_FOREGROUND"
-	mark_fg["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift": 12.0}
+	mark_fg["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": 12.0}
 	mark_look["layers"].append(mark_fg)
 
 	# ---- baseline: no styles -----------------------------------------------------

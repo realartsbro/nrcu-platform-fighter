@@ -109,7 +109,7 @@ func _init() -> void:
 		var baseline: Image = svp.get_texture().get_image()
 		var look: Dictionary = FxLookScript.new_look("SIDE_FIELD_TEST", "Side Field")
 		var fx: Dictionary = FxLookScript.new_layer("FX", "field rgb")
-		fx["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift": 16.0}
+		fx["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": 16.0}
 		look["layers"].append(fx)
 		var applied: Dictionary = renderer.apply_look(field_key, look)
 		renderer.set_time(1.5)
