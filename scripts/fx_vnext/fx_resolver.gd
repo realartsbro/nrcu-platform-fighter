@@ -268,12 +268,16 @@ static func new_assignments() -> Dictionary:
 
 static func upsert_binding(doc: Dictionary, selector: Dictionary, look_id: String, note := "") -> String:
 	# Updating a selector replaces the existing binding rather than appending a
-	# duplicate (specs/09 §2).
+	# duplicate (specs/09 §2). RS-01: retargeting to a DIFFERENT look is an
+	# explicit new-authority intent, so a disabled binding is re-enabled;
+	# re-saving the same look preserves the enabled flag.
 	var key := selector_key(selector)
 	for raw in doc.get("bindings", []):
 		if raw is Dictionary and selector_key((raw as Dictionary).get("selector", {})) == key:
 			var existing: Dictionary = raw
-			existing["look_id"] = look_id
+			if str(existing.get("look_id", "")) != look_id:
+				existing["look_id"] = look_id
+				existing["enabled"] = true
 			if note != "":
 				existing["note"] = note
 			return str(existing.get("binding_id", ""))

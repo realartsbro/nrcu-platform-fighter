@@ -71,6 +71,7 @@ func reload_production() -> Dictionary:
 	var doc: Dictionary = assignments["doc"]
 	var plan: Array = []
 	var skipped: Array = []
+	var review_skipped: Array = []
 	var plan_ids: Array = []
 	for key in runtime.registry.keys():
 		var key_str := str(key)
@@ -83,6 +84,9 @@ func reload_production() -> Dictionary:
 		if not bool(loaded.get("ok", false)):
 			skipped.append(look_id)
 			continue
+		if str((loaded["doc"] as Dictionary).get("status", "")) != "PRODUCTION":
+			review_skipped.append(look_id)
+			continue
 		plan.append({"key": key_str, "look": loaded["doc"]})
 		plan_ids.append("%s:%s:r%d" % [key_str, look_id, int((loaded["doc"] as Dictionary).get("revision", 0))])
 	var applied: Dictionary = renderer.apply_composition(plan)
@@ -91,6 +95,7 @@ func reload_production() -> Dictionary:
 		"ok": bool(applied.get("ok", false)),
 		"styled_targets": plan.size(),
 		"missing_looks": skipped,
+		"review_skipped": review_skipped,
 		"errors": applied.get("errors", []),
 	}
 	return last_summary

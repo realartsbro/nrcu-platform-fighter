@@ -89,7 +89,7 @@ func load_look(look_id: String) -> Dictionary:
 	var from_prev_look := bool(raw.get("_recovered_from_prev", false))
 	raw.erase("_recovered_from_prev")
 	var doc := FxLookScript.materialize(raw)
-	var check: Dictionary = FxLookScript.validate(doc)
+	var check: Dictionary = FxLookScript.validate_input(doc)
 	return {"ok": bool(check["ok"]), "doc": doc, "errors": check["errors"], "recovery_required": not bool(check["ok"]) or from_prev_look, "recovered_from_prev": from_prev_look}
 
 func list_look_ids() -> Array:
@@ -134,17 +134,25 @@ func production_state() -> Dictionary:
 # ---------------------------------------------------------------- usage
 
 func usage(look_id: String) -> Dictionary:
+	# RS-06: resolution skips disabled bindings, so every consumer must see
+	# the split explicitly. "count" drives resolution-adjacent semantics
+	# (shared protection, badges, health); "total_count" (incl. disabled)
+	# drives delete protection, since a disabled binding still references
+	# the look and re-enabling it must not dangle.
 	var assignments := load_assignments()
 	var targets: Array = []
+	var enabled_count := 0
 	for raw in assignments["doc"].get("bindings", []):
 		if raw is Dictionary and str((raw as Dictionary).get("look_id", "")) == look_id:
+			var is_enabled := bool((raw as Dictionary).get("enabled", true))
+			enabled_count += 1 if is_enabled else 0
 			targets.append({
 				"binding_id": str((raw as Dictionary).get("binding_id", "")),
 				"selector": FxResolverScript.normalize_selector((raw as Dictionary).get("selector", {})),
 				"selector_key": FxResolverScript.selector_key((raw as Dictionary).get("selector", {})),
-				"enabled": bool((raw as Dictionary).get("enabled", true)),
+				"enabled": is_enabled,
 			})
-	return {"count": targets.size(), "targets": targets}
+	return {"count": enabled_count, "total_count": targets.size(), "targets": targets}
 
 # ---------------------------------------------------------------- transaction
 
@@ -170,8 +178,15 @@ func _backup(path: String) -> bool:
 	if not FileAccess.file_exists(path):
 		return true
 	var name := path.get_file()
-	var stamp := str(Time.get_unix_time_from_system())
+	# DR-11: second-resolution stamps collide within one second — add
+	# millisecond precision plus a collision counter so rapid successive
+	# backups never silently overwrite each other.
+	var stamp := str(Time.get_unix_time_from_system()) + "_" + str(Time.get_ticks_msec() % 1000)
 	var target := recovery_dir().path_join("%s.%s.bak" % [name, stamp])
+	var attempt := 0
+	while FileAccess.file_exists(target) and attempt < 100:
+		attempt += 1
+		target = recovery_dir().path_join("%s.%s_%d.bak" % [name, stamp, attempt])
 	var file := FileAccess.open(target, FileAccess.WRITE)
 	if file == null:
 		return false
@@ -232,6 +247,9 @@ func apply(plan: Dictionary) -> Dictionary:
 	if look != null:
 		if not (look is Dictionary):
 			return {"ok": false, "errors": ["look: not a dictionary"]}
+		var input_check: Dictionary = FxLookScript.reject_aliases(look)
+		if not bool(input_check.get("ok", false)):
+			return {"ok": false, "errors": input_check.get("errors", []), "stage": "validate-input"}
 		var normalized := FxLookScript.materialize(look)
 		look_id = str(normalized.get("look_id", ""))
 		revision = int(normalized.get("revision", 0))
@@ -280,7 +298,7 @@ func apply(plan: Dictionary) -> Dictionary:
 	if look != null:
 		var reread := _read_json(look_path(look_id) + ".tmp")
 		reread.erase("_recovered_from_prev")
-		var rc: Dictionary = FxLookScript.validate(FxLookScript.materialize(reread))
+		var rc: Dictionary = FxLookScript.validate_input(FxLookScript.materialize(reread))
 		if not bool(rc["ok"]):
 			_remove_leftovers(look_path(look_id))
 			return {"ok": false, "errors": ["candidate re-read invalid: %s" % str(rc["errors"])], "stage": "reread"}
@@ -562,6 +580,11 @@ func retire_look(look_id: String, mode: String, replacement_look_id := "") -> Di
 			return {"ok": false, "errors": ["replacement look required"], "stage": "args"}
 		if not FileAccess.file_exists(look_path(replacement_look_id)):
 			return {"ok": false, "errors": ["replacement look not found: " + replacement_look_id], "stage": "args"}
+		# DR-09: existence is not validity — a corrupt replacement must never
+		# receive rebound bindings while the valid original is deleted.
+		var replacement_check := load_look(replacement_look_id)
+		if not bool(replacement_check.get("ok", false)):
+			return {"ok": false, "errors": ["replacement look invalid, keeping " + look_id + ": " + str(replacement_check.get("errors", []))], "stage": "replacement"}
 	var loaded := load_assignments()
 	if not bool(loaded.get("ok", false)):
 		return {"ok": false, "errors": loaded.get("errors", ["assignments unreadable"]), "stage": "load"}
@@ -614,20 +637,29 @@ func retire_look(look_id: String, mode: String, replacement_look_id := "") -> Di
 	return {"ok": true, "errors": [], "mode": mode, "usage_before": int(use.get("count", 0)), "rebound": changed if mode == "replace" else 0, "unassigned": changed if mode == "unassign" else 0}
 
 func list_recovery() -> Array:
+	# DR-11: only real backups — transaction internals (.txn.json, .txnbak)
+	# are never history entries.
 	var out: Array = []
 	var dir := DirAccess.open(ProjectSettings.globalize_path(recovery_dir()))
 	if dir == null:
 		return out
 	for name in dir.get_files():
-		out.append(name)
+		var s := str(name)
+		if s.ends_with(".bak"):
+			out.append(s)
 	out.sort()
 	return out
 
 func restore_recovery(backup_name: String) -> Dictionary:
+	# DR-10: manual restore is explicit and safe — unknown names are refused,
+	# the candidate is semantically validated BEFORE it touches authority,
+	# the current file is backed up first, and the result is post-verified.
+	if not str(backup_name).ends_with(".bak") or str(backup_name).contains("/") or str(backup_name).contains("\\"):
+		return {"ok": false, "errors": ["invalid backup name: " + backup_name]}
 	var source := recovery_dir().path_join(backup_name)
 	if not FileAccess.file_exists(source):
 		return {"ok": false, "errors": ["recovery file not found: " + backup_name]}
-	# Backup names look like "<file>.json.<unix>.bak"; strip .bak and the stamp.
+	# Backup names look like "<file>.json.<stamp>.bak"; strip .bak and the stamp.
 	var stem := backup_name.get_basename()
 	var last_dot := stem.rfind(".")
 	if last_dot != -1:
@@ -637,9 +669,97 @@ func restore_recovery(backup_name: String) -> Dictionary:
 		target = assignments_path()
 	else:
 		target = looks_dir().path_join(stem)
+	var candidate_text := _file_bytes(source).get_string_from_utf8()
+	var candidate = JSON.parse_string(candidate_text)
+	if not (candidate is Dictionary):
+		return {"ok": false, "errors": ["backup is not a JSON document: " + backup_name]}
+	if target == assignments_path():
+		var asg_check: Dictionary = FxResolverScript.validate_assignments(candidate)
+		if not bool(asg_check.get("ok", false)):
+			return {"ok": false, "errors": ["backup fails assignments validation: " + str(asg_check.get("errors", []))]}
+	else:
+		var look_check: Dictionary = FxLookScript.validate_input(FxLookScript.materialize(candidate))
+		if not bool(look_check.get("ok", false)):
+			return {"ok": false, "errors": ["backup fails look validation: " + str(look_check.get("errors", []))]}
+	if not _backup(target):
+		return {"ok": false, "errors": ["cannot back up current file before restore"]}
 	var file := FileAccess.open(target, FileAccess.WRITE)
 	if file == null:
 		return {"ok": false, "errors": ["cannot restore to " + target]}
-	file.store_buffer(_file_bytes(source))
+	file.store_string(candidate_text)
 	file.close()
+	if target == assignments_path():
+		var verify := load_assignments()
+		if not bool(verify.get("ok", false)):
+			return {"ok": false, "errors": ["restored assignments unreadable: " + str(verify.get("errors", []))]}
+	else:
+		var verify := load_look(stem.get_basename())
+		if not bool(verify.get("ok", false)):
+			return {"ok": false, "errors": ["restored look unreadable: " + str(verify.get("errors", []))]}
 	return {"ok": true, "errors": []}
+
+# ------------------------------------------------------- migration review queue
+# MIGRATION_REVIEW_REQUIRED looks need a human decision before they can become
+# production authority. All three entry points persist through the same
+# transactional apply() path, so revision/order/validation guarantees hold.
+
+func list_migration_review_look_ids() -> Array:
+	var out: Array = []
+	for look_id in list_look_ids():
+		var loaded := load_look(str(look_id))
+		if bool(loaded.get("ok", false)) and str((loaded["doc"] as Dictionary).get("status", "")) == "MIGRATION_REVIEW_REQUIRED":
+			out.append(str(look_id))
+	out.sort()
+	return out
+
+func load_migration_review(look_id: String) -> Dictionary:
+	var loaded := load_look(look_id)
+	if not bool(loaded.get("ok", false)):
+		return {"ok": false, "errors": loaded.get("errors", ["look not found: " + look_id]), "stage": "load"}
+	var doc: Dictionary = loaded["doc"]
+	if str(doc.get("status", "")) != "MIGRATION_REVIEW_REQUIRED":
+		return {"ok": false, "errors": ["look %s is not pending review (status %s)" % [look_id, str(doc.get("status", ""))]], "stage": "state"}
+	var metadata: Dictionary = doc.get("metadata", {})
+	return {"ok": true, "errors": [], "doc": doc, "notes": (metadata.get("migration_notes", []) as Array).duplicate()}
+
+func save_migration_repair(look_id: String, repair: Dictionary) -> Dictionary:
+	# repair: {"layers": {layer_id: {"fx": {...}, "mask": {...}}}} — merged into
+	# the persisted REVIEW document; status stays MIGRATION_REVIEW_REQUIRED.
+	var loaded := load_migration_review(look_id)
+	if not bool(loaded.get("ok", false)):
+		return loaded
+	var doc: Dictionary = (loaded["doc"] as Dictionary).duplicate(true)
+	var layers_patch: Dictionary = repair.get("layers", {})
+	for layer in doc.get("layers", []):
+		if not (layer is Dictionary):
+			continue
+		var lid := str((layer as Dictionary).get("layer_id", ""))
+		if not layers_patch.has(lid):
+			continue
+		var entry: Dictionary = layers_patch[lid]
+		if (entry as Dictionary).has("fx"):
+			for key in ((entry as Dictionary)["fx"] as Dictionary).keys():
+				((layer as Dictionary)["fx"] as Dictionary)[key] = ((entry as Dictionary)["fx"] as Dictionary)[key]
+		if (entry as Dictionary).has("mask"):
+			for key in ((entry as Dictionary)["mask"] as Dictionary).keys():
+				((layer as Dictionary)["mask"] as Dictionary)[key] = ((entry as Dictionary)["mask"] as Dictionary)[key]
+	doc["revision"] = int(doc.get("revision", 1)) + 1
+	return apply({"look": doc})
+
+func approve_migration_review(look_id: String, acknowledgement: String) -> Dictionary:
+	# Acknowledgement-gated: an empty acknowledgement never approves.
+	if str(acknowledgement).strip_edges() == "":
+		return {"ok": false, "errors": ["approval requires a non-empty acknowledgement"], "stage": "args"}
+	var loaded := load_migration_review(look_id)
+	if not bool(loaded.get("ok", false)):
+		return loaded
+	var doc: Dictionary = (loaded["doc"] as Dictionary).duplicate(true)
+	doc["status"] = "PRODUCTION"
+	doc["revision"] = int(doc.get("revision", 1)) + 1
+	var metadata: Dictionary = (doc.get("metadata", {}) as Dictionary).duplicate(true)
+	metadata["review"] = {
+		"acknowledged": str(acknowledgement),
+		"note_count": int((loaded["notes"] as Array).size()),
+	}
+	doc["metadata"] = metadata
+	return apply({"look": doc})

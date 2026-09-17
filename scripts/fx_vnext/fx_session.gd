@@ -68,16 +68,32 @@ func redo() -> bool:
 
 func revert_draft() -> Dictionary:
 	# G — Revert Draft returns to the assigned clean Look (or neutral).
+	# DR-05: the shared draft is cleared together with the target draft, so
+	# it can never silently reopen. DR-06: base/mode/revision are reconciled
+	# from current authority together with the visible look.
 	if str(signature) != "":
 		drafts.clear_target(signature)
 	var look_id := effective_look_id()
 	if look_id != "":
+		for entry in drafts.list_shared():
+			if str((entry as Dictionary).get("look_id", "")) == look_id:
+				drafts.clear_shared(look_id, int((entry as Dictionary).get("base_revision", 0)))
+	if look_id != "":
 		var loaded: Dictionary = production.load_look(look_id)
 		if bool(loaded.get("ok", false)):
+			var usage: Dictionary = production.usage(look_id)
 			look = loaded["doc"]
+			base = {
+				"kind": "production",
+				"look_id": look_id,
+				"revision": int(look.get("revision", 1)),
+				"shared_count": int(usage.get("count", 0)),
+			}
+			mode = "SHARED_PROTECTED" if int(usage.get("count", 0)) > 1 else "EDIT_PRODUCTION_UNIQUE"
 			dirty = false
 			_undo_stack.clear()
 			_redo_stack.clear()
+			_refresh_resolution()
 			return {"ok": true, "errors": [], "reverted_to": look_id}
 	look = FxLookScript.new_look("", "")
 	look["name"] = _breadcrumb_name()
@@ -107,7 +123,12 @@ func unassign_target() -> Dictionary:
 	if not bool(result.get("ok", false)):
 		return result
 	_refresh_resolution()
-	return {"ok": true, "errors": []}
+	# RS-05: report what is actually effective now — a broader fallback may
+	# still style this target, so never claim bare "unassigned".
+	var status := str(resolution.get("status", "UNASSIGNED"))
+	if status in ["ASSIGNED", "AMBIGUOUS"]:
+		return {"ok": true, "errors": [], "fallback_look_id": str(resolution.get("look_id", "")), "message": "exact binding removed; fallback %s now effective" % str(resolution.get("look_id", ""))}
+	return {"ok": true, "errors": [], "fallback_look_id": "", "message": "unassigned; neutral design"}
 
 func disable_binding(binding_id: String) -> Dictionary:
 	# I — Advanced: disable a specific binding so lower-priority rules win.
@@ -122,6 +143,24 @@ func disable_binding(binding_id: String) -> Dictionary:
 		return result
 	_refresh_resolution()
 	return {"ok": true, "errors": []}
+
+func enable_binding(binding_id: String) -> Dictionary:
+	# RS-02: every Disable has a reachable Enable recovery on the same path.
+	var assignments: Dictionary = production.load_assignments()
+	if not bool(assignments.get("ok", false)):
+		return {"ok": false, "errors": ["assignments invalid; fix Production first"]}
+	var asg_doc: Dictionary = assignments["doc"]
+	if not FxResolverScript.set_binding_enabled(asg_doc, binding_id, true):
+		return {"ok": false, "errors": ["binding not found: " + binding_id]}
+	var result: Dictionary = production.apply({"assignments": asg_doc})
+	if not bool(result.get("ok", false)):
+		return result
+	_refresh_resolution()
+	return {"ok": true, "errors": []}
+
+func assignment_scope_text() -> String:
+	# RS-07: the exact semantic scope every Apply/Styling/Unassign commits to.
+	return _selector_human(FxResolverScript.selector_key(novice_selector()))
 
 func look_library() -> Array:
 	var out: Array = []
@@ -139,9 +178,14 @@ func look_library() -> Array:
 
 func delete_look(look_id: String) -> Dictionary:
 	# I — Delete Look is blocked while assignments still reference it.
+	# RS-06: disabled bindings count too — deleting under them would leave a
+	# dangling reference that breaks on re-enable.
 	var usage: Dictionary = production.usage(look_id)
-	if int(usage.get("count", 0)) > 0:
-		return {"ok": false, "errors": ["Look is used by %d assignment(s) — unassign or replace first" % int(usage["count"])], "usage": usage}
+	var total := int(usage.get("total_count", usage.get("count", 0)))
+	if total > 0:
+		var disabled := total - int(usage.get("count", 0))
+		var extra := " (%d disabled reference(s))" % disabled if disabled > 0 else ""
+		return {"ok": false, "errors": ["Look is used by %d assignment(s)%s — unassign or replace first" % [total, extra]], "usage": usage}
 	var path: String = production.look_path(look_id)
 	if not FileAccess.file_exists(path):
 		return {"ok": false, "errors": ["look not found: " + look_id]}
@@ -175,30 +219,49 @@ func open_target(key: String, ctx: Dictionary, signature_: String, role_: String
 	resolution = FxResolverScript.resolve(assignments.get("doc", {}), context) if bool(assignments.get("ok", false)) else {"status": "BROKEN", "chain": []}
 	styling_enabled = str(resolution.get("status", "")) != "BYPASSED"
 
-	# 1) exact target Draft exists → open Draft (specs/06 §2).
+	# 1) exact target Draft exists → open Draft (specs/06 §2), subject to
+	# authority reconciliation (DR-01/03/04). A structurally invalid draft
+	# never reaches typed shell access; a clean draft never shadows newer
+	# Production; a draft never bypasses shared-Look protection. The draft
+	# file itself is always preserved — reconciliation only changes priority.
 	var draft_loaded: Dictionary = drafts.load_target(signature_)
 	if bool(draft_loaded.get("ok", false)):
 		var record: Dictionary = draft_loaded["record"]
-		look = record["look"]
-		base = {
-			"kind": "draft",
-			"look_id": str(look.get("look_id", "")),
-			"revision": int(record.get("base_revision", 0)),
-			"shared_count": 0,
-		}
-		dirty = bool(record.get("dirty", true))
-		mode = "EDIT_UNASSIGNED"
-		if str(resolution.get("status", "")) in ["ASSIGNED", "AMBIGUOUS"]:
-			var prod_id := str(resolution.get("look_id", ""))
-			if prod_id != "" and prod_id == str(look.get("look_id", "")):
-				base["kind"] = "production"
-				base["look_id"] = prod_id
-				# R3 §9: record shared usage; the APPLY guard enforces protection
-				# for draft-branch sessions (no fake shared-draft mode).
-				var usage: Dictionary = production.usage(prod_id)
-				base["shared_count"] = int(usage.get("count", 0))
-			mode = "EDIT_PRODUCTION_UNIQUE"
-		return {"ok": true, "opened": "draft", "errors": []}
+		if not bool(draft_loaded.get("struct_ok", false)):
+			last_errors.append("target draft structurally invalid; kept on disk, opening authority instead: " + str(draft_loaded.get("struct_errors", [])))
+		else:
+			var open_prod_id := ""
+			var open_prod_rev := 0
+			if str(resolution.get("status", "")) in ["ASSIGNED", "AMBIGUOUS"]:
+				open_prod_id = str(resolution.get("look_id", ""))
+				var prod_loaded: Dictionary = production.load_look(open_prod_id) if open_prod_id != "" else {"ok": false}
+				if bool(prod_loaded.get("ok", false)):
+					open_prod_rev = int((prod_loaded["doc"] as Dictionary).get("revision", 0))
+			var draft_dirty := bool(record.get("dirty", true))
+			if not draft_dirty and open_prod_rev > int(record.get("base_revision", 0)):
+				last_errors.append("clean parked draft is older than Production rev%d; opening current authority" % open_prod_rev)
+			else:
+				look = record["look"]
+				base = {
+					"kind": "draft",
+					"look_id": str(look.get("look_id", "")),
+					"revision": int(record.get("base_revision", 0)),
+					"shared_count": 0,
+				}
+				dirty = draft_dirty
+				mode = "EDIT_UNASSIGNED"
+				if str(resolution.get("status", "")) in ["ASSIGNED", "AMBIGUOUS"]:
+					var prod_id := str(resolution.get("look_id", ""))
+					if prod_id != "" and prod_id == str(look.get("look_id", "")):
+						base["kind"] = "production"
+						base["look_id"] = prod_id
+						# R3 §9: record shared usage; the APPLY guard enforces protection
+						# for draft-branch sessions (no fake shared-draft mode).
+						var usage: Dictionary = production.usage(prod_id)
+						base["shared_count"] = int(usage.get("count", 0))
+						# DR-04: a retained draft never downgrades shared protection.
+						mode = "SHARED_PROTECTED" if int(usage.get("count", 0)) > 1 else "EDIT_PRODUCTION_UNIQUE"
+				return {"ok": true, "opened": "draft", "errors": []}
 
 	# 2) else resolve Production Assignment; 3) load Production Look.
 	if str(resolution.get("status", "")) in ["ASSIGNED", "AMBIGUOUS"]:
@@ -377,11 +440,20 @@ func apply(look_id_override := "") -> Dictionary:
 	if not bool(assignments.get("ok", false)):
 		return {"ok": false, "errors": ["assignments invalid; fix Production first"]}
 	var asg_doc: Dictionary = assignments["doc"]
+	# RS-01: notice when this apply re-enables an exact disabled binding.
+	var reenabled := false
+	var sel_key := FxResolverScript.selector_key(selector)
+	for raw in (asg_doc as Dictionary).get("bindings", []):
+		if raw is Dictionary and FxResolverScript.selector_key((raw as Dictionary).get("selector", {})) == sel_key:
+			if not bool((raw as Dictionary).get("enabled", true)) and str((raw as Dictionary).get("look_id", "")) != final_id:
+				reenabled = true
 	FxResolverScript.upsert_binding(asg_doc, selector, final_id, "novice apply")
 	var result: Dictionary = production.apply({"look": doc, "assignments": asg_doc})
 	if not bool(result.get("ok", false)):
 		last_errors = result.get("errors", [])
 		return result
+	if reenabled and not last_warnings.has("re-enabled a disabled binding for this scope"):
+		last_warnings.append("re-enabled a disabled binding for this scope")
 
 	# Success (specs/15 §10): status PRODUCTION, draft stays as clean snapshot.
 	if mode == "EDIT_SHARED_DRAFT":
@@ -473,7 +545,12 @@ func set_styling(enabled: bool) -> Dictionary:
 		return result
 	styling_enabled = enabled
 	_refresh_resolution()
-	return {"ok": true, "errors": []}
+	# RS-03/04: enabling only removes the exact novice bypass. A broader
+	# inherited bypass can still win — report it instead of claiming ON.
+	var warnings: Array = []
+	if enabled and str(resolution.get("status", "")) == "BYPASSED":
+		warnings.append("still styling-OFF: broader bypass %s matches this target" % FxResolverScript.selector_key((resolution.get("selector", {}) as Dictionary)))
+	return {"ok": true, "errors": [], "warnings": warnings}
 
 func _refresh_resolution() -> void:
 	var assignments: Dictionary = production.load_assignments()
@@ -499,6 +576,8 @@ func badge_text() -> String:
 		"AMBIGUOUS":
 			return "⚠ AMBIGUOUS" + suffix
 		"ASSIGNED":
+			if str(look.get("status", "")) == "MIGRATION_REVIEW_REQUIRED":
+				return "⚠ MIGRATION REVIEW" + suffix
 			if int(base.get("shared_count", 0)) > 1:
 				return "◆ SHARED (%d)" % int(base["shared_count"]) + suffix
 			return "● ASSIGNED" + suffix
