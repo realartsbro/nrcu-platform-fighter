@@ -43,9 +43,13 @@ var drafts
 var session
 var preview_mode := "WORKING"
 var preview_toggle: Button
+var review_button: Button
 var _plan_status: Dictionary = {}
 var delete_panel: PanelContainer
 var delete_look_id := ""
+var review_panel: PanelContainer
+var review_look_id := ""
+var review_ack_field: LineEdit
 var layer_clipboard: Dictionary = {}
 var debug_view := "COMPOSITE"
 var _timeline_label_rects: Array = []
@@ -313,6 +317,7 @@ func _build_toolbar(parent: Node) -> void:
 	preset_preview = _toolbar_button("PREVIEW", func() -> void: _apply_workspace_preset("PREVIEW"))
 
 	remount_button = _toolbar_button("⟲ REMOUNT", _remount_current)
+	review_button = _toolbar_button("⚠ REVIEW", _open_migration_review_queue)
 	preview_toggle = _toolbar_button("PREVIEW: WORKING", _toggle_preview_mode)
 	overflow_button = MenuButton.new()
 	overflow_button.text = "⋯"
@@ -1054,8 +1059,13 @@ func _select_key(key: String, from_preview: bool) -> void:
 	if key == "":
 		return
 	# Auto-stash before target switch (specs/10 §2): no modal, no data loss.
+	# DR-07: a failed stash BLOCKS the switch — proceeding would strand dirty
+	# work that no longer exists anywhere.
 	if key != selected_key and session != null and session.dirty and str(session.current_key) != "":
-		session.stash()
+		var stash_result: Dictionary = session.stash()
+		if not bool(stash_result.get("ok", false)):
+			action_status.text = "✗ Draft stash failed — staying on current target: " + str(stash_result.get("errors", []))
+			return
 	selected_key = key
 	if not from_preview and browser != null:
 		pass # browser already shows the selection
@@ -1168,6 +1178,8 @@ func _status_badge_for(key: String) -> String:
 					label = "⚠ BROKEN"
 				elif status == "AMBIGUOUS":
 					label = "⚠ AMBIGUOUS"
+				elif str((production.load_look(look_id).get("doc", {}) as Dictionary).get("status", "")) == "MIGRATION_REVIEW_REQUIRED":
+					label = "⚠ MIGRATION REVIEW"
 				else:
 					label = "● ASSIGNED"
 			_:
@@ -1358,7 +1370,8 @@ func _action_unassign() -> void:
 		return
 	var result: Dictionary = session.unassign_target()
 	if bool(result.get("ok", false)):
-		action_status.text = "✓ Unassigned this target (Look stays in the Library)"
+		# RS-05: surface what is actually effective — never claim bare unassigned.
+		action_status.text = "✓ " + str(result.get("message", "Unassigned this target (Look stays in the Library)"))
 		browser.rebuild()
 	else:
 		action_status.text = "✗ " + str(result.get("errors", []))
@@ -1408,6 +1421,12 @@ func _refresh_library() -> void:
 			broken.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 			broken.add_theme_color_override("font_color", Color(0.9, 0.4, 0.4))
 			row.add_child(broken)
+		elif production != null and production.list_migration_review_look_ids().has(str(entry["look_id"])):
+			var review := Label.new()
+			review.text = "⚠ REVIEW"
+			review.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+			review.add_theme_color_override("font_color", Color(0.95, 0.75, 0.3))
+			row.add_child(review)
 		var delete_button := Button.new()
 		delete_button.text = "🗑"
 		delete_button.flat = true
@@ -1439,7 +1458,10 @@ func _open_delete_chooser(look_id: String, use: Dictionary) -> void:
 	box.add_theme_constant_override("separation", 6)
 	delete_panel.add_child(box)
 	var title := Label.new()
-	title.text = "This Look is used by %d assignment(s)." % int(use.get("count", 0))
+	# RS-06: enabled vs disabled references are distinguished.
+	var disabled_refs := int(use.get("total_count", use.get("count", 0))) - int(use.get("count", 0))
+	var scope_note := " (%d disabled reference(s) included)" % disabled_refs if disabled_refs > 0 else ""
+	title.text = "This Look is used by %d assignment(s)%s." % [int(use.get("total_count", use.get("count", 0))), scope_note]
 	title.add_theme_font_size_override("font_size", UiTokens.T_META)
 	box.add_child(title)
 	for target in use.get("targets", []):
@@ -1492,6 +1514,9 @@ func _apply_retire(look_id: String, mode: String, replacement: String) -> void:
 	if bool(result.get("ok", false)):
 		action_status.text = "✓ Deleted Look %s · %s %d target(s)" % [look_id, mode, int(result.get("rebound", 0)) + int(result.get("unassigned", 0))]
 		_close_delete_chooser()
+		# DR-08: a retired Look must not linger as live session authority.
+		if session != null and str((session.base as Dictionary).get("look_id", "")) == look_id and str(session.current_key) != "":
+			session.open_target(str(session.current_key), session.context, str(session.signature), str(session.role))
 		_refresh_library()
 		_refresh_selection_ui()
 		if session != null and str(session.current_key) != "":
@@ -1501,6 +1526,110 @@ func _apply_retire(look_id: String, mode: String, replacement: String) -> void:
 	else:
 		action_status.text = "✗ " + str(result.get("errors", []))
 	browser.rebuild()
+
+# ------------------------------------------------------- migration review (UI)
+# The queue, notes, repair and approval all run through the production review
+# authority; the shell only selects, displays and refreshes.
+
+func migration_review_ids() -> Array:
+	if production == null:
+		return []
+	return production.list_migration_review_look_ids()
+
+func migration_review_select(look_id: String) -> Dictionary:
+	if production == null:
+		return {"ok": false, "errors": ["no production"]}
+	var review: Dictionary = production.load_migration_review(look_id)
+	if bool(review.get("ok", false)):
+		_open_migration_review_panel(look_id, review.get("notes", []))
+		review_look_id = look_id
+	return review
+
+func migration_review_approve(ack: String) -> Dictionary:
+	if production == null or review_look_id == "":
+		return {"ok": false, "errors": ["no review selected"]}
+	var result: Dictionary = production.approve_migration_review(review_look_id, ack)
+	if bool(result.get("ok", false)):
+		action_status.text = "✓ Approved Look %s · PRODUCTION rev%d" % [review_look_id, int(result.get("look_revision", 0))]
+		_close_migration_review_panel()
+		_refresh_library()
+		_refresh_selection_ui()
+		if session != null and str(session.current_key) != "":
+			_render_current_look()
+			if status_badge != null:
+				status_badge.text = _status_badge_for(str(session.current_key))
+	else:
+		action_status.text = "✗ " + str(result.get("errors", []))
+	return result
+
+func migration_review_repair_current() -> Dictionary:
+	# Persist the currently edited session look back as a REVIEW repair.
+	if production == null or review_look_id == "":
+		return {"ok": false, "errors": ["no review selected"]}
+	if not _session_ready():
+		return {"ok": false, "errors": ["no editable session"]}
+	var repair := {"layers": {}}
+	for layer in (session.look as Dictionary).get("layers", []):
+		if layer is Dictionary:
+			(repair["layers"] as Dictionary)[str((layer as Dictionary).get("layer_id", ""))] = {
+				"fx": ((layer as Dictionary).get("fx", {}) as Dictionary).duplicate(true),
+				"mask": ((layer as Dictionary).get("mask", {}) as Dictionary).duplicate(true),
+			}
+	var result: Dictionary = production.save_migration_repair(review_look_id, repair)
+	if bool(result.get("ok", false)):
+		action_status.text = "✓ Repair saved for %s · still in review" % review_look_id
+		_refresh_library()
+	else:
+		action_status.text = "✗ " + str(result.get("errors", []))
+	return result
+
+func _open_migration_review_queue() -> void:
+	var queue := migration_review_ids()
+	if queue.is_empty():
+		action_status.text = "✓ No looks pending migration review"
+		return
+	migration_review_select(str(queue[0]))
+
+func _open_migration_review_panel(look_id: String, notes: Array) -> void:
+	_close_migration_review_panel()
+	review_panel = PanelContainer.new()
+	review_panel.custom_minimum_size = Vector2(560, 60)
+	review_panel.position = Vector2(maxf(20.0, size.x * 0.5 - 280.0), maxf(20.0, size.y * 0.5 - 160.0))
+	add_child(review_panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 6)
+	review_panel.add_child(box)
+	var title := Label.new()
+	title.text = "Migration review: %s (%d note(s))" % [look_id, notes.size()]
+	title.add_theme_font_size_override("font_size", UiTokens.T_META)
+	box.add_child(title)
+	for note in notes:
+		var line := Label.new()
+		line.text = "• " + str(note)
+		line.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+		line.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
+		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		box.add_child(line)
+	var ack_label := Label.new()
+	ack_label.text = "Acknowledgement (required to approve):"
+	ack_label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	box.add_child(ack_label)
+	review_ack_field = LineEdit.new()
+	review_ack_field.placeholder_text = "what did you verify?"
+	box.add_child(review_ack_field)
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 8)
+	box.add_child(actions)
+	actions.add_child(_styled_button("Save repair from editor", func() -> void: migration_review_repair_current()))
+	actions.add_child(_styled_button("Approve", func() -> void: migration_review_approve(review_ack_field.text if review_ack_field != null else "")))
+	actions.add_child(_styled_button("Close", _close_migration_review_panel))
+
+func _close_migration_review_panel() -> void:
+	review_look_id = ""
+	review_ack_field = null
+	if review_panel != null and is_instance_valid(review_panel):
+		review_panel.queue_free()
+	review_panel = null
 
 func _action_save_draft() -> void:
 	if not _session_ready():
@@ -1530,6 +1659,8 @@ func _action_toggle_styling() -> void:
 	var result: Dictionary = session.set_styling(not session.styling_enabled)
 	if bool(result.get("ok", false)):
 		action_status.text = "✓ Styling " + ("ON" if session.styling_enabled else "OFF")
+		for warning in result.get("warnings", []):
+			action_status.text += " · ⚠ " + str(warning)
 		_render_current_look()
 		browser.rebuild()
 	else:
@@ -1571,6 +1702,19 @@ func _refresh_why_actions() -> void:
 		return
 	if session.mode == "SHARED_PROTECTED" or not session.is_editable():
 		return
+	# RS-02: the WINNER gets a disable action too (letting fallback win is the
+	# meaningful choice), and every matching DISABLED binding gets an enable
+	# recovery on the same surface.
+	for entry in session.resolution.get("chain", []):
+		if not bool((entry as Dictionary).get("winner", false)):
+			continue
+		var disable_winner := Button.new()
+		disable_winner.text = "DISABLE " + str((entry as Dictionary).get("binding_id", ""))
+		disable_winner.flat = true
+		disable_winner.tooltip_text = "Advanced: disable the winning binding so fallback rules win"
+		disable_winner.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+		disable_winner.pressed.connect(func() -> void: _action_disable_binding(str((entry as Dictionary)["binding_id"])))
+		why_actions.add_child(disable_winner)
 	for entry in session.resolution.get("chain", []):
 		if bool((entry as Dictionary).get("winner", false)):
 			continue
@@ -1581,11 +1725,32 @@ func _refresh_why_actions() -> void:
 		disable.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 		disable.pressed.connect(func() -> void: _action_disable_binding(str((entry as Dictionary)["binding_id"])))
 		why_actions.add_child(disable)
+	var assignments: Dictionary = session.production.load_assignments()
+	if bool(assignments.get("ok", false)):
+		for raw in (assignments["doc"] as Dictionary).get("bindings", []):
+			if raw is Dictionary and not bool((raw as Dictionary).get("enabled", true)):
+				if FxResolverScript.selector_matches((raw as Dictionary).get("selector", {}), session.context):
+					var enable := Button.new()
+					enable.text = "ENABLE " + str((raw as Dictionary).get("binding_id", "")) + " (" + str((raw as Dictionary).get("look_id", "")) + ")"
+					enable.flat = true
+					enable.tooltip_text = "Re-enable this binding"
+					enable.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+					enable.pressed.connect(func() -> void: _action_enable_binding(str((raw as Dictionary)["binding_id"])))
+					why_actions.add_child(enable)
 
 func _action_disable_binding(binding_id: String) -> void:
 	var result: Dictionary = session.disable_binding(binding_id)
 	if bool(result.get("ok", false)):
 		action_status.text = "✓ Disabled " + binding_id + " — fallback active"
+		browser.rebuild()
+	else:
+		action_status.text = "✗ " + str(result.get("errors", []))
+	_refresh_selection_ui()
+
+func _action_enable_binding(binding_id: String) -> void:
+	var result: Dictionary = session.enable_binding(binding_id)
+	if bool(result.get("ok", false)):
+		action_status.text = "✓ Enabled " + binding_id
 		browser.rebuild()
 	else:
 		action_status.text = "✗ " + str(result.get("errors", []))
@@ -1601,6 +1766,10 @@ func _sync_actions() -> void:
 	action_why.disabled = not has
 	action_styling.text = ("Active in Game: " + ("ON" if session.styling_enabled else "OFF")) if has else "Active in Game"
 	action_apply.text = "Update Target Style" if (has and str(session.base.get("kind", "")) == "production") else "Apply to Target"
+	# RS-07: the commit scope is part of the action label, not hidden.
+	if has:
+		action_apply.text += " · " + session.assignment_scope_text()
+		action_apply.tooltip_text = "Commits to assignment scope: " + session.assignment_scope_text()
 	action_unique.visible = has and str(session.mode) == "SHARED_PROTECTED"
 	action_edit_shared.visible = has and str(session.mode) == "SHARED_PROTECTED"
 	if undo_button != null:
@@ -2361,8 +2530,14 @@ func _process(_delta: float) -> void:
 	if _stash_pending and session != null and session.dirty:
 		var now := Time.get_ticks_msec() / 1000.0
 		if now >= _stash_at:
-			_stash_pending = false
-			session.stash()
+			# DR-07: a failed debounced stash stays pending for retry and is
+			# surfaced — it must never be silently dropped.
+			var stash_result: Dictionary = session.stash()
+			if bool(stash_result.get("ok", false)):
+				_stash_pending = false
+			else:
+				_stash_at = now + 2.0
+				action_status.text = "✗ Draft stash failed — retrying: " + str(stash_result.get("errors", []))
 			if status_badge != null and _session_ready():
 				status_badge.text = session.badge_text()
 
@@ -2385,7 +2560,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST and session != null and session.dirty:
-		session.stash()
+		var close_stash: Dictionary = session.stash()
+		if not bool(close_stash.get("ok", false)) and action_status != null:
+			action_status.text = "✗ Draft stash failed on close: " + str(close_stash.get("errors", []))
 
 func _compute_event_marks() -> Dictionary:
 	var out := {}
