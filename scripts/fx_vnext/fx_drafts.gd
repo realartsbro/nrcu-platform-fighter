@@ -46,13 +46,34 @@ func shared_path(look_id: String, base_revision: int) -> String:
 # ---------------------------------------------------------------- io
 
 func _write_record(path: String, record: Dictionary) -> bool:
+	# DR-02: temp + verify + atomic replace — an interrupted write must never
+	# leave a truncated final file behind.
 	ensure_dirs()
-	var file := FileAccess.open(path, FileAccess.WRITE)
+	var text := JSON.stringify(record, "  ", true)
+	var tmp := path + ".tmp"
+	var file := FileAccess.open(tmp, FileAccess.WRITE)
 	if file == null:
 		return false
-	file.store_string(JSON.stringify(record, "  ", true))
+	file.store_string(text)
 	file.close()
-	return true
+	if not FileAccess.file_exists(tmp):
+		return false
+	var check := FileAccess.open(tmp, FileAccess.READ)
+	if check == null:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp))
+		return false
+	var back := check.get_as_text()
+	check.close()
+	if JSON.parse_string(back) == null:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp))
+		return false
+	var abs_final := ProjectSettings.globalize_path(path)
+	var abs_tmp := ProjectSettings.globalize_path(tmp)
+	var err := DirAccess.rename_absolute(abs_tmp, abs_final)
+	if err != OK:
+		DirAccess.remove_absolute(abs_tmp)
+		return false
+	return FileAccess.file_exists(path)
 
 func _read_record(path: String) -> Dictionary:
 	if not FileAccess.file_exists(path):
@@ -71,7 +92,31 @@ func _read_record(path: String) -> Dictionary:
 	# Drafts may temporarily reference incomplete states (specs/09 §6), so only
 	# structural sanity is enforced here — full semantic validation belongs to
 	# Apply/Update, never to Draft persistence.
-	return {"ok": true, "missing": false, "record": record, "errors": []}
+	var struct_errors := check_structure(record["look"])
+	return {"ok": true, "missing": false, "record": record, "errors": [], "struct_ok": struct_errors.is_empty(), "struct_errors": struct_errors}
+
+static func check_structure(look) -> Array:
+	# DR-01: syntactically valid JSON is not enough — the shell performs typed
+	# access on nested draft content, so the nested shape is verified here.
+	var errors: Array = []
+	if not (look is Dictionary):
+		return ["draft look is not an object"]
+	var layers = (look as Dictionary).get("layers", null)
+	if not (layers is Array):
+		return ["draft look.layers is not an array"]
+	for raw in layers:
+		if not (raw is Dictionary):
+			errors.append("draft layer is not an object")
+			continue
+		var layer: Dictionary = raw
+		if str(layer.get("layer_id", "")) == "":
+			errors.append("draft layer has no layer_id")
+		if str(layer.get("type", "")) == "":
+			errors.append("draft layer has no type")
+		for block in ["transform", "displacement", "mask", "fx", "motion"]:
+			if layer.has(block) and not ((layer as Dictionary)[block] is Dictionary):
+				errors.append("draft layer.%s is not an object" % block)
+	return errors
 
 # ---------------------------------------------------------------- target drafts
 

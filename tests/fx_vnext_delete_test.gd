@@ -86,7 +86,7 @@ func _init() -> void:
 func _make_look(look_id: String, name: String) -> Dictionary:
 	var look: Dictionary = FxLookScript.new_look(look_id, name)
 	var fx: Dictionary = FxLookScript.new_layer("FX", "Echo rgb")
-	fx["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift": 10.0}
+	fx["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": 10.0}
 	look["layers"].append(fx)
 	return look
 
