@@ -584,6 +584,12 @@ static func _validate_motion(motion, layer_id: String) -> Array:
 		if not (enabled.get(key, false) is bool):
 			errors.append("motion.enabled.%s: expected bool (layer %s)" % [key, layer_id])
 		var track: Dictionary = tracks.get(key, {}) if tracks.get(key, {}) is Dictionary else {}
+		# Researcher B: only manual / fixed / authority-known events author.
+		# An unknown name (e.g. a clash_impct typo) must fail closed here,
+		# never silently behave like fixed anchor_time in production.
+		var anchor := str(track.get("anchor", "manual"))
+		if anchor != "manual" and anchor != "fixed" and not (anchor in FxScreenRuntime.CANONICAL_EVENTS):
+			errors.append("motion.%s.anchor: unknown event '%s' (layer %s)" % [key, anchor, layer_id])
 		for numeric in ["anchor_time", "delay", "attack", "hold", "release", "sustain"]:
 			if not _finite_number(track.get(numeric, null)):
 				errors.append("motion.%s.%s: non-finite (layer %s)" % [key, numeric, layer_id])

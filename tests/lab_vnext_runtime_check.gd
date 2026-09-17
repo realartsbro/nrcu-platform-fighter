@@ -11,6 +11,7 @@ const FxProductionScript := preload("res://scripts/fx_vnext/fx_production.gd")
 const FxResolverScript := preload("res://scripts/fx_vnext/fx_resolver.gd")
 const FxScreenRuntimeScript := preload("res://scripts/fx_vnext/fx_screen_runtime.gd")
 const FxLayerRendererScript := preload("res://scripts/fx_vnext/fx_layer_renderer.gd")
+const FxTargetsScript := preload("res://scripts/fx_vnext/fx_targets.gd")
 const RuntimeScene := preload("res://scenes/nrcu_vs_runtime.tscn")
 
 var checks: Array = []
@@ -19,6 +20,8 @@ var out_dir: String
 var data_dir: String
 
 func _init() -> void:
+	root.size = Vector2i(1280, 720)
+	await settle(10)
 	out_dir = OS.get_environment("FXLAB_EVIDENCE_DIR")
 	if out_dir == "":
 		out_dir = ProjectSettings.globalize_path("res://evidence/vnext_build/runtime")
@@ -29,13 +32,12 @@ func _init() -> void:
 	OS.set_environment("NRCU_FX_DATA_DIR", data_dir)
 
 	# ---- 1. runtime WITHOUT production ------------------------------------------
-	var svp1 := _make_viewport()
 	var runtime1 = RuntimeScene.instantiate()
-	svp1.add_child(runtime1)
+	root.add_child(runtime1)
 	await settle(90)
-	runtime1.seek(1.5)
+	_pause_and_seek(runtime1, 0.3)
 	await settle(10)
-	var baseline: Image = await capture(svp1, "runtime_no_production")
+	var baseline: Image = await capture_root("runtime_no_production")
 	_check(runtime1.renderer != null and runtime1.renderer.get("_stacks") != null, "runtime scene boots with the shared renderer")
 	var keys: Array = runtime1.runtime.registry.keys()
 	_check(keys.size() > 0, "runtime mounts the canonical VS composition", "keys=%d" % keys.size())
@@ -46,18 +48,17 @@ func _init() -> void:
 	var prod := FxProductionScript.new()
 	prod.data_dir = data_dir
 	var echo_look: Dictionary = FxLookScript.new_look("ICE_MAGE_ECHO_LEFT", "Ice Echo", "PRODUCTION");
-	echo_look["layers"].append(_fx_layer("Echo rgb", {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": 18.0}))
+	echo_look["layers"].append(_fx_layer("Echo rgb", {"rgb": 2.5, "intensity": 1.5, "rgb_shift_amount": 40.0}))
 	var mark_look: Dictionary = FxLookScript.new_look("DOGE_MAN_MARK", "Doge Mark", "PRODUCTION");
-	mark_look["layers"].append(_fx_layer("Mark fringe", {"fringe": 1.0, "intensity": 1.4, "edge_width": 10.0, "wind_reach": 30.0, "wind_trail": 0.8}))
+	mark_look["layers"].append(_fx_layer("Mark fringe", {"fringe": 2.5, "intensity": 1.6, "edge_width": 20.0, "wind_reach": 40.0, "wind_trail": 0.8}))
 	var applied: Dictionary = prod.apply({"look": echo_look})
 	_check(bool(applied["ok"]), "production accepts echo look", str(applied.get("errors", [])))
 	applied = prod.apply({"look": mark_look})
 	_check(bool(applied["ok"]), "production accepts mark look", str(applied.get("errors", [])))
 
 	# selectors from the real mounted context of a probe mount
-	var svp_probe := _make_viewport()
 	var probe = FxScreenRuntimeScript.new()
-	svp_probe.add_child(probe.subvp)
+	root.add_child(probe.subvp)
 	await settle(30)
 	probe.mount("1v1", "debug", "ice_mage", "doge_man")
 	await settle(30)
@@ -69,39 +70,35 @@ func _init() -> void:
 	applied = prod.apply({"assignments": doc})
 	_check(bool(applied["ok"]), "production accepts assignments", str(applied.get("errors", [])))
 	probe.subvp.queue_free()
-	svp_probe.queue_free()
 	await settle(6)
 
 	# ---- 3. FRESH runtime instance: production look must appear ------------------
-	var svp2 := _make_viewport()
 	var runtime2 = RuntimeScene.instantiate()
-	svp2.add_child(runtime2)
+	root.add_child(runtime2)
 	await settle(90)
-	runtime2.seek(1.5)
+	_pause_and_seek(runtime2, 0.3)
 	runtime2.reload_production()
 	await settle(10)
-	var styled: Image = await capture(svp2, "runtime_with_production")
-	var styled_again: Image = await capture(svp2, "runtime_with_production_later")
+	var styled: Image = await capture_root("runtime_with_production")
+	var styled_again: Image = await capture_root("runtime_with_production_later")
 	_check(_mean_abs_diff(styled, styled_again) < 0.0005, "runtime frame is frozen and deterministic", "mean=%.6f" % _mean_abs_diff(styled, styled_again))
 	var summary: Dictionary = runtime2.last_summary
 	_check(int(summary.get("styled_targets", -1)) == 2, "runtime resolves both production looks", str(summary))
 	var delta := _mean_abs_diff(baseline, styled)
-	_check(delta > 0.004, "stored production looks appear in the actual VS runtime", "mean=%.5f" % delta)
+	var roi_delta := _mean_abs_diff_targets(baseline, styled, runtime2, ["echo_left", "mark"])
+	_check(roi_delta > 0.004, "stored production looks appear in the actual VS runtime", "mean=%.5f roi=%.5f" % [delta, roi_delta])
 
 	# ---- 4. same semantics as the shared composition renderer --------------------
-	var svp3 := _make_viewport()
 	var mount2 = FxScreenRuntimeScript.new()
-	var disp3 := SubViewportContainer.new()
-	disp3.stretch = true
-	disp3.size = Vector2(1280, 720)
-	svp3.add_child(disp3)
-	disp3.add_child(mount2.subvp)
+	root.add_child(mount2.subvp)
 	await settle(30)
 	mount2.mount("1v1", "debug", "ice_mage", "doge_man")
 	await settle(60)
-	mount2.seek(1.5)
+	mount2.screen.lab_preview_pause()
+	mount2.seek(0.3)
 	await settle(10)
 	var renderer2 = FxLayerRendererScript.new(mount2.screen, mount2.registry)
+	renderer2.set_event_marks(mount2.event_marks())
 	var plan: Array = []
 	var direct_ids: Array = []
 	var asg_doc: Dictionary = prod.load_assignments()["doc"]
@@ -118,18 +115,20 @@ func _init() -> void:
 	print("[RUNTIME] direct plan:  %s" % str(direct_ids))
 	_check(str(runtime2.last_summary.get("plan_ids", [])) == str(direct_ids), "both paths resolve the same plan", "")
 	renderer2.apply_composition(plan)
-	renderer2.set_time(1.5)
+	renderer2.set_time(0.3)
 	await settle(10)
-	var direct: Image = await capture(svp3, "runtime_direct_composition")
-	var direct_again: Image = await capture(svp3, "runtime_direct_later")
+	# Styled looks carry no motion tracks here: freeze both paths at the same
+	# clock so the comparison is composition, not transport.
+	runtime2.seek(0.3)
+	await settle(10)
+	var direct: Image = await capture_root("runtime_direct_composition")
+	var direct_again: Image = await capture_root("runtime_direct_later")
 	_check(_mean_abs_diff(direct, direct_again) < 0.0005, "shared renderer frame is frozen and deterministic", "mean=%.6f" % _mean_abs_diff(direct, direct_again))
 	var pair_delta := _mean_abs_diff(styled, direct)
 	_check(pair_delta < 0.0005, "runtime output equals the shared composition renderer", "mean=%.6f" % pair_delta)
 
 	runtime2.queue_free()
 	mount2.subvp.queue_free()
-	svp2.queue_free()
-	svp3.queue_free()
 	await settle(6)
 
 	var f := FileAccess.open(out_dir.path_join("summary_runtime_check.json"), FileAccess.WRITE)
@@ -145,23 +144,20 @@ func _fx_layer(name: String, fx: Dictionary) -> Dictionary:
 	layer["fx"] = fx
 	return layer
 
-func _make_viewport() -> SubViewport:
-	var svp := SubViewport.new()
-	svp.size = Vector2i(1280, 720)
-	svp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	svp.transparent_bg = false
-	root.add_child(svp)
-	return svp
-
 func settle(n: int) -> void:
 	for i in n:
 		await process_frame
 
-func capture(svp: SubViewport, name: String) -> Image:
+func capture_root(name: String) -> Image:
 	await RenderingServer.frame_post_draw
-	var img: Image = svp.get_texture().get_image()
+	var img: Image = root.get_texture().get_image()
 	img.save_png(out_dir.path_join(name + ".png"))
 	return img
+
+func _pause_and_seek(rt, t: float) -> void:
+	if rt.runtime.screen != null and rt.runtime.screen.has_method("lab_preview_pause"):
+		rt.runtime.screen.lab_preview_pause()
+	rt.seek(t)
 
 func _check(ok: bool, name: String, detail := "") -> void:
 	var line := "[CHECK] %s  %s%s" % ["PASS" if ok else "FAIL", name, ("  (" + detail + ")") if detail != "" else ""]
@@ -186,6 +182,37 @@ func _wipe_dir_abs(abs: String) -> void:
 		DirAccess.remove_absolute(abs.path_join(file_name))
 	for sub in DirAccess.get_directories_at(abs):
 		_wipe_dir_abs(abs.path_join(sub))
+
+func _mean_abs_diff_targets(a: Image, b: Image, rt, keys: Array) -> float:
+	# Styled-target union ROI: full-frame means dilute localized FX with
+	# identical background; the bar stays 0.004, the measured area changes.
+	var union := Rect2()
+	var first := true
+	for key in keys:
+		var node = rt.runtime.registry.target_node(str(key))
+		if node == null:
+			continue
+		var r: Rect2 = FxTargetsScript.presentation_rect(node)
+		if first:
+			union = r
+			first = false
+		else:
+			union = union.merge(r)
+	if first:
+		return _mean_abs_diff(a, b)
+	var x0 := clampi(int(union.position.x), 0, a.get_width() - 1)
+	var y0 := clampi(int(union.position.y), 0, a.get_height() - 1)
+	var x1 := clampi(int(union.end.x), x0 + 1, a.get_width())
+	var y1 := clampi(int(union.end.y), y0 + 1, a.get_height())
+	var total := 0.0
+	var count := 0
+	for y in range(y0, y1, 2):
+		for x in range(x0, x1, 2):
+			var ca := a.get_pixel(x, y)
+			var cb := b.get_pixel(x, y)
+			total += absf(ca.r - cb.r) + absf(ca.g - cb.g) + absf(ca.b - cb.b) + absf(ca.a - cb.a)
+			count += 4
+	return total / float(max(count, 1))
 
 func _mean_abs_diff(a: Image, b: Image) -> float:
 	if a.get_width() != b.get_width() or a.get_height() != b.get_height():

@@ -2727,10 +2727,17 @@ func _build_motion_page(tab_pages: Dictionary, layer: Dictionary, layer_id: Stri
 	var enabled: Dictionary = (motion as Dictionary).get("enabled", {})
 	var tracks: Dictionary = (motion as Dictionary).get("tracks", {})
 	var curves := ["linear", "cubic_in", "cubic_out", "sine_in_out", "back_out"]
-	# Anchor presets: manual (triggered live) or arming at a known flow event.
-	# Event anchors fire at the presentation's deterministic event time plus
-	# anchor_time; unknown names fall back to fixed anchor_time (documented).
-	var anchors := ["manual", "fixed", "vs_enter", "stage_reveal", "fighter_reveal", "clash_impact", "hold_enter"]
+	# Anchor presets come from the event authority (manual/fixed plus the
+	# deterministic entry/hold anchors), never from a parallel hardcoded
+	# table. Unknown names are INVALID: the envelope never fires and
+	# production validation rejects them (typo footgun closed).
+	var anchors: Array = ["manual", "fixed"]
+	if runtime != null and runtime.has_method("event_marks"):
+		for ev in (runtime.event_marks() as Dictionary).keys():
+			if str(ev) not in anchors:
+				anchors.append(str(ev))
+	else:
+		anchors = ["manual", "fixed", "vs_enter", "stage_reveal", "fighter_reveal", "clash_impact", "hold_enter"]
 	for domain in ["dither", "fringe", "flow", "rgb"]:
 		var on := bool(enabled.get(str(domain), false))
 		var dhead := HBoxContainer.new()
@@ -2784,7 +2791,7 @@ func _build_motion_page(tab_pages: Dictionary, layer: Dictionary, layer_id: Stri
 		page.add_child(_motion_row("Release curve", _motion_curve_option(layer_id, str(domain), "release_curve", str(track.get("release_curve", "sine_in_out")), curves, protected), on and not protected))
 		if str(track.get("anchor", "manual")) not in anchors and str(track.get("anchor", "manual")) != "":
 			var custom := Label.new()
-			custom.text = "Custom event anchor %s — fires at its presentation event time (+ anchor_time); unknown names hold anchor_time." % str(track.get("anchor", ""))
+			custom.text = "Anchor '%s' is not part of the event authority — the envelope never fires and production rejects it. Pick manual, fixed, or a known event." % str(track.get("anchor", ""))
 			custom.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 			custom.add_theme_color_override("font_color", UiTokens.DISABLED)
 			custom.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -2843,7 +2850,7 @@ func _motion_anchor_option(layer_id: String, domain: String, current: String, an
 		copt.add_item(str(item))
 	copt.selected = maxi(0, items.find(current))
 	copt.disabled = protected
-	copt.tooltip_text = "manual = live TRIGGER; events fire at presentation event time + anchor_time"
+	copt.tooltip_text = "manual = live TRIGGER; fixed = anchor_time; known events fire at mark + offset; unknown names never fire"
 	copt.item_selected.connect(func(selected: int) -> void: _edit_layer(layer_id, func(doc):
 		_motion_track(doc, layer_id, domain)["anchor"] = str(items[selected])
 	, true))

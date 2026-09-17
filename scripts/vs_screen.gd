@@ -350,8 +350,8 @@ func lab_preview_seek(seconds: float) -> bool:
 	if _state == STATE_IDLE:
 		return false
 	# Preview resurrection: a DONE screen (exit finished, no teardown under
-	# fx_preview_no_teardown) must still scrub — reset to ENTRY and let the
-	# phase reconstruction below pick the frame matching t (TM-05).
+	# fx_preview_no_teardown) must still scrub — the phase reconstruction
+	# below picks the frame matching t (TM-05).
 	var t := maxf(seconds, 0.0)
 	visible = true
 	_match_ready = false
@@ -386,8 +386,10 @@ func lab_preview_seek(seconds: float) -> bool:
 		_step_exit()
 	elif t >= hold_start_time():
 		_state = STATE_HOLD
+		_restore_root_opaque()
 	else:
 		_state = STATE_ENTRY
+		_restore_root_opaque()
 	# TM-06: a seek reconstructs the frame for t but never changes the
 	# user's play/pause choice — editing or scrubbing during playback must
 	# not park the preview behind the user's back.
@@ -1212,6 +1214,13 @@ func emitted_events() -> Array:
 	var names: Array = _emitted_events.keys()
 	names.sort()
 	return names
+
+func _restore_root_opaque() -> void:
+	# The EXIT fade drives Root modulate to 0; scrubbing back to ENTRY/HOLD
+	# must un-fade or the resurrected composition stays invisible forever.
+	var root := get_node_or_null(P_ROOT) as Control
+	if root != null:
+		root.modulate.a = 1.0
 
 func _enter_hold() -> void:
 	_state = STATE_HOLD

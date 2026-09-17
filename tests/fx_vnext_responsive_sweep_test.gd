@@ -142,7 +142,8 @@ func _assert_tab(tab_name: String, size: Vector2i) -> void:
 	_check(bad_w == 0, "UI-Resp %s inside inspector viewport (left+right)" % tag, "bad=%d/%d" % [bad_w, n])
 	_check(bad_h == 0, "UI-Resp %s sane click heights" % tag, "bad=%d/%d" % [bad_h, n])
 	_check(_no_sibling_overlap(page), "UI-Resp %s no label/control overlap" % tag)
-	_check(_scroll_reaches_ends(), "UI-Resp %s scroll reaches first+last control" % tag)
+	var scroll_ok := await _scroll_reaches_ends(page)
+	_check(scroll_ok, "UI-Resp %s scroll reaches first+last control" % tag)
 
 func _inspector_view_rect() -> Rect2:
 	var node: Node = shell.inspector_content
@@ -170,7 +171,7 @@ func _no_sibling_overlap(page: Control) -> bool:
 						return false
 	return true
 
-func _scroll_reaches_ends() -> bool:
+func _scroll_reaches_ends(page: Control) -> bool:
 	var node: Node = shell.inspector_content
 	var scroll: ScrollContainer = null
 	while node != null:
@@ -181,19 +182,59 @@ func _scroll_reaches_ends() -> bool:
 	if scroll == null:
 		return false
 	var bar := scroll.get_v_scroll_bar()
-	bar.value = bar.max_value
+	# The ScrollContainer owns scrolling (scroll_vertical); its scrollbar is
+	# a slave that clamps direct writes — drive the container itself.
+	var probe = _first_control(shell.inspector_content)
+	var r0: Rect2 = (probe as Control).get_global_rect() if probe != null else Rect2()
+	scroll.scroll_vertical = int(bar.max_value)
 	await process_frame
 	await process_frame
+	await process_frame
+	await process_frame
+	var r1: Rect2 = (probe as Control).get_global_rect() if probe != null else Rect2()
 	var view: Rect2 = scroll.get_global_rect()
+	# The LAST control of the active page must be bringable into view.
+	var last = _last_control(page)
 	var last_ok := false
-	for child in _walk(shell.inspector_content):
-		if child is Control and not (child is Label) and not (child is Container) and (child as Control).is_visible_in_tree():
-			if view.intersects((child as Control).get_global_rect()):
-				last_ok = true
+	var detail := "no-last"
+	if last != null:
+		# User-facing capability: the container can bring any control into
+		# view (a footer below the tabs makes raw max-scroll overshoot the
+		# page end, so max-scroll alone proves nothing either way).
+		scroll.ensure_control_visible(last as Control)
+		await process_frame
+		await process_frame
+		await process_frame
+		await process_frame
+		var lr: Rect2 = (last as Control).get_global_rect()
+		detail = str(lr)
+		last_ok = view.intersects(lr)
+	if not last_ok:
+		print("SCROLLMISS view=%s last=%s page=%s" % [str(view), detail, str(page.get_path())])
 	bar.value = bar.min_value
+	scroll.scroll_vertical = 0
 	await process_frame
 	await process_frame
 	return last_ok
+
+func _first_control(node: Node):
+	for child in _walk(node):
+		if child is Control and not (child is Label) and not (child is Container) and (child as Control).is_visible_in_tree():
+			return child
+	return null
+
+func _last_control(node: Node):
+	# Visual bottom, not walk order: internal sub-controls (spinbox line
+	# edits, option internals) come last in tree order but sit mid-page.
+	var found = null
+	var best := -1.0
+	for child in _walk(node):
+		if child is Control and not (child is Label) and not (child is Container) and (child as Control).is_visible_in_tree():
+			var end_y := (child as Control).get_global_rect().end.y
+			if end_y > best:
+				best = end_y
+				found = child
+	return found
 
 func _shot(tab_name: String, size: Vector2i) -> void:
 	await process_frame

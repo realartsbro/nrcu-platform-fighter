@@ -68,7 +68,6 @@ func _seed_production() -> void:
 
 func _prove_1v1() -> void:
 	root.size = Vector2i(1280, 720)
-	RenderingServer.set_default_clear_color(Color(0.6, 0.05, 0.05))
 	await settle(10)
 	var rt = RuntimeScene.instantiate()
 	root.add_child(rt)
@@ -106,7 +105,6 @@ func _prove_1v1() -> void:
 	await settle(10)
 	var pre: Image = await capture_runtime(rt, "parity_1v1_pre")
 	var fringe_pre := _stack_fringe(rt)
-	_print_stage(rt, "pre")
 	# Lifetime: seeks past minimum_exposure must never self-teardown the
 	# preview-owned composition (regression for the freed-slot failure).
 	_check(is_instance_valid(rt.runtime.screen), "P0 preview screen survives post-exposure seeks")
@@ -156,21 +154,6 @@ func _prove_mp_marks() -> void:
 	OS.set_environment("NRCU_VS_FORMAT", "1v1")
 	await settle(6)
 
-func _print_stage(rt, tag: String) -> void:
-	var scr = rt.runtime.screen
-	var cov = scr.get_node_or_null("Root/TransitionCover/CoverLeft")
-	var stacks: Dictionary = rt.renderer.get("_stacks")
-	var qinfo := ""
-	for key in stacks.keys():
-		for quad_entry in (stacks[key] as Dictionary).get("quads", []):
-			var quad = (quad_entry as Dictionary).get("node")
-			if quad is Control:
-				qinfo += "%s:vis=%s mod=%s rect=%s " % [str(key), str((quad as Control).visible), str((quad as Control).modulate), str((quad as Control).get_global_rect())]
-				break
-		break
-	var subvp = rt.runtime.subvp
-	print("P0STAGE %s scrvis=%s rtsize=%s subvp=%s upd=%s screenparent=%s elapsed=%s covera=%s last_t=%s %s" % [tag, str(scr.visible), str((rt as Control).size), str(subvp.size), str(subvp.render_target_update_mode), str(scr.get_parent().name) if is_instance_valid(scr) else "dead", str(scr.get("_elapsed")), str((cov as Polygon2D).color.a) if cov != null else "?", str(rt.renderer.get("_last_time")), qinfo])
-
 func _stack_fringe(rt) -> float:
 	var best := -1.0
 	var stacks: Dictionary = rt.renderer.get("_stacks")
@@ -184,9 +167,6 @@ func _stack_fringe(rt) -> float:
 func settle(n: int) -> void:
 	for i in n:
 		await process_frame
-
-func capture(_svp: SubViewport, name: String) -> Image:
-	return await capture_root(name)
 
 # The reference runtime's own viewport is the consumption surface. Capturing
 # an outer harness viewport through nested SubViewportContainers proved

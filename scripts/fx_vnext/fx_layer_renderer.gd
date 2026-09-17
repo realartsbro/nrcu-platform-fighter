@@ -709,14 +709,19 @@ func _motion_multiplier(motion, domain: String) -> float:
 		return 1.0
 	var tracks: Dictionary = m.get("tracks", {}) if m.get("tracks") is Dictionary else {}
 	var track: Dictionary = tracks.get(domain, {}) if tracks.get(domain, {}) is Dictionary else {}
-	# TM-04: "manual" anchors run from an explicit trigger epoch, not from a
-	# static anchor_time — firing the trigger restarts the envelope.
+	# Researcher B: no unknown -> fixed footgun. manual runs from a trigger
+	# epoch, fixed means anchor_time, known events mean mark + offset, and
+	# anything else is INVALID and never fires (typos must not silently work).
 	var anchor := str(track.get("anchor", "manual"))
 	var start := float(track.get("anchor_time", 0.0))
 	if anchor == "manual":
 		start = float(_manual_epochs.get(domain, 0.0))
+	elif anchor == "fixed":
+		pass
 	elif _event_marks.has(anchor):
 		start = float(_event_marks[anchor]) + float(track.get("anchor_time", 0.0))
+	else:
+		return 0.0
 	var elapsed: float = _last_time - start - float(track.get("delay", 0.0))
 	if elapsed < 0.0:
 		return 0.0

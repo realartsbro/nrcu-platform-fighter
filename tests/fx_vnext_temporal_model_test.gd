@@ -72,18 +72,30 @@ func _init() -> void:
 	await settle(2)
 	var e2 := _fx_rgb(renderer, "echo_left")
 	_check(e2 < 0.05, "TM-08 event anchor decays after release", "e2=%.3f" % e2)
-	# Unknown anchors fall back to fixed anchor_time (documented, historical).
+	# Researcher B: unknown anchors are INVALID and never fire (a clash_impct
+	# typo must not silently behave like fixed anchor_time).
 	(((layer["motion"] as Dictionary)["tracks"] as Dictionary)["rgb"] as Dictionary)["anchor"] = "some_future_event"
 	(((layer["motion"] as Dictionary)["tracks"] as Dictionary)["rgb"] as Dictionary)["anchor_time"] = 3.0
 	renderer.apply_composition([{"key": "echo_left", "look": doc}])
 	renderer.set_time(2.5)
 	await settle(2)
 	var f0 := _fx_rgb(renderer, "echo_left")
-	_check(f0 < 0.05, "TM-08 unknown anchor holds fixed anchor_time (before)", "f0=%.3f" % f0)
+	_check(f0 < 0.05, "TM-08 unknown anchor never fires (before)", "f0=%.3f" % f0)
 	renderer.set_time(3.5)
 	await settle(2)
 	var f1 := _fx_rgb(renderer, "echo_left")
-	_check(f1 > 0.2, "TM-08 unknown anchor holds fixed anchor_time (after)", "f1=%.3f" % f1)
+	_check(f1 < 0.05, "TM-08 unknown anchor never fires (after)", "f1=%.3f" % f1)
+	# Explicit fixed anchors still mean anchor_time.
+	(((layer["motion"] as Dictionary)["tracks"] as Dictionary)["rgb"] as Dictionary)["anchor"] = "fixed"
+	renderer.apply_composition([{"key": "echo_left", "look": doc}])
+	renderer.set_time(2.5)
+	await settle(2)
+	var g0 := _fx_rgb(renderer, "echo_left")
+	_check(g0 < 0.05, "TM-08 fixed anchor holds anchor_time (before)", "g0=%.3f" % g0)
+	renderer.set_time(3.5)
+	await settle(2)
+	var g1 := _fx_rgb(renderer, "echo_left")
+	_check(g1 > 0.2, "TM-08 fixed anchor holds anchor_time (after)", "g1=%.3f" % g1)
 
 	# ---- TM-07: persisted ranges agree with runtime clamps ------------------------------
 	var bad: Dictionary = FxLookScript.materialize(FxLookScript.new_look("TM_BAD", "Bad"))

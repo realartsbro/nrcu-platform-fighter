@@ -1,7 +1,14 @@
 extends Control
 # NRCU FX Lab vNEXT — ACTUAL VS runtime scene (Round-2 Finding 1).
 #
-# This is the game-side consumption path: it mounts the canonical vs_screen,
+# Lifecycle label: PREVIEW / REFERENCE consumption path. This scene mounts
+# its screen with fx_preview_no_teardown, so seeks past minimum_exposure
+# freeze on deterministic frames instead of tearing the composition down.
+# It is NOT evidence for game MatchFlow teardown: the game path leaves the
+# flag unset and vs_screen frees itself on FINISHED (see _finish).
+# Use fx_vnext_preview_lifetime_test for the explicit contract split.
+#
+# This is the reference consumption path: it mounts the canonical vs_screen,
 # loads Production authority from disk (res://nrcu_fx_data or NRCU_FX_DATA_DIR),
 # resolves EVERY visible target through the SHARED resolver and renders the
 # whole composition through the SAME shared composition renderer as the Lab.
