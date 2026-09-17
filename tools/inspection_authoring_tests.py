@@ -2,8 +2,9 @@
 from pathlib import Path
 import re,sys
 ROOT=Path(__file__).resolve().parents[1]
-S=(ROOT/'project/scripts/nrcu_fx_lab_v2.gd').read_text()
-SH=(ROOT/'project/shaders/nrcu_fx_v2.gdshader').read_text()
+PROOT=ROOT/'project' if (ROOT/'project').is_dir() else ROOT
+S=(PROOT/'scripts/nrcu_fx_lab_v2.gd').read_text()
+SH=(PROOT/'shaders/nrcu_fx_v2.gdshader').read_text()
 checks=[]
 def c(n,x): checks.append((n,bool(x)))
 def body(name):

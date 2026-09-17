@@ -2,8 +2,9 @@
 from pathlib import Path
 import re, sys
 ROOT=Path(__file__).resolve().parents[1]
-LAB=(ROOT/'project/scripts/nrcu_fx_lab_v2.gd').read_text(encoding='utf-8')
-VS=(ROOT/'project/scripts/vs_screen.gd').read_text(encoding='utf-8')
+PROOT=ROOT/'project' if (ROOT/'project').is_dir() else ROOT
+LAB=(PROOT/'scripts/nrcu_fx_lab_v2.gd').read_text(encoding='utf-8')
+VS=(PROOT/'scripts/vs_screen.gd').read_text(encoding='utf-8')
 checks=[]
 def c(name, cond): checks.append((name,bool(cond)))
 

@@ -2,8 +2,9 @@
 from pathlib import Path
 import re,sys
 ROOT=Path(__file__).resolve().parents[1]
-S=(ROOT/'project/scripts/nrcu_fx_lab_v2.gd').read_text()
-SH=(ROOT/'project/shaders/nrcu_fx_v2.gdshader').read_text()
+PROOT=ROOT/'project' if (ROOT/'project').is_dir() else ROOT
+S=(PROOT/'scripts/nrcu_fx_lab_v2.gd').read_text()
+SH=(PROOT/'shaders/nrcu_fx_v2.gdshader').read_text()
 checks=[]
 def c(n,x):checks.append((n,bool(x)))
 def body(name):
@@ -11,7 +12,7 @@ def body(name):
  if not m:return ''
  st=m.end(); n=re.search(r'^func \w+\(',S[st:],re.M); return S[st:st+(n.start() if n else len(S)-st)]
 for side in ['left','right']:
- p=ROOT/f'project/assets/vs/generated/side_field_{side}_mask.png'
+ p=PROOT/f'assets/vs/generated/side_field_{side}_mask.png'
  c('generated side field '+side+' mask exists',p.exists() and p.stat().st_size>1000)
 c('SIDE FIELDS is a semantic target role','"SIDE FIELDS"' in re.search(r'const TARGET_ROLES := \[(.*?)\]',S,re.S).group(1))
 c('mount installs vector proxies','_install_vector_proxies()' in body('_mount_screen'))

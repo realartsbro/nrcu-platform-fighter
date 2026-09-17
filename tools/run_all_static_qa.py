@@ -3,7 +3,12 @@ from pathlib import Path
 import subprocess, re, json, sys
 ROOT=Path(__file__).resolve().parents[1]
 rows=[]; passed=0; total=0; failures=[]
+# Repo-owned runner harness self-tests are covered by repo CI, not the
+# vNEXT static QA gate (they need live engine plumbing).
+SKIP={"run_all_tests.py", "test_run_all_tests.py"}
 for p in sorted((ROOT/'tools').glob('*tests.py')):
+    if p.name in SKIP:
+        continue
     cp=subprocess.run([sys.executable,str(p)],cwd=ROOT,capture_output=True,text=True)
     m=re.search(r'(\d+)/(\d+) .*?PASS',cp.stdout)
     pa=to=0

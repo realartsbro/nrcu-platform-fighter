@@ -11,8 +11,9 @@ import json, math
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = ROOT / "project/assets/vs/schema"
-OUT = ROOT / "project/assets/vs/generated"
+PROOT=ROOT/'project' if (ROOT/'project').is_dir() else ROOT
+SCHEMA = PROOT / "assets/vs/schema"
+OUT = PROOT / "assets/vs/generated"
 SIZE = (1280, 720)
 PLATE_SHEAR = 0.2
 PLATE_RISE = 0.01

@@ -2,8 +2,9 @@
 from pathlib import Path
 import re,sys,json
 ROOT=Path(__file__).resolve().parents[1]
-S=(ROOT/'project/scripts/nrcu_fx_lab_v2.gd').read_text()
-SH=(ROOT/'project/shaders/nrcu_fx_v2.gdshader').read_text()
+PROOT=ROOT/'project' if (ROOT/'project').is_dir() else ROOT
+S=(PROOT/'scripts/nrcu_fx_lab_v2.gd').read_text()
+SH=(PROOT/'shaders/nrcu_fx_v2.gdshader').read_text()
 checks=[]
 def c(n,x): checks.append((n,bool(x)))
 def body(name):
@@ -12,11 +13,11 @@ def body(name):
  st=m.end(); n=re.search(r'^func \w+\(',S[st:],re.M); return S[st:st+(n.start() if n else len(S)-st)]
 # vector masks
 for fn in ['name_plate_left_mask.png','name_plate_right_mask.png','accent_left_mask.png','accent_right_mask.png','study_checker.png']:
- p=ROOT/'project/assets/vs/generated'/fn
+ p=PROOT/'assets/vs/generated'/fn
  c('generated '+fn,p.exists() and p.stat().st_size>500)
 for fam,count in [('ffa_3',3),('ffa_4',4),('team_2v2',4),('team_2v1',3),('team_3v1',4)]:
- c(f'{fam} plate masks complete',len(list((ROOT/'project/assets/vs/generated').glob(f'{fam}_plate_*_mask.png')))==count)
- c(f'{fam} accent masks complete',len(list((ROOT/'project/assets/vs/generated').glob(f'{fam}_accent_*_mask.png')))==count)
+ c(f'{fam} plate masks complete',len(list((PROOT/'assets/vs/generated').glob(f'{fam}_plate_*_mask.png')))==count)
+ c(f'{fam} accent masks complete',len(list((PROOT/'assets/vs/generated').glob(f'{fam}_accent_*_mask.png')))==count)
 # target registry
 roles=re.search(r'const TARGET_ROLES := \[(.*?)\]',S,re.S).group(1)
 for role in ['SIDE FIELDS','NAME PLATES','ACCENT LINES']:

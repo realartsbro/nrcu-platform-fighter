@@ -2,9 +2,10 @@
 from pathlib import Path
 import sys
 ROOT=Path(__file__).resolve().parents[1]
-T=(ROOT/'project/tests/lab_spatial_parity.gd').read_text(encoding='utf-8')
+PROOT=ROOT/'project' if (ROOT/'project').is_dir() else ROOT
+T=(PROOT/'tests/lab_spatial_parity.gd').read_text(encoding='utf-8')
 RUN=(ROOT/'RUN_SPATIAL_PARITY.bat').read_text(encoding='utf-8')
-A=(ROOT/'project/tests/lab_authoring_parity_acceptance.gd').read_text(encoding='utf-8')
+A=(PROOT/'tests/lab_authoring_parity_acceptance.gd').read_text(encoding='utf-8')
 ARUN=(ROOT/'RUN_AUTHORING_PARITY_ACCEPTANCE.bat').read_text(encoding='utf-8')
 checks=[]
 def check(n,c): checks.append((n,bool(c)))

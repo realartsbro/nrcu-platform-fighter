@@ -2,9 +2,10 @@
 from pathlib import Path
 import re, sys
 ROOT=Path(__file__).resolve().parents[1]
-SCRIPT=(ROOT/'project/scripts/nrcu_fx_lab_v2.gd').read_text()
-SHADER=(ROOT/'project/shaders/nrcu_fx_v2.gdshader').read_text()
-SCENE=(ROOT/'project/scenes/nrcu_fx_lab.tscn').read_text()
+PROOT=ROOT/'project' if (ROOT/'project').is_dir() else ROOT
+SCRIPT=(PROOT/'scripts/nrcu_fx_lab_v2.gd').read_text()
+SHADER=(PROOT/'shaders/nrcu_fx_v2.gdshader').read_text()
+SCENE=(PROOT/'scenes/nrcu_fx_lab.tscn').read_text()
 checks=[]
 def check(name, cond, detail=''):
     checks.append((name,bool(cond),detail))

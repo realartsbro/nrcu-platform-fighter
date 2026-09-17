@@ -2,7 +2,8 @@
 from pathlib import Path
 import re, sys
 p=Path(__file__).resolve().parents[1]
-s=(p/'project/scripts/nrcu_fx_lab_v2.gd').read_text()
+pp=p/'project' if (p/'project').is_dir() else p
+s=(pp/'scripts/nrcu_fx_lab_v2.gd').read_text()
 checks=[]
 def c(name,ok): checks.append((name,bool(ok)))
 def body(name):

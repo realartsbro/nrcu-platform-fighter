@@ -2,10 +2,11 @@
 from pathlib import Path
 import json,re,sys
 ROOT=Path(__file__).resolve().parents[1]
-SCRIPT=(ROOT/'project/scripts/nrcu_fx_lab_v2.gd').read_text(encoding='utf-8')
-REGISTRY=(ROOT/'project/scripts/vs_fx_style_registry.gd').read_text(encoding='utf-8')
-LOOKS=ROOT/'project/assets/vs/fx/fx_looks.json'
-ASSIGN=ROOT/'project/assets/vs/fx/fx_assignments.json'
+PROOT=ROOT/'project' if (ROOT/'project').is_dir() else ROOT
+SCRIPT=(PROOT/'scripts/nrcu_fx_lab_v2.gd').read_text(encoding='utf-8')
+REGISTRY=(PROOT/'scripts/vs_fx_style_registry.gd').read_text(encoding='utf-8')
+LOOKS=PROOT/'assets/vs/fx/fx_looks.json'
+ASSIGN=PROOT/'assets/vs/fx/fx_assignments.json'
 checks=[]
 def check(name,cond,detail=''):
     checks.append((name,bool(cond),detail))
