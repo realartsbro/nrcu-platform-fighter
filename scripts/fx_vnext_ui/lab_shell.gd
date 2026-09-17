@@ -1253,6 +1253,9 @@ func _render_current_look() -> void:
 		return
 	if renderer == null:
 		renderer = FxLayerRendererScript.new(runtime.screen, runtime.registry)
+	# UI-03 quality: the preview renderer owns the presentation's event marks
+	# so named anchors fire at deterministic flow times (manual = triggered).
+	renderer.set_event_marks(_compute_event_marks())
 	var built := _build_composition_plan()
 	var result: Dictionary = renderer.apply_composition(built["plan"])
 	# UI-04: fresh quads inherit COMPOSITE — re-assert the selected view so a
@@ -2445,38 +2448,33 @@ func _rebuild_inspector() -> void:
 		# fields (macros never replace the direct expert controls in ADVANCED).
 		var look_page: Control = _tab_page(tab_pages, "LOOK")
 		look_page.add_child(_fx_group_header("FRINGE"))
-		for spec in [["Fringe", "fringe", 0.0, 4.0, 0.05], ["Edge width", "edge_width", 0.0, 48.0, 0.5], ["Wind reach", "wind_reach", 0.0, 120.0, 1.0], ["Wind trail", "wind_trail", 0.0, 2.0, 0.05], ["Split", "split_separation", 0.0, 64.0, 0.5]]:
-			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), float(spec[2]), float(spec[3]), float(spec[4]), fx, layer_id, protected))
+		for spec in [["Fringe", "fringe"], ["Edge width", "edge_width"], ["Wind reach", "wind_reach"], ["Wind trail", "wind_trail"], ["Split", "split_separation"]]:
+			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), fx, layer_id, protected))
 		look_page.add_child(_fx_group_header("RGB"))
-		for spec in [["RGB", "rgb", 0.0, 4.0, 0.05], ["Shift px", "rgb_shift_amount", 0.0, 64.0, 0.5], ["Shift angle", "rgb_shift_angle", -180.0, 180.0, 1.0], ["Shift alpha", "rgb_shift_alpha", 0.0, 1.0, 0.05]]:
-			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), float(spec[2]), float(spec[3]), float(spec[4]), fx, layer_id, protected))
+		for spec in [["RGB", "rgb"], ["Shift px", "rgb_shift_amount"], ["Shift angle", "rgb_shift_angle"], ["Shift alpha", "rgb_shift_alpha"]]:
+			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), fx, layer_id, protected))
 		look_page.add_child(_fx_group_header("DITHER"))
 		# NOTE: dither_threshold has no control anywhere by contract (CT-10,
 		# LEGACY_DEAD_SURFACE): persisted + validated + passed through, but
 		# declaration-only in legacy AND vNEXT shaders — presenting it as
 		# editable would fake capability. See AUTHORING_INVENTORY.
-		for spec in [["Dither", "dither", 0.0, 4.0, 0.05], ["Pixel", "dither_pixel", 0.0, 16.0, 0.5], ["Levels", "dither_levels", 2.0, 16.0, 1.0], ["Mode", "dither_mode", 0.0, 2.0, 1.0]]:
-			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), float(spec[2]), float(spec[3]), float(spec[4]), fx, layer_id, protected))
+		for spec in [["Dither", "dither"], ["Pixel", "dither_pixel"], ["Levels", "dither_levels"]]:
+			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), fx, layer_id, protected))
 		look_page.add_child(_fx_group_header("FLOW"))
 		var flow_note := Label.new()
 		flow_note.text = "Flow drives the fringe field — needs Fringe > 0."
 		flow_note.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 		flow_note.add_theme_color_override("font_color", UiTokens.DISABLED)
 		look_page.add_child(flow_note)
-		for spec in [["Flow", "flow", 0.0, 4.0, 0.05], ["Strength", "flow_strength", 0.0, 8.0, 0.1]]:
-			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), float(spec[2]), float(spec[3]), float(spec[4]), fx, layer_id, protected))
+		for spec in [["Flow", "flow"], ["Strength", "flow_strength"]]:
+			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), fx, layer_id, protected))
 		look_page.add_child(_fx_group_header("GRADE"))
-		for spec in [["Grade amount", "base_grade_amount", 0.0, 1.0, 0.05], ["Brightness", "grade_brightness", -1.0, 1.0, 0.05], ["Contrast", "grade_contrast", 0.0, 3.0, 0.05], ["Saturation", "grade_saturation", 0.0, 3.0, 0.05], ["Gamma", "grade_gamma", 0.2, 4.0, 0.05]]:
-			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), float(spec[2]), float(spec[3]), float(spec[4]), fx, layer_id, protected))
+		for spec in [["Grade amount", "base_grade_amount"], ["Brightness", "grade_brightness"], ["Contrast", "grade_contrast"], ["Saturation", "grade_saturation"], ["Gamma", "grade_gamma"]]:
+			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), fx, layer_id, protected))
 		look_page.add_child(_fx_group_header("MONO"))
-		for spec in [["Threshold", "mono_threshold", 0.0, 1.0, 0.01], ["Mode", "mono_mode", 0.0, 5.0, 1.0]]:
-			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), float(spec[2]), float(spec[3]), float(spec[4]), fx, layer_id, protected))
-		look_page.add_child(_inspector_option("Base", ["COLOUR", "MONO STAMP"], "MONO STAMP" if float(fx.get("base_mode", 0.0)) > 0.5 else "COLOUR", protected, func(value: String) -> void:
-			_edit_layer(layer_id, func(doc):
-				var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
-				(l["fx"] as Dictionary)["base_mode"] = 1.0 if value == "MONO STAMP" else 0.0
-			, false)
-		))
+		for spec in [["Threshold", "mono_threshold"]]:
+			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), fx, layer_id, protected))
+		look_page.add_child(_fx_option("Base", "base_mode", fx, layer_id, protected))
 		_build_palette_page(tab_pages, layer, layer_id, protected)
 		_build_motion_page(tab_pages, layer, layer_id, protected)
 	var layer_cost: Dictionary = FxCostScript.layer_cost(layer)
@@ -2497,8 +2495,11 @@ func _fx_group_header(text: String) -> Control:
 	header.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
 	return header
 
-func _fx_slider(label_text: String, fx_key: String, min_value: float, max_value: float, step: float, fx: Dictionary, layer_id: String, protected: bool, regen_palette := false) -> Control:
-	return _inspector_slider(label_text, min_value, max_value, step, clampf(float(fx.get(fx_key, min_value)), min_value, max_value), protected, func(value: float) -> void:
+func _fx_slider(label_text: String, fx_key: String, fx: Dictionary, layer_id: String, protected: bool, regen_palette := false) -> Control:
+	# UI-05: ranges/units come from the canonical field metadata (single
+	# source) — macros cannot drift from expert controls or the model.
+	var meta: Dictionary = FxLookScript.field_meta_all().get(fx_key, {"kind": "amount", "min": 0.0, "max": 4.0, "step": 0.05})
+	return _inspector_slider(label_text, float(meta.get("min", 0.0)), float(meta.get("max", 4.0)), float(meta.get("step", 0.05)), clampf(float(fx.get(fx_key, float(meta.get("min", 0.0)))), float(meta.get("min", 0.0)), float(meta.get("max", 4.0))), protected, func(value: float) -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["fx"] as Dictionary)[fx_key] = value
@@ -2581,6 +2582,27 @@ func _disp_ensure_influence(doc: Dictionary, layer_id: String) -> Dictionary:
 		d["influence_mask"] = FxLookScript.neutral_mask()
 	return d["influence_mask"]
 
+# UI-05: generic meta-driven option. Numeric enums map by index, string
+# enums (time_source) map by value.
+func _fx_option(label_text: String, fx_key: String, fx: Dictionary, layer_id: String, protected: bool) -> Control:
+	var meta: Dictionary = FxLookScript.field_meta_all().get(fx_key, {"kind": "option", "options": []})
+	var options: Array = meta.get("options", [])
+	var current = fx.get(fx_key, 0.0)
+	var selected := 0
+	if current is String:
+		selected = maxi(0, options.find(str(current)))
+	else:
+		selected = clampi(int(float(current)), 0, maxi(0, options.size() - 1))
+	return _inspector_option(label_text, options, str(options[selected]) if not options.is_empty() else "", protected, func(value: String) -> void:
+		_edit_layer(layer_id, func(doc):
+			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+			if (fx.get(fx_key, 0.0)) is String or str(fx.get(fx_key, "")) in options:
+				(l["fx"] as Dictionary)[fx_key] = value
+			else:
+				(l["fx"] as Dictionary)[fx_key] = float(options.find(value))
+		, false)
+	)
+
 func _inspector_slider(label_text: String, min_value: float, max_value: float, step: float, value: float, disabled: bool, on_change: Callable) -> Control:
 	var row := HBoxContainer.new()
 	var label := Label.new()
@@ -2635,6 +2657,7 @@ func _build_palette_page(tab_pages: Dictionary, layer: Dictionary, layer_id: Str
 	var sc: Array = fx.get("palette_source_color", [0.5, 0.5, 0.5, 1.0])
 	picker.color = Color(float(sc[0]), float(sc[1]), float(sc[2]), 1.0)
 	picker.disabled = protected
+	picker.custom_minimum_size = Vector2(96, 22)
 	picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	picker.color_changed.connect(func(color: Color) -> void: _edit_layer(layer_id, func(doc):
 		var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
@@ -2643,9 +2666,9 @@ func _build_palette_page(tab_pages: Dictionary, layer: Dictionary, layer_id: Str
 	, false, true))
 	scol.add_child(picker)
 	page.add_child(scol)
-	page.add_child(_fx_slider("Hue offset", "palette_hue_offset", -180.0, 180.0, 1.0, fx, layer_id, protected, true))
-	page.add_child(_fx_slider("Saturation", "palette_saturation", 0.0, 3.0, 0.05, fx, layer_id, protected, true))
-	page.add_child(_fx_slider("Value", "palette_value", 0.0, 2.0, 0.05, fx, layer_id, protected, true))
+	page.add_child(_fx_slider("Hue offset", "palette_hue_offset", fx, layer_id, protected, true))
+	page.add_child(_fx_slider("Saturation", "palette_saturation", fx, layer_id, protected, true))
+	page.add_child(_fx_slider("Value", "palette_value", fx, layer_id, protected, true))
 	var gen := Button.new()
 	gen.text = "REGENERATE UNLOCKED FROM STRATEGY"
 	gen.disabled = protected
@@ -2656,26 +2679,32 @@ func _build_palette_page(tab_pages: Dictionary, layer: Dictionary, layer_id: Str
 		, true, true)
 	)
 	page.add_child(gen)
-	# A/B direct authoring: choosing a color sets it AND locks it, so the
-	# honest workflow (choose A -> Lock A -> regenerate -> A stable) is UI-only.
-	var abrow := HBoxContainer.new()
-	for pair in [["A", "fringe_color_a", "palette_lock_a"], ["B", "fringe_color_b", "palette_lock_b"]]:
+	# A/B direct authoring: choosing a color sets ONLY the color. Locks stay
+	# explicit separate controls, so authored-unlocked is a reachable state
+	# (no surprise second mutation from a picker). Rows stack vertically with
+	# expanding pickers: side-by-side at minimum size crushed them to ~7 px.
+	var abcol := VBoxContainer.new()
+	for pair in [["A", "fringe_color_a"], ["B", "fringe_color_b"]]:
+		var abrow := HBoxContainer.new()
 		var cap := Label.new()
 		cap.text = str(pair[0])
 		cap.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+		cap.custom_minimum_size.x = 24
 		abrow.add_child(cap)
 		var pick := ColorPickerButton.new()
 		var carr: Array = fx.get(str(pair[1]), [1.0, 1.0, 1.0, 1.0])
 		pick.color = Color(float(carr[0]), float(carr[1]), float(carr[2]), 1.0)
 		pick.disabled = protected
-		pick.tooltip_text = str(pair[1]) + " (choosing locks this color)"
+		pick.custom_minimum_size = Vector2(96, 22)
+		pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		pick.tooltip_text = str(pair[1]) + " (sets the color only; use Lock to pin it)"
 		pick.color_changed.connect(func(color: Color) -> void: _edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["fx"] as Dictionary)[str(pair[1])] = [color.r, color.g, color.b, 1.0]
-			(l["fx"] as Dictionary)[str(pair[2])] = true
 		, false, true))
 		abrow.add_child(pick)
-	page.add_child(abrow)
+		abcol.add_child(abrow)
+	page.add_child(abcol)
 
 func _build_motion_page(tab_pages: Dictionary, layer: Dictionary, layer_id: String, protected: bool) -> void:
 	# UI-03: motion tracks fully authorable. Four canonical domains; each has
@@ -2700,8 +2729,9 @@ func _build_motion_page(tab_pages: Dictionary, layer: Dictionary, layer_id: Stri
 	var enabled: Dictionary = (motion as Dictionary).get("enabled", {})
 	var tracks: Dictionary = (motion as Dictionary).get("tracks", {})
 	var curves := ["linear", "cubic_in", "cubic_out", "sine_in_out", "back_out"]
-	# Anchor presets: manual (triggered live) or arming at a known flow event
-	# (event anchors hold anchor_time until event wiring lands — see note).
+	# Anchor presets: manual (triggered live) or arming at a known flow event.
+	# Event anchors fire at the presentation's deterministic event time plus
+	# anchor_time; unknown names fall back to fixed anchor_time (documented).
 	var anchors := ["manual", "fixed", "vs_enter", "stage_reveal", "fighter_reveal", "clash_impact", "hold_enter"]
 	for domain in ["dither", "fringe", "flow", "rgb"]:
 		var on := bool(enabled.get(str(domain), false))
@@ -2756,7 +2786,7 @@ func _build_motion_page(tab_pages: Dictionary, layer: Dictionary, layer_id: Stri
 		page.add_child(_motion_row("Release curve", _motion_curve_option(layer_id, str(domain), "release_curve", str(track.get("release_curve", "sine_in_out")), curves, protected), on and not protected))
 		if str(track.get("anchor", "manual")) not in anchors and str(track.get("anchor", "manual")) != "":
 			var custom := Label.new()
-			custom.text = "Custom event anchor %s — fires only if the flow emits it." % str(track.get("anchor", ""))
+			custom.text = "Custom event anchor %s — fires at its presentation event time (+ anchor_time); unknown names hold anchor_time." % str(track.get("anchor", ""))
 			custom.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 			custom.add_theme_color_override("font_color", UiTokens.DISABLED)
 			custom.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -2815,7 +2845,7 @@ func _motion_anchor_option(layer_id: String, domain: String, current: String, an
 		copt.add_item(str(item))
 	copt.selected = maxi(0, items.find(current))
 	copt.disabled = protected
-	copt.tooltip_text = "manual = live TRIGGER; event names arm at anchor_time"
+	copt.tooltip_text = "manual = live TRIGGER; events fire at presentation event time + anchor_time"
 	copt.item_selected.connect(func(selected: int) -> void: _edit_layer(layer_id, func(doc):
 		_motion_track(doc, layer_id, domain)["anchor"] = str(items[selected])
 	, true))
@@ -2859,114 +2889,145 @@ func _build_advanced_page(tab_pages: Dictionary, layer: Dictionary, layer_id: St
 	if type == "FX":
 		_build_expert_fx(page, layer, layer_id, protected)
 
-# UI-01 (slice) / UI-05: expert direct canonical controls. Every scalar numeric
-# fx field outside the macro groups is typed-editable here; bools are
-# checkboxes; small enums are options. Arrays (colors) land with UI-02.
+# UI-01 (slice) / UI-05: expert direct canonical controls, fully driven by
+# field metadata (no parallel ranges/enums here). Groups mirror macro domains
+# plus FIELD/DRIVER catalogues; colors live on PALETTE; assets have dedicated
+# rows; compat/rejected fields are listed, never controlled.
 func _build_expert_fx(page: VBoxContainer, layer: Dictionary, layer_id: String, protected: bool) -> void:
 	var fx: Dictionary = layer.get("fx", {})
+	var meta_all: Dictionary = FxLookScript.field_meta_all()
 	var header := Label.new()
 	header.text = "EXPERT · DIRECT CANONICAL FX FIELDS"
 	header.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	header.add_theme_color_override("font_color", UiTokens.ACCENT)
 	page.add_child(header)
-	# key -> [min, max, step]
-	var ranges := {
-		"signal_gain": [0.0, 8.0, 0.05], "color_blur": [0.0, 64.0, 0.5],
-		"signal_softness": [0.0, 1.0, 0.01], "signal_posterize": [0.0, 8.0, 1.0],
-		"wind_cutoff": [0.0, 1.0, 0.01], "wind_displace": [0.0, 2.0, 0.05],
-		"mono_pixel": [0.0, 32.0, 1.0], "mono_space": [0.0, 2.0, 1.0],
-		"mono_bayer_level": [0.0, 2.0, 1.0],
-		"dither_black_point": [0.0, 1.0, 0.01], "dither_white_point": [0.0, 1.0, 0.01],
-		"dither_gamma": [0.2, 4.0, 0.05], "dither_contrast": [0.0, 3.0, 0.05],
-		"dither_brightness": [-1.0, 1.0, 0.05],
-		"fringe_coverage_mode": [0.0, 2.0, 1.0], "fringe_coverage_threshold": [0.0, 1.0, 0.01],
-		"fringe_bayer_level": [0.0, 2.0, 1.0], "fringe_pixel": [0.0, 32.0, 1.0],
-		"fringe_space": [0.0, 2.0, 1.0], "fringe_coverage_gain": [0.0, 4.0, 0.05],
-		"fringe_bleed": [0.0, 1.0, 0.05], "fringe_blend_mode": [0.0, 3.0, 1.0],
-		"rgb_gradient": [-1.0, 1.0, 0.05], "rgb_gradient_balance": [-1.0, 1.0, 0.05],
-		"rgb_gradient_contrast": [0.0, 3.0, 0.05],
-		"edge_alpha_weight": [0.0, 4.0, 0.05], "edge_luma_weight": [0.0, 4.0, 0.05],
-		"edge_threshold": [0.0, 1.0, 0.01], "pattern_scale": [0.1, 8.0, 0.05],
-		"source_pixel_size": [0.0, 64.0, 1.0],
-		"driver_pixel_size": [1.0, 16.0, 1.0], "driver_mode": [0.0, 4.0, 1.0],
-		"driver_sampling_mode": [0.0, 2.0, 1.0],
-		"flow_center_x": [0.0, 1.0, 0.01], "flow_center_y": [0.0, 1.0, 0.01],
-		"temporal_hold": [0.0, 8.0, 0.1],
-		"palette_strategy": [0.0, 5.0, 1.0], "palette_hue_offset": [-1.0, 1.0, 0.01],
-		"palette_saturation": [0.0, 3.0, 0.05], "palette_value": [0.0, 2.0, 0.05],
-		"effect_mask_threshold": [0.0, 1.0, 0.01], "effect_mask_softness": [0.0, 1.0, 0.01],
-	}
-	var macro_keys := ["fringe", "rgb", "dither", "intensity", "size", "edge_width",
-		"wind_reach", "wind_trail", "split_separation", "rgb_shift_amount",
-		"rgb_shift_angle", "rgb_shift_alpha", "dither_pixel", "dither_levels",
-		"dither_mode", "flow", "flow_strength",
-		"base_grade_amount", "grade_brightness", "grade_contrast",
-		"grade_saturation", "grade_gamma", "mono_threshold", "mono_mode", "base_mode"]
-	for key in ranges.keys():
-		if str(key) in macro_keys:
-			continue
-		var spec: Array = ranges[key]
-		var row := HBoxContainer.new()
-		var lab := Label.new()
-		lab.text = str(key)
-		lab.add_theme_font_size_override("font_size", UiTokens.T_HELP)
-		lab.custom_minimum_size.x = 150
-		row.add_child(lab)
-		var spin := SpinBox.new()
-		spin.min_value = float(spec[0])
-		spin.max_value = float(spec[1])
-		spin.step = float(spec[2])
-		spin.value = clampf(float(fx.get(str(key), 0.0)), float(spec[0]), float(spec[1]))
-		spin.custom_minimum_size.x = 120
-		spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		spin.editable = not protected
-		spin.value_changed.connect(func(value: float) -> void: _edit_layer(layer_id, func(doc):
-			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
-			(l["fx"] as Dictionary)[str(key)] = value
-		, false, true))
-		row.add_child(spin)
-		page.add_child(row)
-	var bools := ["pure_continuous", "palette_lock_a", "palette_lock_b", "palette_swap",
-		"effect_mask_invert", "effect_mask_base", "effect_mask_enabled"]
-	var brow := HBoxContainer.new()
-	for key in bools:
+	var groups := [
+		["SIGNAL", ["signal_gain", "color_blur", "signal_softness", "signal_posterize", "pattern_scale", "pure_continuous", "intensity", "size"]],
+		["GRADE DETAIL", ["grade_black_point", "grade_white_point", "base_opacity"]],
+		["WIND", ["wind_cutoff", "wind_displace"]],
+		["MONO", ["mono_mode", "mono_bayer_level", "mono_pixel", "mono_space"]],
+		["DITHER DETAIL", ["dither_black_point", "dither_white_point", "dither_gamma", "dither_contrast", "dither_brightness", "dither_mode", "dither_bayer_level", "dither_space"]],
+		["FRINGE DETAIL", ["fringe_coverage_mode", "fringe_coverage_threshold", "fringe_bayer_level", "fringe_pixel", "fringe_space", "fringe_coverage_gain", "fringe_bleed", "fringe_blend_mode", "geometry_units"]],
+		["RGB DETAIL", ["rgb_gradient", "rgb_gradient_balance", "rgb_gradient_contrast", "rgb_shift_units"]],
+		["EFFECT MASK", ["effect_mask_enabled", "effect_mask_invert", "effect_mask_threshold", "effect_mask_softness", "effect_mask_base"]],
+		["DRIVER", ["driver_mode", "driver_sampling_mode", "driver_pixel_size"]],
+		["FIELD", ["FIELD_STRENGTH", "FIELD_SPEED", "OUTWARDNESS", "FIELD_BREAKUP", "COORD_NUDGE", "FIELD_SIZE", "FIELD_CENTER_X", "FIELD_CENTER_Y", "LEGACY_SCALE", "LEGACY_SPEED", "LEGACY_RADIAL", "DRIVER_CENTER_X", "DRIVER_CENTER_Y", "DRIVER_SCALE", "DRIVER_STRETCH", "DRIVER_ANGLE", "DRIVER_SPEED", "DRIVER_DETAIL", "DRIVER_FLOW"]],
+		["FLOW DETAIL", ["flow_center_x", "flow_center_y"]],
+		["TIME", ["temporal_hold", "time_source"]],
+		["EDGE SOURCE", ["edge_source_mode", "edge_alpha_weight", "edge_luma_weight", "edge_threshold"]],
+		["PIXEL GRIDS", ["source_pixel_size", "source_pixel_units"]],
+		["PALETTE DETAIL", ["palette_strategy", "palette_lock_a", "palette_lock_b", "palette_swap", "palette_hue_offset", "palette_saturation", "palette_value"]],
+	]
+	var pending_checks: Array = []
+	for group in groups:
+		page.add_child(_fx_group_header(str(group[0])))
+		pending_checks.clear()
+		for key in (group[1] as Array):
+			var spec: Dictionary = meta_all.get(str(key), {})
+			var kind := str(spec.get("kind", "amount"))
+			if kind == "check":
+				pending_checks.append(str(key))
+				if pending_checks.size() == 3:
+					page.add_child(_expert_check_row(pending_checks, fx, layer_id, protected))
+					pending_checks.clear()
+				continue
+			if kind == "option":
+				page.add_child(_expert_option_row(str(key), spec, fx, layer_id, protected))
+			elif kind == "amount" or kind == "int":
+				page.add_child(_expert_spin_row(str(key), spec, fx, layer_id, protected))
+			elif kind == "asset":
+				page.add_child(_asset_row(str(key), str(fx.get(str(key), "") or ""), protected, func(text: String) -> void:
+					_edit_layer(layer_id, func(doc):
+						var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+						(l["fx"] as Dictionary)["treatment_mask_path"] = text.strip_edges()
+					, false)
+				))
+		if not pending_checks.is_empty():
+			page.add_child(_expert_check_row(pending_checks, fx, layer_id, protected))
+			pending_checks.clear()
+	var skipped: Array = []
+	for key in meta_all.keys():
+		var kind := str((meta_all[key] as Dictionary).get("kind", ""))
+		if kind == "color":
+			continue # colors are authored on PALETTE (see pointer below)
+		if kind == "compat" or kind == "rejected":
+			skipped.append(str(key))
+	var note := Label.new()
+	note.text = "A/B + source colors live on PALETTE. Not controlled here: " + ", ".join(skipped) + "."
+	note.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	note.add_theme_color_override("font_color", UiTokens.DISABLED)
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	page.add_child(note)
+
+func _expert_spin_row(key: String, spec: Dictionary, fx: Dictionary, layer_id: String, protected: bool) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	var lab := Label.new()
+	lab.text = key
+	lab.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	lab.custom_minimum_size.x = 150
+	lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	row.add_child(lab)
+	var spin := SpinBox.new()
+	spin.min_value = float(spec.get("min", 0.0))
+	spin.max_value = float(spec.get("max", 4.0))
+	spin.step = float(spec.get("step", 0.05))
+	spin.value = clampf(float(fx.get(key, 0.0)), spin.min_value, spin.max_value)
+	spin.custom_minimum_size.x = 100
+	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spin.editable = not protected
+	spin.value_changed.connect(func(value: float) -> void: _edit_layer(layer_id, func(doc):
+		var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+		(l["fx"] as Dictionary)[key] = value
+	, false, true))
+	row.add_child(spin)
+	return row
+
+func _expert_check_row(keys: Array, fx: Dictionary, layer_id: String, protected: bool) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	for key in keys:
 		var check := CheckBox.new()
-		check.text = str(key).trim_prefix("effect_mask_").trim_prefix("palette_").to_upper()
+		check.text = str(key)
 		check.tooltip_text = str(key)
 		check.button_pressed = bool(fx.get(str(key), false))
 		check.disabled = protected
+		check.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		check.toggled.connect(func(pressed: bool) -> void: _edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["fx"] as Dictionary)[str(key)] = pressed
 		, false))
-		brow.add_child(check)
-	page.add_child(brow)
-	page.add_child(_inspector_option("FX time", FxLookScript.TIME_SOURCES, str(fx.get("time_source", "PRESENTATION_TIME")), protected, func(value: String) -> void:
-		_edit_layer(layer_id, func(doc):
-			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
-			(l["fx"] as Dictionary)["time_source"] = value
-		, false)
-	))
-	page.add_child(_inspector_option("Edge src", ["ALPHA", "LUMA", "BOTH"], ["ALPHA", "LUMA", "BOTH"][clampi(int(float(fx.get("edge_source_mode", 2.0))), 0, 2)], protected, func(value: String) -> void:
-		_edit_layer(layer_id, func(doc):
-			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
-			(l["fx"] as Dictionary)["edge_source_mode"] = float(["ALPHA", "LUMA", "BOTH"].find(value))
-		, false)
-	))
-	page.add_child(_asset_row("Treatment", str(fx.get("treatment_mask_path", "") or ""), protected, func(text: String) -> void:
-		_edit_layer(layer_id, func(doc):
-			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
-			(l["fx"] as Dictionary)["treatment_mask_path"] = text.strip_edges() if text.strip_edges() != "" else ""
-		, true)
-	))
-	if bool(fx.get("effect_mask_enabled", false)) and str(fx.get("treatment_mask_path", "")).strip_edges() == "":
-		page.add_child(_incomplete_note("effect mask needs treatment asset (Treatment row)"))
-	var edge_note := Label.new()
-	edge_note.text = "Custom edge source unwired by contract — procedural ALPHA/LUMA/BOTH only."
-	edge_note.add_theme_font_size_override("font_size", UiTokens.T_HELP)
-	edge_note.add_theme_color_override("font_color", UiTokens.DISABLED)
-	edge_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	page.add_child(edge_note)
+		row.add_child(check)
+	return row
+
+func _expert_option_row(key: String, spec: Dictionary, fx: Dictionary, layer_id: String, protected: bool) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	var lab := Label.new()
+	lab.text = key
+	lab.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	lab.custom_minimum_size.x = 150
+	lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	row.add_child(lab)
+	var options: Array = spec.get("options", [])
+	var current = fx.get(key, 0.0)
+	var selected := 0
+	if current is String:
+		selected = maxi(0, options.find(str(current)))
+	else:
+		selected = clampi(int(float(current)), 0, maxi(0, options.size() - 1))
+	var copt := OptionButton.new()
+	for item in options:
+		copt.add_item(str(item))
+	copt.selected = selected
+	copt.disabled = protected
+	copt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	copt.item_selected.connect(func(which: int) -> void: _edit_layer(layer_id, func(doc):
+		var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+		if (fx.get(key, 0.0)) is String:
+			(l["fx"] as Dictionary)[key] = str(options[which])
+		else:
+			(l["fx"] as Dictionary)[key] = float(which)
+	, false))
+	row.add_child(copt)
+	return row
 
 # UI-04: badge + re-application keep the debug view truthful across
 # rebuilds, target switches and remounts (new quads inherit COMPOSITE).

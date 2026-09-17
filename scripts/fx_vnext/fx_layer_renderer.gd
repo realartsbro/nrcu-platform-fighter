@@ -687,6 +687,19 @@ func _set_fx_uniforms(material: ShaderMaterial, fx, motion := {}, layer_id := ""
 		elif bool(f.get("effect_mask_enabled", false)):
 			_quad_asset_errors.append("fx.treatment_mask_path: asset not loadable: %s (%s)" % [treatment_path, layer_id])
 
+# UI-03 quality (event authority): named flow events with deterministic
+# presentation times. Set by whoever owns the presentation (the lab shell
+# passes its event marks; game integration supplies its own). Unknown
+# non-manual anchors fall back to fixed anchor_time (documented, same as the
+# historical behavior for every non-manual anchor).
+var _event_marks: Dictionary = {}
+
+func set_event_marks(marks: Dictionary) -> void:
+	_event_marks = marks.duplicate()
+
+func event_marks() -> Dictionary:
+	return _event_marks.duplicate()
+
 func _motion_multiplier(motion, domain: String) -> float:
 	if not (motion is Dictionary) or (motion as Dictionary).is_empty():
 		return 1.0
@@ -698,9 +711,12 @@ func _motion_multiplier(motion, domain: String) -> float:
 	var track: Dictionary = tracks.get(domain, {}) if tracks.get(domain, {}) is Dictionary else {}
 	# TM-04: "manual" anchors run from an explicit trigger epoch, not from a
 	# static anchor_time — firing the trigger restarts the envelope.
+	var anchor := str(track.get("anchor", "manual"))
 	var start := float(track.get("anchor_time", 0.0))
-	if str(track.get("anchor", "manual")) == "manual":
+	if anchor == "manual":
 		start = float(_manual_epochs.get(domain, 0.0))
+	elif _event_marks.has(anchor):
+		start = float(_event_marks[anchor]) + float(track.get("anchor_time", 0.0))
 	var elapsed: float = _last_time - start - float(track.get("delay", 0.0))
 	if elapsed < 0.0:
 		return 0.0

@@ -250,8 +250,8 @@ func _fringe_readback() -> void:
 	_check(_preview_diff(before, after) > 0.002, "UI-02 generated palette visibly renders", "mean=%.5f" % _preview_diff(before, after))
 
 func _lock_a_stabilizes() -> void:
-	# Honest end-to-end workflow, UI-only: choose A in the picker (auto-locks),
-	# change strategy, observe A stable + B reacting. No session.edit shortcut.
+	# Decoupled contract: choosing a color sets ONLY the color (lock stays
+	# off); the explicit Lock checkbox pins it. Both states reachable via UI.
 	var pickers := _find_ab_pickers()
 	_check(pickers.size() == 2, "UI-02 A/B color pickers reachable")
 	if pickers.size() != 2:
@@ -261,7 +261,15 @@ func _lock_a_stabilizes() -> void:
 	await settle(5)
 	var fa0: Array = _fx().get("fringe_color_a", [])
 	_check(fa0.size() >= 3 and absf(float(fa0[0]) - 0.1) < 0.01, "UI-02 choosing A sets authored color", str(fa0))
-	_check(bool(_fx().get("palette_lock_a", false)), "UI-02 choosing A auto-locks A")
+	_check(not bool(_fx().get("palette_lock_a", false)), "UI-02 choosing A does NOT surprise-lock", str(_fx().get("palette_lock_a", "?")))
+	var lock_a := _find_check("Lock A")
+	_check(lock_a != null, "UI-02 Lock A checkbox reachable")
+	if lock_a == null:
+		return
+	lock_a.button_pressed = true
+	lock_a.toggled.emit(true)
+	await settle(5)
+	_check(bool(_fx().get("palette_lock_a", false)), "UI-02 explicit Lock A pins")
 	var strat := _find_option("Strategy")
 	strat.selected = 4
 	strat.item_selected.emit(4)
@@ -269,11 +277,19 @@ func _lock_a_stabilizes() -> void:
 	var fa: Array = _fx().get("fringe_color_a", [])
 	var fb: Array = _fx().get("fringe_color_b", [])
 	_check(fa.size() >= 3 and absf(float(fa[0]) - 0.1) < 0.01 and absf(float(fa[1]) - 0.2) < 0.01, "UI-02 Lock A stabilizes authored color across strategy change", str(fa))
-	# Lock B mirror: choose B, change strategy, B stable.
+	# Lock B mirror: choose B, lock explicitly, change strategy, B stable.
 	(pickers[1] as ColorPickerButton).color = Color(0.7, 0.1, 0.1)
 	(pickers[1] as ColorPickerButton).color_changed.emit(Color(0.7, 0.1, 0.1))
 	await settle(5)
-	_check(bool(_fx().get("palette_lock_b", false)), "UI-02 choosing B auto-locks B")
+	_check(not bool(_fx().get("palette_lock_b", false)), "UI-02 choosing B does NOT surprise-lock")
+	var lockb0 := _find_check("Lock B")
+	_check(lockb0 != null, "UI-02 Lock B checkbox reachable (pre)")
+	if lockb0 == null:
+		return
+	lockb0.button_pressed = true
+	lockb0.toggled.emit(true)
+	await settle(5)
+	_check(bool(_fx().get("palette_lock_b", false)), "UI-02 explicit Lock B pins")
 	strat.selected = 2
 	strat.item_selected.emit(2)
 	await settle(5)
@@ -301,9 +317,12 @@ func _find_ab_pickers() -> Array:
 	for child in _walk(_palette_page()):
 		if child is HBoxContainer:
 			var kids := (child as HBoxContainer).get_children()
-			if kids.size() == 4 and kids[0] is Label and (kids[0] as Label).text == "A" and kids[1] is ColorPickerButton and kids[2] is Label and (kids[2] as Label).text == "B" and kids[3] is ColorPickerButton:
-				out = [kids[1], kids[3]]
-				break
+			if kids.size() == 2 and kids[0] is Label and kids[1] is ColorPickerButton:
+				var t := (kids[0] as Label).text
+				if t == "A":
+					out.insert(0, kids[1])
+				elif t == "B":
+					out.append(kids[1])
 	return out
 
 func _hsv_visible() -> void:

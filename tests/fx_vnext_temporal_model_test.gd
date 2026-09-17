@@ -1,6 +1,7 @@
 extends SceneTree
 # Phase 4 temporal model regressions (headless):
 # TM-03 live envelopes; TM-04 manual trigger restarts; TM-07 range validation.
+# TM-08 named event anchors fire at presentation event times.
 
 const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
 const ScreenRuntimeScript := preload("res://scripts/fx_vnext/fx_screen_runtime.gd")
@@ -51,6 +52,38 @@ func _init() -> void:
 	await settle(2)
 	var v4 := _fx_rgb(renderer, "echo_left")
 	_check(v4 > 0.2, "TM-04 envelope runs again after trigger", "v4=%.3f" % v4)
+
+	# ---- TM-08: named event anchors fire at presentation event times -----------
+	# (UI-03 quality: event presets are real runtime semantic, not labels).
+	renderer.set_event_marks({"clash_impact": 2.0, "hold_enter": 4.0})
+	(((layer["motion"] as Dictionary)["tracks"] as Dictionary)["rgb"] as Dictionary)["anchor"] = "clash_impact"
+	(((layer["motion"] as Dictionary)["tracks"] as Dictionary)["rgb"] as Dictionary)["attack"] = 1.0
+	(((layer["motion"] as Dictionary)["tracks"] as Dictionary)["rgb"] as Dictionary)["release"] = 0.5
+	renderer.apply_composition([{"key": "echo_left", "look": doc}])
+	renderer.set_time(1.5)
+	await settle(2)
+	var e0 := _fx_rgb(renderer, "echo_left")
+	_check(e0 < 0.05, "TM-08 event anchor silent before event time", "e0=%.3f" % e0)
+	renderer.set_time(2.5)
+	await settle(2)
+	var e1 := _fx_rgb(renderer, "echo_left")
+	_check(e1 > 0.2 and e1 < 1.0, "TM-08 event anchor runs after event time", "e1=%.3f" % e1)
+	renderer.set_time(6.0)
+	await settle(2)
+	var e2 := _fx_rgb(renderer, "echo_left")
+	_check(e2 < 0.05, "TM-08 event anchor decays after release", "e2=%.3f" % e2)
+	# Unknown anchors fall back to fixed anchor_time (documented, historical).
+	(((layer["motion"] as Dictionary)["tracks"] as Dictionary)["rgb"] as Dictionary)["anchor"] = "some_future_event"
+	(((layer["motion"] as Dictionary)["tracks"] as Dictionary)["rgb"] as Dictionary)["anchor_time"] = 3.0
+	renderer.apply_composition([{"key": "echo_left", "look": doc}])
+	renderer.set_time(2.5)
+	await settle(2)
+	var f0 := _fx_rgb(renderer, "echo_left")
+	_check(f0 < 0.05, "TM-08 unknown anchor holds fixed anchor_time (before)", "f0=%.3f" % f0)
+	renderer.set_time(3.5)
+	await settle(2)
+	var f1 := _fx_rgb(renderer, "echo_left")
+	_check(f1 > 0.2, "TM-08 unknown anchor holds fixed anchor_time (after)", "f1=%.3f" % f1)
 
 	# ---- TM-07: persisted ranges agree with runtime clamps ------------------------------
 	var bad: Dictionary = FxLookScript.materialize(FxLookScript.new_look("TM_BAD", "Bad"))

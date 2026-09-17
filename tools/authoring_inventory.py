@@ -119,6 +119,7 @@ def main():
             "validated": "yes" if field in validate_bodies else "heuristic-gap",
             "renderer_read": "yes" if (lit in renderer or ("get(\"%s\"" % field) in renderer) else "no",
             "direct_typed_authoring": ("verified" if verified else "heuristic") if (in_normal or in_adv) else "no",
+            "meta_kind": meta.get(field, "MISSING"),
             "macro_reachable": "heuristic-template" if lit in templates else "no",
             "normal_ui": "yes" if in_normal else "no",
             "advanced_ui": "yes" if in_adv else "no",
@@ -126,6 +127,15 @@ def main():
             "behavioral_status": ("verified:" + verified) if verified else (NOTED.get(field, "open")),
             "evidence_test": verified or ("noted" if field in NOTED else ""),
         })
+
+    meta = {}
+    for m in re.finditer(r'"([A-Za-z0-9_]+)":\s*\{"kind":\s*"([a-z_]+)"', look):
+        meta[m.group(1)] = m.group(2)
+    meta_missing = sorted(set(frozen) - set(meta.keys()))
+    meta_extra = sorted(set(meta.keys()) - set(frozen))
+    print("META canonical=%d meta=%d missing=%s extra=%s" %
+          (len(frozen), len(meta), meta_missing, meta_extra))
+    assert not meta_missing, "field_meta missing canonical keys: %s" % meta_missing
 
     for field in frozen:
         emit("canonical_fx_109", "fx", field)
