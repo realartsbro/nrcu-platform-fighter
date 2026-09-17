@@ -87,8 +87,11 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 		return {"ok": false, "errors": ["registry missing"], "targets": 0}
 
 	var canonical_keys: Array = []
-	for key in registry.keys():
-		canonical_keys.append(str(key))
+	if registry.has_method("ordered_keys"):
+		canonical_keys = registry.ordered_keys()
+	else:
+		for key in registry.keys():
+			canonical_keys.append(str(key))
 	var by_key: Dictionary = {}
 	for entry_raw in plan:
 		if entry_raw is Dictionary:
@@ -256,7 +259,21 @@ func _place_quad_at(root: Node, index: int, quad: Control) -> void:
 	if not is_instance_valid(quad):
 		return
 	root.add_child(quad)
+	_fit_quad_global(quad, root)
 	root.move_child(quad, clampi(index, 0, root.get_child_count() - 1))
+
+# SP-04: quads sample GLOBAL source_rect, so under a transformed ancestor
+# position ZERO is not the global origin. Fit the quad node so its global
+# rect is exactly the canvas rect (translation-exact; scale by basis
+# lengths; rotation skew stays best-effort for sampling surfaces).
+func _fit_quad_global(quad: Control, parent: Node) -> void:
+	if not (parent is CanvasItem):
+		return
+	var inv: Transform2D = (parent as CanvasItem).get_global_transform().affine_inverse()
+	quad.position = inv * Vector2.ZERO
+	quad.size = Vector2(CANVAS.x * inv.x.length(), CANVAS.y * inv.y.length())
+	quad.rotation = 0.0
+	quad.scale = Vector2.ONE
 
 func _cleanup_stack(entry: Dictionary) -> void:
 	if entry.is_empty():
@@ -412,6 +429,8 @@ func _make_quad(canonical: TextureRect, rect: Rect2, tint: Color, layer: Diction
 	quad.position = Vector2.ZERO
 	quad.size = CANVAS
 	quad.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# SP-06: mirror canonical z so future authored z stays authoritative.
+	quad.z_index = canonical.z_index
 	var material := ShaderMaterial.new()
 	material.shader = _shader
 	var transform: Dictionary = layer.get("transform", {})
@@ -656,6 +675,7 @@ func _place_quad(root: Node, canonical: TextureRect, plane: String, quad: Contro
 			index = below_idx
 			below_idx += 1
 	parent.add_child(quad)
+	_fit_quad_global(quad, parent)
 	parent.move_child(quad, clampi(index, 0, parent.get_child_count() - 1))
 	return {"below_idx": below_idx, "overlay_count": overlay_count}
 
@@ -700,6 +720,12 @@ func _update_stack(target_key: String) -> void:
 			var material := quad.material as ShaderMaterial
 			material.set_shader_parameter("flip_x", 1.0 if canonical_flip_x != layer_flip_x else 0.0)
 			material.set_shader_parameter("flip_y", 1.0 if canonical_flip_y != layer_flip_y else 0.0)
+			# SP-05: the sampled source rect is LIVE canonical geometry, not
+			# the placement-time snapshot — styled quads follow position /
+			# scale / rotation animation every frame.
+			if canonical is TextureRect:
+				var live: Rect2 = FxTargetsScript.presentation_rect(canonical)
+				material.set_shader_parameter("source_rect", [live.position.x, live.position.y, live.size.x, live.size.y])
 
 # ---------------------------------------------------------------- enum helpers
 

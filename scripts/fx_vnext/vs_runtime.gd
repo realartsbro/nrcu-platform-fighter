@@ -73,7 +73,9 @@ func reload_production() -> Dictionary:
 	var skipped: Array = []
 	var review_skipped: Array = []
 	var plan_ids: Array = []
-	for key in runtime.registry.keys():
+	# SP-06: iterate visual authority order, not lexicographic keys.
+	var ordered: Array = runtime.registry.ordered_keys() if runtime.registry.has_method("ordered_keys") else runtime.registry.keys()
+	for key in ordered:
 		var key_str := str(key)
 		var ctx: Dictionary = runtime.registry.context_for_key(key_str)
 		var res: Dictionary = FxResolverScript.resolve(doc, ctx)

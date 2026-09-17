@@ -973,7 +973,9 @@ func _pick_texture_at(point: Vector2) -> String:
 		var inv: Transform2D = node.get_global_transform().affine_inverse()
 		var local: Vector2 = inv * point
 		if Rect2(Vector2.ZERO, node.size).has_point(local) and _texture_hit_alpha(node, local):
-			var rect: Rect2 = FxTargetsScript.presentation_rect(node)
+			# SP-03: proxy nodes are full-canvas surfaces; rank by logical
+			# element bounds so tiny elements stay selectable.
+			var rect: Rect2 = FxTargetsScript.logical_bounds(node)
 			hits.append({"key": String(key), "area": rect.size.x * rect.size.y, "z": node.z_index})
 	if hits.is_empty():
 		return ""
@@ -1010,7 +1012,8 @@ func _update_selection_outline() -> void:
 	if not (node is TextureRect) or disp == null:
 		selection_outline.visible = false
 		return
-	var rect: Rect2 = FxTargetsScript.presentation_rect(node)
+	# SP-03: outline the logical element, never a full-canvas proxy surface.
+	var rect: Rect2 = FxTargetsScript.logical_bounds(node)
 	selection_outline.position = disp.position + rect.position * disp.scale
 	selection_outline.size = rect.size * disp.scale
 	selection_outline.visible = true

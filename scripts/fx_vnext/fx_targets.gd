@@ -31,6 +31,10 @@ var stage_id := "debug"
 
 var slot_nodes: Dictionary = {}
 var slot_roles: Dictionary = {}
+# SP-06: document order (scene-tree traversal) is the visual stacking
+# authority — never lexicographic key order. Recorded at gather time.
+var slot_order: Dictionary = {}
+var _order_counter := 0
 
 var _multiplayer_layouts: Dictionary = {}
 
@@ -48,6 +52,8 @@ func bind_screen(screen_node: Node, format: String, stage: String) -> void:
 func collect() -> void:
 	slot_nodes.clear()
 	slot_roles.clear()
+	slot_order.clear()
+	_order_counter = 0
 	if screen == null or not is_instance_valid(screen):
 		return
 	var root := screen.get_node_or_null("Root")
@@ -58,6 +64,21 @@ func keys() -> Array:
 	var result: Array = slot_nodes.keys()
 	result.sort()
 	return result
+
+func ordered_keys() -> Array:
+	# Canonical visual authority order: scene document order, key as tiebreak.
+	var result: Array = slot_nodes.keys()
+	result.sort_custom(func(a, b):
+		var oa := int(slot_order.get(str(a), 1 << 30))
+		var ob := int(slot_order.get(str(b), 1 << 30))
+		if oa != ob:
+			return oa < ob
+		return str(a) < str(b)
+	)
+	return result
+
+func order_index(key: String) -> int:
+	return int(slot_order.get(key, 1 << 30))
 
 func target_node(key: String) -> Node:
 	return slot_nodes.get(key)
@@ -205,6 +226,69 @@ static func presentation_rect(node: TextureRect) -> Rect2:
 		maxp.y = maxf(maxp.y, pnt.y)
 	return Rect2(minp, maxp - minp)
 
+static func logical_bounds(node: TextureRect) -> Rect2:
+	# SP-03: vector proxies are full-canvas sampling surfaces (1280x720) —
+	# their node rect is NOT the element's logical geometry. Resolve through
+	# to the replaced source element (proxy name = source name + "_FXProxy",
+	# same parent); otherwise the node's own presentation rect.
+	if node != null and bool(node.get_meta("fx_vector_proxy", false)):
+		var parent := node.get_parent()
+		if parent != null:
+			var source = parent.get_node_or_null(String(node.name).trim_suffix("_FXProxy"))
+			if source != null and source != node:
+				return node_bounds(source)
+	return presentation_rect(node)
+
+static func node_bounds(node: Node) -> Rect2:
+	# Logical visual bounds for any canvas element type.
+	if node is TextureRect:
+		return presentation_rect(node)
+	if node is Polygon2D:
+		var poly := node as Polygon2D
+		var xform := poly.get_global_transform()
+		var first := true
+		var minp := Vector2.ZERO
+		var maxp := Vector2.ZERO
+		for pt in poly.polygon:
+			var pnt: Vector2 = xform * pt
+			if first:
+				minp = pnt
+				maxp = pnt
+				first = false
+			else:
+				minp.x = minf(minp.x, pnt.x)
+				minp.y = minf(minp.y, pnt.y)
+				maxp.x = maxf(maxp.x, pnt.x)
+				maxp.y = maxf(maxp.y, pnt.y)
+		if first:
+			return Rect2()
+		return Rect2(minp, maxp - minp)
+	if node is Line2D:
+		var line := node as Line2D
+		var xform := line.get_global_transform()
+		var first := true
+		var minp := Vector2.ZERO
+		var maxp := Vector2.ZERO
+		for pt in line.points:
+			var pnt: Vector2 = xform * pt
+			if first:
+				minp = pnt
+				maxp = pnt
+				first = false
+			else:
+				minp.x = minf(minp.x, pnt.x)
+				minp.y = minf(minp.y, pnt.y)
+				maxp.x = maxf(maxp.x, pnt.x)
+				maxp.y = maxf(maxp.y, pnt.y)
+		if first:
+			return Rect2()
+		var half := line.width * 0.5
+		return Rect2(minp - Vector2(half, half), (maxp - minp) + Vector2(half * 2.0, half * 2.0))
+	if node is Control:
+		var control := node as Control
+		return Rect2(control.get_global_transform() * Vector2.ZERO, control.size * Vector2((control.get_global_transform().x.length()), (control.get_global_transform().y.length())))
+	return Rect2()
+
 # ---------------------------------------------------------------- internals
 
 func _gather(node: Node) -> void:
@@ -214,6 +298,8 @@ func _gather(node: Node) -> void:
 			if key not in ["shadow", "under_shadow"] and not slot_nodes.has(key):
 				slot_nodes[key] = child
 				slot_roles[key] = String(child.get_meta("fx_role", role_for_key(key)))
+				slot_order[key] = _order_counter
+				_order_counter += 1
 		_gather(child)
 
 func _load_json(path: String) -> Dictionary:
