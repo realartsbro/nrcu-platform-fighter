@@ -363,9 +363,21 @@ func lab_preview_seek(seconds: float) -> bool:
 		if _entry_tween != null and is_instance_valid(_entry_tween):
 			_entry_tween.pause()
 	_elapsed = t
-	_state = STATE_HOLD if t >= hold_start_time() else STATE_ENTRY
-	_lab_preview_paused = true
-	set_process(false)
+	# TM-05: seeks reconstruct the phase matching t — including EXIT — so
+	# scrubbing into loadout shows the deterministic EXIT frame instead of
+	# silently rebuilding ENTRY and dropping match-ready.
+	if t >= minimum_exposure():
+		_state = STATE_EXIT
+		_match_ready = true
+		_exit_started_at = minimum_exposure()
+		_step_exit()
+	elif t >= hold_start_time():
+		_state = STATE_HOLD
+	else:
+		_state = STATE_ENTRY
+	# TM-06: a seek reconstructs the frame for t but never changes the
+	# user's play/pause choice — editing or scrubbing during playback must
+	# not park the preview behind the user's back.
 	return true
 
 # --- start (DUEL_1V1, approved path) ----------------------------------------

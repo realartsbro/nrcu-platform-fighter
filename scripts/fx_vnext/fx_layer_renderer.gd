@@ -328,7 +328,34 @@ func set_time(t: float) -> void:
 			if is_instance_valid(quad) and quad.material is ShaderMaterial:
 				(quad.material as ShaderMaterial).set_shader_parameter("layer_time", t)
 				(quad.material as ShaderMaterial).set_shader_parameter("fx_time", t)
+				_refresh_envelope(quad)
 		_update_stack(str(key))
+
+# TM-04: explicit manual-trigger epochs per motion domain.
+var _manual_epochs: Dictionary = {}
+
+func trigger_manual(domain := "") -> void:
+	# Restarts "manual"-anchored envelopes at the current clock. Empty
+	# domain triggers all four motion domains.
+	var domains: Array = ["dither", "fringe", "flow", "rgb"] if domain == "" else [domain]
+	for dom in domains:
+		_manual_epochs[str(dom)] = _last_time
+	set_time(_last_time)
+
+func _refresh_envelope(quad: Node) -> void:
+	if not (quad is Control):
+		return
+	if not (quad as Control).has_meta("fx_amount_base"):
+		return
+	var base: Dictionary = (quad as Control).get_meta("fx_amount_base")
+	var motion: Dictionary = (quad as Control).get_meta("fx_motion", {})
+	var material := (quad as Control).material as ShaderMaterial
+	if material == null:
+		return
+	material.set_shader_parameter("fx_dither", float(base.get("dither", 0.0)) * _motion_multiplier(motion, "dither"))
+	material.set_shader_parameter("fx_fringe", float(base.get("fringe", 0.0)) * _motion_multiplier(motion, "fringe"))
+	material.set_shader_parameter("fx_flow", float(base.get("flow", 0.0)) * _motion_multiplier(motion, "flow"))
+	material.set_shader_parameter("fx_rgb", float(base.get("rgb", 0.0)) * _motion_multiplier(motion, "rgb"))
 
 func set_free_run(t: float) -> void:
 	# FREE_RUN displacement time-source: advances with wall clock even while the
@@ -491,6 +518,16 @@ func _make_quad(canonical: TextureRect, rect: Rect2, tint: Color, layer: Diction
 	material.set_shader_parameter("blend_mode", float(BLEND_INDEX.get(str(layer.get("blend_mode", "NORMAL")), 0)))
 	_set_fx_uniforms(material, layer.get("fx", {}), layer.get("motion", {}))
 	quad.material = material
+	# TM-03: envelope base amounts + motion ride on the quad so set_time can
+	# recompute the live multiplier every frame.
+	var quad_fx: Dictionary = layer.get("fx", {}) if layer.get("fx", {}) is Dictionary else {}
+	quad.set_meta("fx_amount_base", {
+		"dither": float(quad_fx.get("dither", 0.0)),
+		"fringe": float(quad_fx.get("fringe", 0.0)),
+		"flow": float(quad_fx.get("flow", quad_fx.get("fx_flow", 0.0))),
+		"rgb": float(quad_fx.get("rgb", 0.0)),
+	})
+	quad.set_meta("fx_motion", (layer.get("motion", {}) as Dictionary).duplicate(true) if layer.get("motion", {}) is Dictionary else {})
 	return quad
 
 func _set_fx_uniforms(material: ShaderMaterial, fx, motion := {}) -> void:
@@ -606,7 +643,12 @@ func _motion_multiplier(motion, domain: String) -> float:
 		return 1.0
 	var tracks: Dictionary = m.get("tracks", {}) if m.get("tracks") is Dictionary else {}
 	var track: Dictionary = tracks.get(domain, {}) if tracks.get(domain, {}) is Dictionary else {}
-	var elapsed: float = _last_time - float(track.get("anchor_time", 0.0)) - float(track.get("delay", 0.0))
+	# TM-04: "manual" anchors run from an explicit trigger epoch, not from a
+	# static anchor_time — firing the trigger restarts the envelope.
+	var start := float(track.get("anchor_time", 0.0))
+	if str(track.get("anchor", "manual")) == "manual":
+		start = float(_manual_epochs.get(domain, 0.0))
+	var elapsed: float = _last_time - start - float(track.get("delay", 0.0))
 	if elapsed < 0.0:
 		return 0.0
 	var attack: float = maxf(float(track.get("attack", 0.1)), 0.001)

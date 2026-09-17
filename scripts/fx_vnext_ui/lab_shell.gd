@@ -890,7 +890,11 @@ func _transport_to_fx_peak() -> void:
 func _on_time_entered(value: float) -> void:
 	if time_syncing:
 		return
+	# TM-02: numeric entry drives the SAME clock path as scrub — canonical
+	# composition and renderer advance together.
 	runtime.seek(value)
+	if renderer != null:
+		renderer.set_time(clampf(value, 0.0, TIMELINE_LEN))
 
 func _sync_time(t: float) -> void:
 	time_syncing = true
@@ -2529,6 +2533,14 @@ func _process(_delta: float) -> void:
 	if timeline_ruler.visible:
 		timeline_ruler.queue_redraw()
 	if renderer != null:
+		# TM-01: one authoritative presentation clock — while playing, the
+		# renderer FX clock follows canonical elapsed every frame instead
+		# of going stale after the last explicit seek.
+		var playing := true
+		if runtime != null and runtime.screen != null and runtime.screen.has_method("lab_preview_is_paused"):
+			playing = not bool(runtime.screen.lab_preview_is_paused())
+		if playing and runtime != null:
+			renderer.set_time(clampf(runtime.elapsed(), 0.0, TIMELINE_LEN))
 		renderer.set_free_run(Time.get_ticks_msec() / 1000.0)
 	if _stash_pending and session != null and session.dirty:
 		var now := Time.get_ticks_msec() / 1000.0

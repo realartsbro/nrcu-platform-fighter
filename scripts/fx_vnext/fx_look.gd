@@ -522,6 +522,16 @@ static func _validate_motion(motion, layer_id: String) -> Array:
 		for numeric in ["anchor_time", "delay", "attack", "hold", "release", "sustain"]:
 			if not _finite_number(track.get(numeric, null)):
 				errors.append("motion.%s.%s: non-finite (layer %s)" % [key, numeric, layer_id])
+		# TM-07: durations non-negative and sustain bounded — the runtime
+		# silently clamps these, so persisted values must agree upfront.
+		for numeric in ["anchor_time", "delay", "hold"]:
+			if _finite_number(track.get(numeric, null)) and float(track[numeric]) < 0.0:
+				errors.append("motion.%s.%s: must be >= 0 (layer %s)" % [key, numeric, layer_id])
+		for numeric in ["attack", "release"]:
+			if _finite_number(track.get(numeric, null)) and float(track[numeric]) <= 0.0:
+				errors.append("motion.%s.%s: must be > 0 (layer %s)" % [key, numeric, layer_id])
+		if _finite_number(track.get("sustain", null)) and (float(track["sustain"]) < 0.0 or float(track["sustain"]) > 1.0):
+			errors.append("motion.%s.sustain: must be in [0, 1] (layer %s)" % [key, layer_id])
 	return errors
 
 static func _validate_transform(transform, layer_id: String) -> Array:
