@@ -1,0 +1,96 @@
+extends Control
+# NRCU FX Lab vNEXT — ACTUAL VS runtime scene (Round-2 Finding 1).
+#
+# This is the game-side consumption path: it mounts the canonical vs_screen,
+# loads Production authority from disk (res://nrcu_fx_data or NRCU_FX_DATA_DIR),
+# resolves EVERY visible target through the SHARED resolver and renders the
+# whole composition through the SAME shared composition renderer as the Lab.
+# No editor state, no session, no second renderer.
+#
+# Scene: res://scenes/nrcu_vs_runtime.tscn (main-free; used by the runtime check
+# and as the reference for downstream game integration).
+
+const ScreenRuntimeScript := preload("res://scripts/fx_vnext/fx_screen_runtime.gd")
+const FxProductionScript := preload("res://scripts/fx_vnext/fx_production.gd")
+const FxResolverScript := preload("res://scripts/fx_vnext/fx_resolver.gd")
+const FxLayerRendererScript := preload("res://scripts/fx_vnext/fx_layer_renderer.gd")
+
+var runtime
+var renderer
+var production
+var container: SubViewportContainer
+var last_summary: Dictionary = {}
+var _free_tick := false
+
+func _ready() -> void:
+	set_anchors_preset(Control.PRESET_FULL_RECT)
+	production = FxProductionScript.new()
+	var data_override := OS.get_environment("NRCU_FX_DATA_DIR")
+	if data_override != "":
+		production.data_dir = data_override
+	production.recover_if_needed()  # R3 §8: strict last-known-good crash recovery at boot
+	container = SubViewportContainer.new()
+	container.stretch = true
+	container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(container)
+	runtime = ScreenRuntimeScript.new()
+	container.add_child(runtime.subvp)
+	var format := OS.get_environment("NRCU_VS_FORMAT")
+	if format == "":
+		format = "1v1"
+	var stage := OS.get_environment("NRCU_VS_STAGE")
+	if stage == "":
+		stage = "debug"
+	runtime.mount(format, stage, "ice_mage", "doge_man")
+	renderer = FxLayerRendererScript.new(runtime.screen, runtime.registry)
+	var seek_target := 1.5
+	var seek_env := OS.get_environment("NRCU_VS_SEEK")
+	if seek_env != "":
+		seek_target = float(seek_env)
+	seek(seek_target)
+	reload_production()
+	_free_tick = OS.get_environment("NRCU_VS_FREERUN") == "1"
+
+func seek(t: float) -> void:
+	runtime.seek(t)
+	renderer.set_time(t)
+
+func _process(_delta: float) -> void:
+	if _free_tick and renderer != null:
+		renderer.set_free_run(Time.get_ticks_msec() / 1000.0)
+
+func reload_production() -> Dictionary:
+	# Resolve every registered target through the shared authority and render the
+	# whole composition in ONE pass (canonical global order).
+	var assignments: Dictionary = production.load_assignments()
+	if not bool(assignments.get("ok", false)):
+		last_summary = {"ok": false, "errors": assignments.get("errors", [])}
+		renderer.clear_all()
+		return last_summary
+	var doc: Dictionary = assignments["doc"]
+	var plan: Array = []
+	var skipped: Array = []
+	var plan_ids: Array = []
+	for key in runtime.registry.keys():
+		var key_str := str(key)
+		var ctx: Dictionary = runtime.registry.context_for_key(key_str)
+		var res: Dictionary = FxResolverScript.resolve(doc, ctx)
+		if str(res.get("status", "")) not in ["ASSIGNED", "AMBIGUOUS"]:
+			continue
+		var look_id := str(res.get("look_id", ""))
+		var loaded: Dictionary = production.load_look(look_id)
+		if not bool(loaded.get("ok", false)):
+			skipped.append(look_id)
+			continue
+		plan.append({"key": key_str, "look": loaded["doc"]})
+		plan_ids.append("%s:%s:r%d" % [key_str, look_id, int((loaded["doc"] as Dictionary).get("revision", 0))])
+	var applied: Dictionary = renderer.apply_composition(plan)
+	last_summary = {
+		"plan_ids": plan_ids,
+		"ok": bool(applied.get("ok", false)),
+		"styled_targets": plan.size(),
+		"missing_looks": skipped,
+		"errors": applied.get("errors", []),
+	}
+	return last_summary

@@ -1,0 +1,26 @@
+{
+  "schema": "NRCU_VS_FX_ASSIGNMENTS_V2",
+  "bindings": [
+    {
+      "binding_id": "binding-echo-base-0001",
+      "selector": {
+        "element_role": "echo"
+      },
+      "look_id": "ECHO_BASE",
+      "enabled": true,
+      "note": "Generic fallback"
+    }
+  ],
+  "bypasses": [
+    {
+      "bypass_id": "bypass-ice-echo-left-0001",
+      "selector": {
+        "fighter_id": "ice_mage",
+        "element_role": "echo",
+        "visual_side": "left"
+      },
+      "enabled": true,
+      "note": "Styling OFF for this exact target; generic fallback is intentionally blocked"
+    }
+  ]
+}

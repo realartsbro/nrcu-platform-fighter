@@ -1,0 +1,140 @@
+{
+  "schema": "NRCU_FX_LOOK_V0_4",
+  "look_id": "ICE_MAGE_ECHO_LEFT_EXAMPLE",
+  "name": "Ice Mage Echo Left \u2014 Displaced Copy Behind Clean Source",
+  "revision": 1,
+  "status": "DRAFT",
+  "metadata": {
+    "migrated_from": null
+  },
+  "layers": [
+    {
+      "layer_id": "layer-copy-ice-0001",
+      "name": "Displaced Cyan Copy",
+      "type": "SOURCE_COPY",
+      "enabled": true,
+      "locked": false,
+      "opacity": 0.62,
+      "blend_mode": "SCREEN",
+      "plane": "TARGET_UNDERLAY",
+      "transform": {
+        "position_px": [
+          -8,
+          2
+        ],
+        "scale": [
+          1.06,
+          1.06
+        ],
+        "rotation_deg": -1.5,
+        "pivot": [
+          0.5,
+          0.5
+        ],
+        "flip_x": false,
+        "flip_y": false
+      },
+      "displacement": {
+        "enabled": true,
+        "driver": "DIRECTIONAL",
+        "amount_px": [
+          34,
+          4
+        ],
+        "scale": 0.8,
+        "speed": 0.45,
+        "phase": 0.1,
+        "seed": 4417,
+        "angle_deg": 0,
+        "edge_mode": "TRANSPARENT",
+        "custom_texture": null,
+        "influence_mask": {
+          "enabled": true,
+          "source": "POST_DISPLACEMENT_ALPHA",
+          "region": "EDGE_BAND",
+          "space": "LAYER_SPACE",
+          "expand_contract_px": 0,
+          "width_px": 38,
+          "feather_px": 16,
+          "invert": false,
+          "custom_mask": null
+        },
+        "time_source": "PRESENTATION_TIME"
+      },
+      "mask": {
+        "enabled": false,
+        "source": "NONE",
+        "region": "FULL",
+        "space": "LAYER_SPACE",
+        "expand_contract_px": 0,
+        "width_px": 0,
+        "feather_px": 0,
+        "invert": false,
+        "custom_mask": null
+      },
+      "fx": {
+        "base_tint": "#74E7FF"
+      },
+      "motion": {
+        "time_source": "PRESENTATION_TIME"
+      }
+    },
+    {
+      "layer_id": "layer-source-ice-0001",
+      "name": "Source",
+      "type": "SOURCE",
+      "enabled": true,
+      "locked": false,
+      "opacity": 1,
+      "blend_mode": "NORMAL",
+      "plane": "TARGET_SOURCE",
+      "transform": {
+        "position_px": [
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1
+        ],
+        "rotation_deg": 0,
+        "pivot": [
+          0.5,
+          0.5
+        ],
+        "flip_x": false,
+        "flip_y": false
+      },
+      "displacement": {
+        "enabled": false,
+        "driver": "NOISE",
+        "amount_px": [
+          0,
+          0
+        ],
+        "scale": 1,
+        "speed": 0,
+        "phase": 0,
+        "seed": 1,
+        "angle_deg": 0,
+        "edge_mode": "TRANSPARENT",
+        "custom_texture": null,
+        "influence_mask": null,
+        "time_source": "PRESENTATION_TIME"
+      },
+      "mask": {
+        "enabled": false,
+        "source": "NONE",
+        "region": "FULL",
+        "space": "LAYER_SPACE",
+        "expand_contract_px": 0,
+        "width_px": 0,
+        "feather_px": 0,
+        "invert": false,
+        "custom_mask": null
+      },
+      "fx": {},
+      "motion": {}
+    }
+  ]
+}

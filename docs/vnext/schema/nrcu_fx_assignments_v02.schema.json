@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nrcu.local/schema/nrcu_fx_assignments_v02.schema.json",
+  "title": "NRCU VS FX Assignments v2",
+  "type": "object",
+  "required": ["schema", "bindings", "bypasses"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "NRCU_VS_FX_ASSIGNMENTS_V2"},
+    "bindings": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/binding"}
+    },
+    "bypasses": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/bypass"}
+    }
+  },
+  "$defs": {
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "element_id": {"type": "string"},
+        "fighter_id": {"type": "string"},
+        "element_role": {"type": "string"},
+        "visual_side": {"enum": ["left", "right", "center"]},
+        "presentation_slot": {"type": "string"},
+        "team_side": {"type": "string"},
+        "mode_family": {"type": "string"},
+        "stage_id": {"type": "string"}
+      },
+      "minProperties": 1
+    },
+    "binding": {
+      "type": "object",
+      "required": ["binding_id", "selector", "look_id", "enabled"],
+      "additionalProperties": false,
+      "properties": {
+        "binding_id": {"type": "string", "minLength": 8},
+        "selector": {"$ref": "#/$defs/selector"},
+        "look_id": {"type": "string", "minLength": 1},
+        "enabled": {"type": "boolean"},
+        "note": {"type": "string"}
+      }
+    },
+    "bypass": {
+      "type": "object",
+      "required": ["bypass_id", "selector", "enabled"],
+      "additionalProperties": false,
+      "properties": {
+        "bypass_id": {"type": "string", "minLength": 8},
+        "selector": {"$ref": "#/$defs/selector"},
+        "enabled": {"type": "boolean"},
+        "note": {"type": "string"}
+      }
+    }
+  }
+}

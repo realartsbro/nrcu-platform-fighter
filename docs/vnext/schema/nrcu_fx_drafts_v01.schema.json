@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nrcu.local/schema/nrcu_fx_drafts_v01.schema.json",
+  "title": "NRCU FX Draft Store v1",
+  "type": "object",
+  "required": ["schema", "target_drafts", "shared_look_drafts"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "NRCU_FX_DRAFTS_V1"},
+    "target_drafts": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/target_draft"}
+    },
+    "shared_look_drafts": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/shared_draft"}
+    }
+  },
+  "$defs": {
+    "target_draft": {
+      "type": "object",
+      "required": ["target_signature", "base_look_id", "base_revision", "look"],
+      "additionalProperties": false,
+      "properties": {
+        "target_signature": {"type": "string", "minLength": 1},
+        "base_look_id": {"type": ["string", "null"]},
+        "base_revision": {"type": ["integer", "null"], "minimum": 1},
+        "look": {"$ref": "nrcu_fx_look_v04.schema.json"}
+      }
+    },
+    "shared_draft": {
+      "type": "object",
+      "required": ["look_id", "base_revision", "look"],
+      "additionalProperties": false,
+      "properties": {
+        "look_id": {"type": "string", "minLength": 1},
+        "base_revision": {"type": "integer", "minimum": 1},
+        "look": {"$ref": "nrcu_fx_look_v04.schema.json"}
+      }
+    }
+  }
+}
