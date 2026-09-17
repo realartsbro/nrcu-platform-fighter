@@ -36,7 +36,7 @@ static func template_layer(template: String) -> Dictionary:
 		"RGB Tear":
 			var rgb := FxLookScript.new_layer("FX", "RGB Tear")
 			rgb["input"] = "ORIGINAL_SOURCE"
-			rgb["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift": 12.0}
+			rgb["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": 12.0}
 			return rgb
 		"Dither Treatment":
 			var dither := FxLookScript.new_layer("FX", "Dither Treatment")

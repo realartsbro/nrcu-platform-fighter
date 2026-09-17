@@ -54,7 +54,10 @@ func migrate_look(look_id: String, v03: Dictionary) -> Dictionary:
 	var errors: Array = []
 	if str(v03.get("look_schema", "")) != V03_LOOK_SCHEMA:
 		return {"ok": false, "errors": ["look %s: unexpected schema %s" % [look_id, str(v03.get("look_schema", ""))]]}
-	var state: Dictionary = v03.get("state", {})
+	var state: Dictionary = (v03.get("state", {}) as Dictionary).duplicate(true) if v03.get("state") is Dictionary else {}
+	for root_key in ["edge_mask_path", "treatment_mask_path", "custom_mask", "palette_source_color", "fringe_color_a", "fringe_color_b"]:
+		if v03.has(root_key) and not state.has(root_key):
+			state[root_key] = v03[root_key]
 	if state.is_empty():
 		return {"ok": false, "errors": ["look %s: empty state" % look_id]}
 
@@ -128,6 +131,12 @@ func _fx_from_state(state: Dictionary) -> Dictionary:
 			fx[key] = float(state[key])
 	fx["size"] = float(state.get("fx_size", fx["size"]))
 	fx["intensity"] = float(state.get("fx_intensity", fx["intensity"]))
+	# Legacy v0.3 spellings are consumed into their canonical v0.4 keys when
+	# the canonical key is absent; they are never re-emitted (validate_input
+	# rejects legacy aliases in persisted documents).
+	for pair in [["rgb_shift", "rgb_shift_amount"], ["rgb_angle", "rgb_shift_angle"], ["rgb_alpha", "rgb_shift_alpha"], ["fringe_blend", "fringe_blend_mode"]]:
+		if not state.has(pair[1]) and state.has(pair[0]):
+			fx[pair[1]] = float(state[pair[0]])
 
 	fx["pure_continuous"] = bool(state.get("pure_continuous", false))
 	fx["effect_mask_enabled"] = bool(state.get("effect_mask_enabled", false))
@@ -143,13 +152,7 @@ func _fx_from_state(state: Dictionary) -> Dictionary:
 	fx["palette_source_color"] = _color_array(state.get("palette_source_color", [0.5, 0.5, 0.5, 1.0]))
 	fx["fringe_color_a"] = _color_array(state.get("col_a", [0.25, 0.95, 1.0, 1.0]))
 	fx["fringe_color_b"] = _color_array(state.get("col_b", [1.0, 0.4, 0.85, 1.0]))
-	# Keep the v0.3 spelling as a read-only compatibility alias in migrated
-	# documents; materialize() canonicalizes persisted vNEXT docs to the names
-	# above, while old migration consumers can still inspect their source key.
-	fx["rgb_shift"] = fx["rgb_shift_amount"]
-	fx["rgb_angle"] = fx["rgb_shift_angle"]
-	fx["rgb_alpha"] = fx["rgb_shift_alpha"]
-	fx["fringe_blend"] = fx["fringe_blend_mode"]
+
 	var legacy_time_source := str(state.get("time_source", "PRESENTATION TIME")).to_upper().replace(" ", "_")
 	fx["time_source"] = "FREE_RUN" if legacy_time_source == "FREE_RUN" else "PRESENTATION_TIME"
 	return fx

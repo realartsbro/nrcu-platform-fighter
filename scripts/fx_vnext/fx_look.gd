@@ -211,9 +211,74 @@ static func _materialize_into(neutral: Dictionary, incoming) -> Dictionary:
 	var out := neutral.duplicate(true)
 	if incoming is Dictionary:
 		for key in (incoming as Dictionary).keys():
-			if out.has(key):
+			if out.has(key) or str(key).begins_with("x_"):
 				out[key] = (incoming as Dictionary)[key]
 	return out
+
+static func _is_extension_key(key: String) -> bool:
+	if not key.begins_with("x_") or key.length() <= 2:
+		return false
+	for character in key.substr(2):
+		if not (character >= "a" and character <= "z") and not (character >= "0" and character <= "9") and character != "_":
+			return false
+	return true
+
+static func input_aliases() -> Dictionary:
+	return {"rgb_shift": "rgb_shift_amount", "rgb_angle": "rgb_shift_angle", "rgb_alpha": "rgb_shift_alpha", "fringe_blend": "fringe_blend_mode", "fx_size": "size", "fx_intensity": "intensity"}
+
+static func reject_aliases(doc: Dictionary) -> Dictionary:
+	# Raw-form scan only: legacy aliases and malformed x_ keys fail closed
+	# WITHOUT structural validation, so sparse-but-materializable input
+	# (neutral defaults filled by materialize()) is still accepted.
+	var errors: Array = []
+	_collect_input_errors(doc, "look", input_aliases(), errors)
+	return {"ok": errors.is_empty(), "errors": errors}
+
+static func validate_input(doc: Dictionary) -> Dictionary:
+	var result: Dictionary = validate(doc)
+	var errors: Array = result.get("errors", []).duplicate()
+	_collect_input_errors(doc, "look", input_aliases(), errors)
+	errors.append_array(_validate_migrated_from(doc))
+	return {"ok": errors.is_empty(), "errors": errors}
+
+static func _validate_migrated_from(doc: Dictionary) -> Array:
+	var errors: Array = []
+	var metadata = doc.get("metadata", null)
+	if not (metadata is Dictionary):
+		return errors
+	if not (metadata as Dictionary).has("migrated_from"):
+		return errors
+	var origin = (metadata as Dictionary)["migrated_from"]
+	if origin == null or origin is String:
+		return errors
+	if not (origin is Dictionary):
+		return ["metadata.migrated_from: expected null, string, or versioned object"]
+	var allowed := ["schema", "look_id", "source_status", "time_source"]
+	for key in (origin as Dictionary).keys():
+		if not str(key) in allowed:
+			errors.append("metadata.migrated_from.%s: unknown field" % str(key))
+	if str((origin as Dictionary).get("schema", "")) == "":
+		errors.append("metadata.migrated_from.schema: must not be empty")
+	if str((origin as Dictionary).get("look_id", "")) == "":
+		errors.append("metadata.migrated_from.look_id: must not be empty")
+	return errors
+
+static func _collect_input_errors(value, path: String, aliases: Dictionary, errors: Array) -> void:
+	if not (value is Dictionary):
+		return
+	for raw_key in (value as Dictionary).keys():
+		var key := str(raw_key)
+		if aliases.has(key):
+			errors.append("%s.%s: legacy alias; use %s" % [path, key, aliases[key]])
+		elif key.begins_with("x_") and not _is_extension_key(key):
+			errors.append("%s.%s: invalid extension key" % [path, key])
+		var child = (value as Dictionary)[raw_key]
+		if child is Dictionary:
+			_collect_input_errors(child, path + "." + key, aliases, errors)
+		elif child is Array:
+			for item in child:
+				if item is Dictionary:
+					_collect_input_errors(item, path + "." + key, aliases, errors)
 
 # Type canonicalization: JSON loading yields floats for every number, code paths
 # yield ints. Canonical form fixes the numeric type per schema field so that
@@ -291,6 +356,42 @@ static func palette_strategy_name(strategy: float) -> String:
 	var names := ["DOMINANT + DISTANT", "COMPLEMENT", "SPLIT COMPLEMENT", "ANALOGOUS", "TRIADIC", "MONOCHROME"]
 	var index: int = clampi(int(strategy), 0, names.size() - 1)
 	return names[index]
+
+static func _palette_adjust(color: Color, delta: float, hue_offset: float, sat_factor: float, value_factor: float) -> Color:
+	return Color.from_hsv(fposmod(color.h + delta + hue_offset / 360.0, 1.0), clampf(color.s * sat_factor, 0.0, 1.0), clampf(color.v * value_factor, 0.0, 1.0), color.a)
+
+static func resolve_palette(dominant: Color, distant: Color, strategy: int, hue_offset: float, sat_factor: float, value_factor: float, lock_a: bool, lock_b: bool, current_a: Color, current_b: Color) -> Dictionary:
+	var a := dominant
+	var b := distant
+	match clampi(strategy, 0, 5):
+		1: a = _palette_adjust(dominant, 0.0, hue_offset, sat_factor, value_factor); b = _palette_adjust(dominant, 0.5, hue_offset, sat_factor, value_factor)
+		2: a = _palette_adjust(dominant, 5.0 / 12.0, hue_offset, sat_factor, value_factor); b = _palette_adjust(dominant, 7.0 / 12.0, hue_offset, sat_factor, value_factor)
+		3: a = _palette_adjust(dominant, -1.0 / 12.0, hue_offset, sat_factor, value_factor); b = _palette_adjust(dominant, 1.0 / 12.0, hue_offset, sat_factor, value_factor)
+		4: a = _palette_adjust(dominant, 1.0 / 3.0, hue_offset, sat_factor, value_factor); b = _palette_adjust(dominant, 2.0 / 3.0, hue_offset, sat_factor, value_factor)
+		5: a = _palette_adjust(dominant, 0.0, hue_offset, sat_factor * 0.9, value_factor * 1.25); b = _palette_adjust(dominant, 0.0, hue_offset, sat_factor * 0.75, value_factor * 0.55)
+		_: a = _palette_adjust(dominant, 0.0, hue_offset, sat_factor, value_factor); b = _palette_adjust(distant, 0.0, hue_offset, sat_factor, value_factor)
+	return {"a": current_a if lock_a else a, "b": current_b if lock_b else b}
+
+static func _color_from_array(value) -> Color:
+	if value is Color:
+		return value
+	if value is Array and (value as Array).size() >= 3:
+		var c: Array = value
+		return Color(float(c[0]), float(c[1]), float(c[2]), float(c[3]) if c.size() > 3 else 1.0)
+	return Color(1, 1, 1, 1)
+
+static func _color_to_array(color: Color) -> Array:
+	return [color.r, color.g, color.b, color.a]
+
+static func generate_palette(doc: Dictionary, layer_id: String, dominant: Color, distant: Color) -> Dictionary:
+	var layer := find_layer(doc, layer_id)
+	if layer.is_empty() or not (layer.get("fx") is Dictionary):
+		return {"ok": false, "errors": ["layer %s: missing fx" % layer_id]}
+	var fx: Dictionary = layer["fx"]
+	var colors := resolve_palette(dominant, distant, int(fx.get("palette_strategy", 0)), float(fx.get("palette_hue_offset", 0.0)), float(fx.get("palette_saturation", 1.0)), float(fx.get("palette_value", 1.0)), bool(fx.get("palette_lock_a", false)), bool(fx.get("palette_lock_b", false)), _color_from_array(fx.get("fringe_color_a", [1, 1, 1, 1])), _color_from_array(fx.get("fringe_color_b", [1, 1, 1, 1])))
+	fx["fringe_color_a"] = _color_to_array(colors["a"])
+	fx["fringe_color_b"] = _color_to_array(colors["b"])
+	return {"ok": true, "doc": doc}
 
 static func _float_pair(vec) -> Array:
 	var out := [0.0, 0.0]

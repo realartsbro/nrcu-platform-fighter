@@ -48,10 +48,42 @@
           "type": "string"
         },
         "migrated_from": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "schema": {
+                  "type": "string"
+                },
+                "look_id": {
+                  "type": "string"
+                },
+                "source_status": {
+                  "type": "string"
+                },
+                "time_source": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schema",
+                "look_id"
+              ]
+            }
           ]
+        },
+        "migration_notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },

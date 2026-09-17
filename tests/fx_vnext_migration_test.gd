@@ -37,7 +37,8 @@ func _init() -> void:
 	_check(str(echo["layers"][1]["input"]) == "ORIGINAL_SOURCE" and str(echo["layers"][1]["plane"]) == "TARGET_SOURCE", "legacy layer input/plane")
 	var echo_fx: Dictionary = echo["layers"][1]["fx"]
 	_check(absf(float(echo_fx["dither"]) - 1.0) < 0.0001 and absf(float(echo_fx["rgb"]) - 1.0) < 0.0001 and absf(float(echo_fx["fringe"])) < 0.0001, "echo fx amounts mapped", str([echo_fx["dither"], echo_fx["rgb"], echo_fx["fringe"]]))
-	_check(absf(float(echo_fx["rgb_shift"]) - 14.0) < 0.0001, "rgb shift mapped", str(echo_fx["rgb_shift"]))
+	_check(absf(float(echo_fx.get("rgb_shift_amount", -1.0)) - 14.0) < 0.0001, "rgb shift mapped to canonical key", str(echo_fx.get("rgb_shift_amount", null)))
+	_check(not echo_fx.has("rgb_shift"), "legacy rgb_shift alias not retained")
 	_check(absf(float(echo_fx["intensity"]) - 1.2) < 0.0001 and absf(float(echo_fx["dither_space"]) - 1.0) < 0.0001, "intensity/dither space mapped")
 	_check(absf(float(echo_fx["color_blur"]) - 1.0) < 0.0001, "color blur mapped")
 	var col_a: Array = echo_fx["fringe_color_a"]
@@ -87,7 +88,8 @@ func _init() -> void:
 	var mark_fx: Dictionary = mark["layers"][1]["fx"]
 	_check(absf(float(mark_fx["fringe"]) - 1.0) < 0.0001 and absf(float(mark_fx["rgb"]) - 1.0) < 0.0001 and absf(float(mark_fx["dither"])) < 0.0001, "mark fx amounts mapped", str([mark_fx["fringe"], mark_fx["rgb"], mark_fx["dither"]]))
 	_check(bool(mark_fx["pure_continuous"]), "pure continuous carried")
-	_check(absf(float(mark_fx["rgb_shift"]) - 18.0) < 0.0001, "mark rgb shift mapped")
+	_check(absf(float(mark_fx.get("rgb_shift_amount", -1.0)) - 18.0) < 0.0001, "mark rgb shift mapped to canonical key")
+	_check(not mark_fx.has("rgb_shift") and not mark_fx.has("fx_size") and not mark_fx.has("fx_intensity"), "legacy aliases consumed, not retained")
 	_check(absf(float(mark_fx["color_blur"]) - 2.0) < 0.0001, "mark colour blur mapped")
 
 	# ---- PRIMARY_FLOW_BLUR: only the unrepresentable semantic engaged --------------
@@ -104,6 +106,22 @@ func _init() -> void:
 		var from: Dictionary = doc["metadata"].get("migrated_from", {})
 		_check(str(from.get("look_id", "")) == str(look_id), "migrated_from metadata: " + str(look_id))
 		_check(doc["metadata"].has("migration_notes"), "notes carried: " + str(look_id))
+
+	# ---- legacy v0.3 spellings are consumed, never re-emitted -------------------
+	var legacy_probe: Dictionary = fixture.duplicate(true)
+	var legacy_state: Dictionary = legacy_probe["looks"]["BASELINE_ECHO_DITHER_RGB"]["state"]
+	legacy_state.erase("rgb_shift_amount")
+	legacy_state["rgb_shift"] = 14.0
+	legacy_state.erase("intensity")
+	legacy_state["fx_intensity"] = 1.2
+	var legacy_result: Dictionary = migration.migrate_looks_document(legacy_probe)
+	_check(bool(legacy_result.get("ok", false)), "legacy-spelling probe migrates ok", str(legacy_result.get("errors", [])))
+	var legacy_echo: Dictionary = (legacy_result.get("looks", {}) as Dictionary).get("BASELINE_ECHO_DITHER_RGB", {})
+	var legacy_fx: Dictionary = (legacy_echo.get("layers", []) as Array)[1]["fx"] if (legacy_echo.get("layers", []) as Array).size() >= 2 else {}
+	_check(absf(float(legacy_fx.get("rgb_shift_amount", -1.0)) - 14.0) < 0.0001, "legacy rgb_shift consumed into canonical key")
+	_check(absf(float(legacy_fx.get("intensity", -1.0)) - 1.2) < 0.0001, "legacy fx_intensity consumed into canonical key")
+	_check(not legacy_fx.has("rgb_shift") and not legacy_fx.has("fx_intensity"), "legacy spellings not re-emitted")
+	_check(bool(FxLookScript.validate_input(legacy_echo)["ok"]), "legacy-consumed doc passes validate_input")
 
 	# ---- bad schema rejected --------------------------------------------------------
 	var bad: Dictionary = migration.migrate_look("X", {"look_schema": "NOPE", "state": {}})

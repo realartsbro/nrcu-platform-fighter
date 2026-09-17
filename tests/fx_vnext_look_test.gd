@@ -76,6 +76,37 @@ func _init() -> void:
 	_check(FxLookScript.reset_layer_in(doc, str(copy["layer_id"])), "reset layer works")
 	_check(float(copy["opacity"]) == 1.0 and copy["mask"]["enabled"] == false, "reset restores neutral values")
 
+	# ---- canonical input gate (validate_input) ---------------------------------
+	var FxTemplatesScript = load("res://scripts/fx_vnext/fx_templates.gd")
+	var canonical: Dictionary = FxLookScript.materialize(FxLookScript.new_look("INPUT_GATE", "Input Gate"))
+	var gate_ok: Dictionary = FxLookScript.validate_input(canonical)
+	_check(bool(gate_ok["ok"]), "canonical doc passes validate_input", str(gate_ok["errors"]))
+	var legacy_alias: Dictionary = canonical.duplicate(true)
+	(legacy_alias["layers"][0] as Dictionary)["fx"] = {"rgb_shift": 9.0}
+	var gate_alias: Dictionary = FxLookScript.validate_input(legacy_alias)
+	_check(not bool(gate_alias["ok"]), "legacy rgb_shift rejected by validate_input", str(gate_alias["errors"]))
+	var bad_ext: Dictionary = canonical.duplicate(true)
+	(bad_ext["layers"][0] as Dictionary)["fx"] = {"x_Bad": 1.0}
+	_check(not bool(FxLookScript.validate_input(bad_ext)["ok"]), "malformed x_ key rejected")
+	var good_ext: Dictionary = canonical.duplicate(true)
+	(good_ext["layers"][0] as Dictionary)["fx"] = {"x_show_id": "abc"}
+	var gate_ext: Dictionary = FxLookScript.validate_input(good_ext)
+	_check(bool(gate_ext["ok"]), "well-formed x_ extension accepted", str(gate_ext["errors"]))
+	var nested_ext: Dictionary = canonical.duplicate(true)
+	var nested_mask: Dictionary = FxLookScript.neutral_mask()
+	nested_mask["x_falloff"] = 0.5
+	((nested_ext["layers"][0] as Dictionary)["displacement"] as Dictionary)["influence_mask"] = nested_mask
+	_check(bool(FxLookScript.validate_input(nested_ext)["ok"]), "nested x_ extension accepted")
+	var tear: Dictionary = FxTemplatesScript.template_layer("RGB Tear")
+	_check(float((tear["fx"] as Dictionary).get("rgb_shift_amount", -1.0)) == 12.0, "RGB Tear template emits canonical rgb_shift_amount")
+	_check(not (tear["fx"] as Dictionary).has("rgb_shift"), "RGB Tear template carries no legacy alias")
+	var migrated_meta: Dictionary = canonical.duplicate(true)
+	migrated_meta["metadata"] = {"migrated_from": {"schema": "NRCU_FX_LOOK_V0_3", "look_id": "INPUT_GATE", "source_status": "FINAL", "time_source": "PRESENTATION_TIME"}}
+	_check(bool(FxLookScript.validate_input(migrated_meta)["ok"]), "versioned migrated_from accepted")
+	var migrated_bad: Dictionary = canonical.duplicate(true)
+	migrated_bad["metadata"] = {"migrated_from": {"schema": "NRCU_FX_LOOK_V0_3", "look_id": "INPUT_GATE", "bogus": 1}}
+	_check(not bool(FxLookScript.validate_input(migrated_bad)["ok"]), "unknown migrated_from field rejected")
+
 	# ---- serialization -------------------------------------------------------
 	var text: String = FxLookScript.to_json(doc)
 	var parsed: Dictionary = FxLookScript.from_json(text)

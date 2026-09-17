@@ -75,7 +75,7 @@ func _make_look(revision: int, name: String) -> Dictionary:
 	var look: Dictionary = FxLookScript.new_look("ICE_MAGE_ECHO_LEFT", name)
 	look["revision"] = revision
 	var fx: Dictionary = FxLookScript.new_layer("FX", "Echo rgb")
-	fx["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift": 12.0 + float(revision)}
+	fx["fx"] = {"rgb": 1.0, "intensity": 1.0, "rgb_shift_amount": 12.0 + float(revision)}
 	look["layers"].append(fx)
 	return look
 
