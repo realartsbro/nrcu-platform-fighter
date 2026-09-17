@@ -27,6 +27,12 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv else os.path.join(ROOT, "docs", "vnext")
 
+# Documented non-semantics: persisted + validated but deliberately without
+# runtime effect (never present as live macro controls).
+NOTED = {
+    "dither_threshold": "documented-no-semantic (macro-excluded, expert-raw)",
+}
+
 # Explicit proof registry: field -> suite that isolates its behavior.
 # Only entries here may carry behavioral_status=verified.
 VERIFIED = {
@@ -114,8 +120,8 @@ def main():
             "normal_ui": "yes" if in_normal else "no",
             "advanced_ui": "yes" if in_adv else "no",
             "dependency": "asset/incomplete-state" if field in dep_keys else "-",
-            "behavioral_status": ("verified:" + verified) if verified else "open",
-            "evidence_test": verified or "",
+            "behavioral_status": ("verified:" + verified) if verified else (NOTED.get(field, "open")),
+            "evidence_test": verified or ("noted" if field in NOTED else ""),
         })
 
     for field in frozen:

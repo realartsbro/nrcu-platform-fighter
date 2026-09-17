@@ -2202,7 +2202,7 @@ func _rebuild_inspector() -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["displacement"] as Dictionary)["driver"] = value
-		, false)
+		, true)
 	)
 	_tab_page(tab_pages, tab_motion).add_child(driver_row)
 	var amount_row := HBoxContainer.new()
@@ -2250,6 +2250,102 @@ func _rebuild_inspector() -> void:
 		, false)
 	)
 	_tab_page(tab_pages, tab_motion).add_child(edge_row)
+	# UI-01: displacement fully authorable — scale/phase/time/custom/influence.
+	var disp_extra := HBoxContainer.new()
+	for spec in [["Scale", "scale", 0.05, 8.0, 0.05], ["Phase", "phase", -8.0, 8.0, 0.1]]:
+		var extra_label := Label.new()
+		extra_label.text = " " + str(spec[0])
+		extra_label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+		disp_extra.add_child(extra_label)
+		var extra_spin := SpinBox.new()
+		extra_spin.min_value = float(spec[2])
+		extra_spin.max_value = float(spec[3])
+		extra_spin.step = float(spec[4])
+		extra_spin.value = clampf(float(displacement.get(str(spec[1]), 1.0 if str(spec[1]) == "scale" else 0.0)), float(spec[2]), float(spec[3]))
+		extra_spin.custom_minimum_size.x = 84
+		extra_spin.editable = not protected
+		extra_spin.value_changed.connect(func(value: float) -> void: _edit_layer(layer_id, func(doc):
+			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+			(l["displacement"] as Dictionary)[str(spec[1])] = value
+		, false))
+		disp_extra.add_child(extra_spin)
+	_tab_page(tab_pages, tab_motion).add_child(disp_extra)
+	_tab_page(tab_pages, tab_motion).add_child(_inspector_option("Time", FxLookScript.TIME_SOURCES, str(displacement.get("time_source", "PRESENTATION_TIME")), protected, func(value: String) -> void:
+		_edit_layer(layer_id, func(doc):
+			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+			(l["displacement"] as Dictionary)["time_source"] = value
+		, true)
+	))
+	_tab_page(tab_pages, tab_motion).add_child(_asset_row("Custom tex", str(displacement.get("custom_texture", "") or ""), protected, func(text: String) -> void:
+		_edit_layer(layer_id, func(doc):
+			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+			(l["displacement"] as Dictionary)["custom_texture"] = text.strip_edges() if text.strip_edges() != "" else null
+		, true)
+	))
+	_disp_incomplete(tab_pages, tab_motion, _disp_custom_incomplete(displacement))
+	# --- influence mask subgroup (same contract as layer.mask, pre-displacement)
+	_tab_page(tab_pages, tab_motion).add_child(_fx_group_header("INFLUENCE"))
+	var infl = displacement.get("influence_mask", null)
+	var infl_dict: Dictionary = infl if infl is Dictionary else {}
+	var infl_check := CheckBox.new()
+	infl_check.text = "INFLUENCE"
+	infl_check.button_pressed = bool(infl_dict.get("enabled", false))
+	infl_check.disabled = protected
+	infl_check.toggled.connect(func(pressed: bool) -> void: _edit_layer(layer_id, func(doc):
+		var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+		var d: Dictionary = l["displacement"]
+		if d.get("influence_mask", null) == null or not ((d["influence_mask"]) is Dictionary):
+			d["influence_mask"] = FxLookScript.neutral_mask()
+		(d["influence_mask"] as Dictionary)["enabled"] = pressed
+	, true))
+	_tab_page(tab_pages, tab_motion).add_child(infl_check)
+	_tab_page(tab_pages, tab_motion).add_child(_inspector_option("I-Source", FxLookScript.MASK_SOURCES, str(infl_dict.get("source", "NONE")), protected, func(value: String) -> void:
+		_edit_layer(layer_id, func(doc):
+			_disp_ensure_influence(doc, layer_id)["source"] = value
+		, true)
+	))
+	_tab_page(tab_pages, tab_motion).add_child(_inspector_option("I-Region", FxLookScript.MASK_REGIONS, str(infl_dict.get("region", "FULL")), protected, func(value: String) -> void:
+		_edit_layer(layer_id, func(doc):
+			_disp_ensure_influence(doc, layer_id)["region"] = value
+		, true)
+	))
+	_tab_page(tab_pages, tab_motion).add_child(_inspector_option("I-Space", FxLookScript.MASK_SPACES, str(infl_dict.get("space", "LAYER_SPACE")), protected, func(value: String) -> void:
+		_edit_layer(layer_id, func(doc):
+			_disp_ensure_influence(doc, layer_id)["space"] = value
+		, true)
+	))
+	var infl_misc := HBoxContainer.new()
+	for spec in [["W", "width_px", 0.0, 256.0, 1.0], ["F", "feather_px", 0.0, 256.0, 1.0], ["±", "expand_contract_px", -128.0, 128.0, 1.0]]:
+		var infl_label := Label.new()
+		infl_label.text = " " + str(spec[0])
+		infl_label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+		infl_misc.add_child(infl_label)
+		var infl_spin := SpinBox.new()
+		infl_spin.min_value = float(spec[2])
+		infl_spin.max_value = float(spec[3])
+		infl_spin.step = float(spec[4])
+		infl_spin.value = float(infl_dict.get(str(spec[1]), 0.0))
+		infl_spin.custom_minimum_size.x = 84
+		infl_spin.editable = not protected
+		infl_spin.value_changed.connect(func(value: float) -> void: _edit_layer(layer_id, func(doc):
+			_disp_ensure_influence(doc, layer_id)[str(spec[1])] = value
+		, false))
+		infl_misc.add_child(infl_spin)
+	var infl_invert := CheckBox.new()
+	infl_invert.text = "INV"
+	infl_invert.button_pressed = bool(infl_dict.get("invert", false))
+	infl_invert.disabled = protected
+	infl_invert.toggled.connect(func(pressed: bool) -> void: _edit_layer(layer_id, func(doc):
+		_disp_ensure_influence(doc, layer_id)["invert"] = pressed
+	, true))
+	infl_misc.add_child(infl_invert)
+	_tab_page(tab_pages, tab_motion).add_child(infl_misc)
+	_tab_page(tab_pages, tab_motion).add_child(_asset_row("I-Custom", str(infl_dict.get("custom_mask", "") or ""), protected, func(text: String) -> void:
+		_edit_layer(layer_id, func(doc):
+			_disp_ensure_influence(doc, layer_id)["custom_mask"] = text.strip_edges() if text.strip_edges() != "" else null
+		, true)
+	))
+	_disp_incomplete(tab_pages, tab_motion, _disp_influence_incomplete(displacement))
 
 	# --- Mask -------------------------------------------------------------------------
 	var mask: Dictionary = layer.get("mask", {})
@@ -2260,13 +2356,13 @@ func _rebuild_inspector() -> void:
 	mask_check.toggled.connect(func(pressed: bool) -> void: _edit_layer(layer_id, func(doc):
 		var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 		(l["mask"] as Dictionary)["enabled"] = pressed
-	, false))
+	, true))
 	_tab_page(tab_pages, "MASK").add_child(mask_check)
 	_tab_page(tab_pages, "MASK").add_child(_inspector_option("Source", FxLookScript.MASK_SOURCES, str(mask.get("source", "NONE")), protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["mask"] as Dictionary)["source"] = value
-		, false)
+		, true)
 	))
 	_tab_page(tab_pages, "MASK").add_child(_inspector_option("Region", FxLookScript.MASK_REGIONS, str(mask.get("region", "FULL")), protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
@@ -2308,6 +2404,16 @@ func _rebuild_inspector() -> void:
 	, false))
 	mask_misc.add_child(invert_check)
 	_tab_page(tab_pages, "MASK").add_child(mask_misc)
+	_tab_page(tab_pages, "MASK").add_child(_asset_row("Custom", str(mask.get("custom_mask", "") or ""), protected, func(text: String) -> void:
+		_edit_layer(layer_id, func(doc):
+			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+			(l["mask"] as Dictionary)["custom_mask"] = text.strip_edges() if text.strip_edges() != "" else null
+		, true)
+	))
+	if bool(mask.get("enabled", false)) and str(mask.get("source", "")) == "CUSTOM_MASK":
+		var mref = mask.get("custom_mask", null)
+		if mref == null or str(mref).strip_edges() == "":
+			_disp_incomplete(tab_pages, "MASK", "mask CUSTOM_MASK needs an asset (Custom row)")
 
 	# --- FX amounts + cost ---------------------------------------------------------------
 	if is_fx:
@@ -2319,6 +2425,42 @@ func _rebuild_inspector() -> void:
 					(l["fx"] as Dictionary)[key] = value
 				, false, true)
 			))
+		# UI-01: intent macro groups — additive UX over the same canonical fx
+		# fields (macros never replace the direct expert controls in ADVANCED).
+		var look_page: Control = _tab_page(tab_pages, "LOOK")
+		look_page.add_child(_fx_group_header("FRINGE"))
+		for spec in [["Fringe", "fringe", 0.0, 4.0, 0.05], ["Edge width", "edge_width", 0.0, 48.0, 0.5], ["Wind reach", "wind_reach", 0.0, 120.0, 1.0], ["Wind trail", "wind_trail", 0.0, 2.0, 0.05], ["Split", "split_separation", 0.0, 64.0, 0.5]]:
+			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), float(spec[2]), float(spec[3]), float(spec[4]), fx, layer_id, protected))
+		look_page.add_child(_fx_group_header("RGB"))
+		for spec in [["RGB", "rgb", 0.0, 4.0, 0.05], ["Shift px", "rgb_shift_amount", 0.0, 64.0, 0.5], ["Shift angle", "rgb_shift_angle", -180.0, 180.0, 1.0], ["Shift alpha", "rgb_shift_alpha", 0.0, 1.0, 0.05]]:
+			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), float(spec[2]), float(spec[3]), float(spec[4]), fx, layer_id, protected))
+		look_page.add_child(_fx_group_header("DITHER"))
+		# NOTE: dither_threshold is intentionally NOT a macro slider: the field
+		# is persisted + validated but has no runtime semantic (declaration-only
+		# legacy surface). Presenting it as live would fake capability. Raw
+		# expert access stays available; see AUTHORING_INVENTORY.
+		for spec in [["Dither", "dither", 0.0, 4.0, 0.05], ["Pixel", "dither_pixel", 0.0, 16.0, 0.5], ["Levels", "dither_levels", 2.0, 16.0, 1.0], ["Mode", "dither_mode", 0.0, 2.0, 1.0]]:
+			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), float(spec[2]), float(spec[3]), float(spec[4]), fx, layer_id, protected))
+		look_page.add_child(_fx_group_header("FLOW"))
+		var flow_note := Label.new()
+		flow_note.text = "Flow drives the fringe field — needs Fringe > 0."
+		flow_note.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+		flow_note.add_theme_color_override("font_color", UiTokens.DISABLED)
+		look_page.add_child(flow_note)
+		for spec in [["Flow", "flow", 0.0, 4.0, 0.05], ["Strength", "flow_strength", 0.0, 8.0, 0.1]]:
+			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), float(spec[2]), float(spec[3]), float(spec[4]), fx, layer_id, protected))
+		look_page.add_child(_fx_group_header("GRADE"))
+		for spec in [["Grade amount", "base_grade_amount", 0.0, 1.0, 0.05], ["Brightness", "grade_brightness", -1.0, 1.0, 0.05], ["Contrast", "grade_contrast", 0.0, 3.0, 0.05], ["Saturation", "grade_saturation", 0.0, 3.0, 0.05], ["Gamma", "grade_gamma", 0.2, 4.0, 0.05]]:
+			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), float(spec[2]), float(spec[3]), float(spec[4]), fx, layer_id, protected))
+		look_page.add_child(_fx_group_header("MONO"))
+		for spec in [["Threshold", "mono_threshold", 0.0, 1.0, 0.01], ["Mode", "mono_mode", 0.0, 5.0, 1.0]]:
+			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), float(spec[2]), float(spec[3]), float(spec[4]), fx, layer_id, protected))
+		look_page.add_child(_inspector_option("Base", ["COLOUR", "MONO STAMP"], "MONO STAMP" if float(fx.get("base_mode", 0.0)) > 0.5 else "COLOUR", protected, func(value: String) -> void:
+			_edit_layer(layer_id, func(doc):
+				var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+				(l["fx"] as Dictionary)["base_mode"] = 1.0 if value == "MONO STAMP" else 0.0
+			, false)
+		))
 		_build_palette_page(tab_pages, layer, layer_id, protected)
 		_build_motion_page(tab_pages, layer, layer_id, protected)
 	var layer_cost: Dictionary = FxCostScript.layer_cost(layer)
@@ -2328,7 +2470,83 @@ func _rebuild_inspector() -> void:
 	cost_note.add_theme_color_override("font_color", UiTokens.DISABLED)
 	cost_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_tab_page(tab_pages, tab_identity).add_child(cost_note)
-	_build_advanced_page(tab_pages, layer, layer_id, type)
+	_build_advanced_page(tab_pages, layer, layer_id, type, protected)
+
+# UI-01: macro-group header + canonical-fx slider bound through _edit_layer
+# (live preview). Macros are additive UX; ADVANCED keeps direct controls.
+func _fx_group_header(text: String) -> Control:
+	var header := Label.new()
+	header.text = text
+	header.add_theme_font_size_override("font_size", UiTokens.T_META)
+	header.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
+	return header
+
+func _fx_slider(label_text: String, fx_key: String, min_value: float, max_value: float, step: float, fx: Dictionary, layer_id: String, protected: bool) -> Control:
+	return _inspector_slider(label_text, min_value, max_value, step, clampf(float(fx.get(fx_key, min_value)), min_value, max_value), protected, func(value: float) -> void:
+		_edit_layer(layer_id, func(doc):
+			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+			(l["fx"] as Dictionary)[fx_key] = value
+		, false, true)
+	)
+
+# UI-01/UI-07: asset reference row (LineEdit committed on submit) for
+# dependency-bearing modes. Empty clears to null (procedural path).
+func _asset_row(label_text: String, current: String, protected: bool, on_submit: Callable) -> Control:
+	var row := HBoxContainer.new()
+	var label := Label.new()
+	label.text = label_text
+	label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	label.custom_minimum_size.x = 70
+	row.add_child(label)
+	var edit := LineEdit.new()
+	edit.text = current
+	edit.placeholder_text = "res://… / user://… (empty = procedural)"
+	edit.editable = not protected
+	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	edit.text_submitted.connect(func(text: String) -> void:
+		on_submit.call(text)
+	)
+	row.add_child(edit)
+	return row
+
+# UI-01/UI-07: honest INCOMPLETE state — a visible red row iff a required
+# asset is missing. Empty message = complete (no row).
+func _incomplete_note(message: String) -> Label:
+	var note := Label.new()
+	note.text = "⚠ INCOMPLETE: " + message
+	note.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	note.add_theme_color_override("font_color", Color(1.0, 0.35, 0.3))
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	return note
+
+func _disp_incomplete(tab_pages: Dictionary, tab_name: String, message: String) -> void:
+	if message == "":
+		return
+	_tab_page(tab_pages, tab_name).add_child(_incomplete_note(message))
+
+func _disp_custom_incomplete(displacement: Dictionary) -> String:
+	if str(displacement.get("driver", "NOISE")) == "CUSTOM_TEXTURE":
+		var ref = displacement.get("custom_texture", null)
+		if ref == null or str(ref).strip_edges() == "":
+			return "custom driver needs a texture (Custom tex row)"
+	return ""
+
+func _disp_influence_incomplete(displacement: Dictionary) -> String:
+	var infl = displacement.get("influence_mask", null)
+	if not (infl is Dictionary) or not bool((infl as Dictionary).get("enabled", false)):
+		return ""
+	if str((infl as Dictionary).get("source", "")) == "CUSTOM_MASK":
+		var ref = (infl as Dictionary).get("custom_mask", null)
+		if ref == null or str(ref).strip_edges() == "":
+			return "influence CUSTOM_MASK needs an asset (I-Custom row)"
+	return ""
+
+func _disp_ensure_influence(doc: Dictionary, layer_id: String) -> Dictionary:
+	var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+	var d: Dictionary = l["displacement"]
+	if d.get("influence_mask", null) == null or not (d["influence_mask"] is Dictionary):
+		d["influence_mask"] = FxLookScript.neutral_mask()
+	return d["influence_mask"]
 
 func _inspector_slider(label_text: String, min_value: float, max_value: float, step: float, value: float, disabled: bool, on_change: Callable) -> Control:
 	var row := HBoxContainer.new()
@@ -2424,7 +2642,7 @@ func _build_motion_page(tab_pages: Dictionary, layer: Dictionary, layer_id: Stri
 					, false, true)
 				))
 
-func _build_advanced_page(tab_pages: Dictionary, layer: Dictionary, layer_id: String, type: String) -> void:
+func _build_advanced_page(tab_pages: Dictionary, layer: Dictionary, layer_id: String, type: String, protected: bool) -> void:
 	var page: VBoxContainer = _tab_page(tab_pages, "ADVANCED")
 	var debug_header := Label.new()
 	debug_header.text = "DIAGNOSTICS · DEBUG VIEW (preview only)"
@@ -2448,6 +2666,120 @@ func _build_advanced_page(tab_pages: Dictionary, layer: Dictionary, layer_id: St
 		raw.add_theme_color_override("font_color", UiTokens.DISABLED)
 		raw.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		page.add_child(raw)
+	if type == "FX":
+		_build_expert_fx(page, layer, layer_id, protected)
+
+# UI-01 (slice) / UI-05: expert direct canonical controls. Every scalar numeric
+# fx field outside the macro groups is typed-editable here; bools are
+# checkboxes; small enums are options. Arrays (colors) land with UI-02.
+func _build_expert_fx(page: VBoxContainer, layer: Dictionary, layer_id: String, protected: bool) -> void:
+	var fx: Dictionary = layer.get("fx", {})
+	var header := Label.new()
+	header.text = "EXPERT · DIRECT CANONICAL FX FIELDS"
+	header.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	header.add_theme_color_override("font_color", UiTokens.ACCENT)
+	page.add_child(header)
+	# key -> [min, max, step]
+	var ranges := {
+		"signal_gain": [0.0, 8.0, 0.05], "color_blur": [0.0, 64.0, 0.5],
+		"signal_softness": [0.0, 1.0, 0.01], "signal_posterize": [0.0, 8.0, 1.0],
+		"wind_cutoff": [0.0, 1.0, 0.01], "wind_displace": [0.0, 2.0, 0.05],
+		"mono_pixel": [0.0, 32.0, 1.0], "mono_space": [0.0, 2.0, 1.0],
+		"mono_bayer_level": [0.0, 2.0, 1.0],
+		"dither_black_point": [0.0, 1.0, 0.01], "dither_white_point": [0.0, 1.0, 0.01],
+		"dither_gamma": [0.2, 4.0, 0.05], "dither_contrast": [0.0, 3.0, 0.05],
+		"dither_brightness": [-1.0, 1.0, 0.05],
+		# dither_threshold: declaration-only legacy field (no runtime
+		# semantic). Raw expert access only, never a live macro.
+		"dither_threshold": [0.0, 1.0, 0.01],
+		"fringe_coverage_mode": [0.0, 2.0, 1.0], "fringe_coverage_threshold": [0.0, 1.0, 0.01],
+		"fringe_bayer_level": [0.0, 2.0, 1.0], "fringe_pixel": [0.0, 32.0, 1.0],
+		"fringe_space": [0.0, 2.0, 1.0], "fringe_coverage_gain": [0.0, 4.0, 0.05],
+		"fringe_bleed": [0.0, 1.0, 0.05], "fringe_blend_mode": [0.0, 3.0, 1.0],
+		"rgb_gradient": [-1.0, 1.0, 0.05], "rgb_gradient_balance": [-1.0, 1.0, 0.05],
+		"rgb_gradient_contrast": [0.0, 3.0, 0.05],
+		"edge_alpha_weight": [0.0, 4.0, 0.05], "edge_luma_weight": [0.0, 4.0, 0.05],
+		"edge_threshold": [0.0, 1.0, 0.01], "pattern_scale": [0.1, 8.0, 0.05],
+		"source_pixel_size": [0.0, 64.0, 1.0],
+		"driver_pixel_size": [1.0, 16.0, 1.0], "driver_mode": [0.0, 4.0, 1.0],
+		"driver_sampling_mode": [0.0, 2.0, 1.0],
+		"flow_center_x": [0.0, 1.0, 0.01], "flow_center_y": [0.0, 1.0, 0.01],
+		"temporal_hold": [0.0, 8.0, 0.1],
+		"palette_strategy": [0.0, 5.0, 1.0], "palette_hue_offset": [-1.0, 1.0, 0.01],
+		"palette_saturation": [0.0, 3.0, 0.05], "palette_value": [0.0, 2.0, 0.05],
+		"effect_mask_threshold": [0.0, 1.0, 0.01], "effect_mask_softness": [0.0, 1.0, 0.01],
+	}
+	var macro_keys := ["fringe", "rgb", "dither", "intensity", "size", "edge_width",
+		"wind_reach", "wind_trail", "split_separation", "rgb_shift_amount",
+		"rgb_shift_angle", "rgb_shift_alpha", "dither_pixel", "dither_levels",
+		"dither_mode", "flow", "flow_strength",
+		"base_grade_amount", "grade_brightness", "grade_contrast",
+		"grade_saturation", "grade_gamma", "mono_threshold", "mono_mode", "base_mode"]
+	for key in ranges.keys():
+		if str(key) in macro_keys:
+			continue
+		var spec: Array = ranges[key]
+		var row := HBoxContainer.new()
+		var lab := Label.new()
+		lab.text = str(key)
+		lab.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+		lab.custom_minimum_size.x = 150
+		row.add_child(lab)
+		var spin := SpinBox.new()
+		spin.min_value = float(spec[0])
+		spin.max_value = float(spec[1])
+		spin.step = float(spec[2])
+		spin.value = clampf(float(fx.get(str(key), 0.0)), float(spec[0]), float(spec[1]))
+		spin.custom_minimum_size.x = 120
+		spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		spin.editable = not protected
+		spin.value_changed.connect(func(value: float) -> void: _edit_layer(layer_id, func(doc):
+			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+			(l["fx"] as Dictionary)[str(key)] = value
+		, false, true))
+		row.add_child(spin)
+		page.add_child(row)
+	var bools := ["pure_continuous", "palette_lock_a", "palette_lock_b", "palette_swap",
+		"effect_mask_invert", "effect_mask_base", "effect_mask_enabled"]
+	var brow := HBoxContainer.new()
+	for key in bools:
+		var check := CheckBox.new()
+		check.text = str(key).trim_prefix("effect_mask_").trim_prefix("palette_").to_upper()
+		check.tooltip_text = str(key)
+		check.button_pressed = bool(fx.get(str(key), false))
+		check.disabled = protected
+		check.toggled.connect(func(pressed: bool) -> void: _edit_layer(layer_id, func(doc):
+			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+			(l["fx"] as Dictionary)[str(key)] = pressed
+		, false))
+		brow.add_child(check)
+	page.add_child(brow)
+	page.add_child(_inspector_option("FX time", FxLookScript.TIME_SOURCES, str(fx.get("time_source", "PRESENTATION_TIME")), protected, func(value: String) -> void:
+		_edit_layer(layer_id, func(doc):
+			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+			(l["fx"] as Dictionary)["time_source"] = value
+		, false)
+	))
+	page.add_child(_inspector_option("Edge src", ["ALPHA", "LUMA", "BOTH"], ["ALPHA", "LUMA", "BOTH"][clampi(int(float(fx.get("edge_source_mode", 2.0))), 0, 2)], protected, func(value: String) -> void:
+		_edit_layer(layer_id, func(doc):
+			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+			(l["fx"] as Dictionary)["edge_source_mode"] = float(["ALPHA", "LUMA", "BOTH"].find(value))
+		, false)
+	))
+	page.add_child(_asset_row("Treatment", str(fx.get("treatment_mask_path", "") or ""), protected, func(text: String) -> void:
+		_edit_layer(layer_id, func(doc):
+			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+			(l["fx"] as Dictionary)["treatment_mask_path"] = text.strip_edges() if text.strip_edges() != "" else ""
+		, true)
+	))
+	if bool(fx.get("effect_mask_enabled", false)) and str(fx.get("treatment_mask_path", "")).strip_edges() == "":
+		page.add_child(_incomplete_note("effect mask needs treatment asset (Treatment row)"))
+	var edge_note := Label.new()
+	edge_note.text = "Custom edge source unwired by contract — procedural ALPHA/LUMA/BOTH only."
+	edge_note.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	edge_note.add_theme_color_override("font_color", UiTokens.DISABLED)
+	edge_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	page.add_child(edge_note)
 
 func _inspector_option(label_text: String, options: Array, current: String, disabled: bool, on_change: Callable) -> Control:
 	var row := HBoxContainer.new()
