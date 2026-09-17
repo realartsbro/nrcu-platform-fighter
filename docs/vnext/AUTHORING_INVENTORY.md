@@ -1,0 +1,154 @@
+# Authoring inventory (current source, 156 fields)
+
+- no UI reachability at all: 119
+- advanced-only: 27
+
+## No UI reachability (UI-01 hit list)
+- displacement.phase (renderer_read=yes)
+- displacement.time_source (renderer_read=yes)
+- displacement.custom_texture (renderer_read=yes)
+- displacement.influence_mask (renderer_read=yes)
+- mask.custom_mask (renderer_read=yes)
+- fx.pure_continuous (renderer_read=yes)
+- fx.pattern_scale (renderer_read=yes)
+- fx.flow (renderer_read=yes)
+- fx.base_mode (renderer_read=yes)
+- fx.base_opacity (renderer_read=yes)
+- fx.base_grade_amount (renderer_read=yes)
+- fx.grade_black_point (renderer_read=yes)
+- fx.grade_white_point (renderer_read=yes)
+- fx.grade_gamma (renderer_read=yes)
+- fx.grade_contrast (renderer_read=yes)
+- fx.grade_brightness (renderer_read=yes)
+- fx.grade_saturation (renderer_read=yes)
+- fx.source_pixel_size (renderer_read=yes)
+- fx.source_pixel_units (renderer_read=yes)
+- fx.mono_threshold (renderer_read=yes)
+- fx.mono_mode (renderer_read=yes)
+- fx.mono_bayer_level (renderer_read=yes)
+- fx.mono_pixel (renderer_read=yes)
+- fx.mono_space (renderer_read=yes)
+- fx.dither_threshold (renderer_read=yes)
+- fx.dither_black_point (renderer_read=yes)
+- fx.dither_white_point (renderer_read=yes)
+- fx.dither_gamma (renderer_read=yes)
+- fx.dither_contrast (renderer_read=yes)
+- fx.dither_brightness (renderer_read=yes)
+- fx.dither_mode (renderer_read=yes)
+- fx.dither_bayer_level (renderer_read=yes)
+- fx.dither_pixel (renderer_read=yes)
+- fx.dither_levels (renderer_read=yes)
+- fx.dither_space (renderer_read=yes)
+- fx.edge_source_mode (renderer_read=yes)
+- fx.edge_alpha_weight (renderer_read=yes)
+- fx.edge_luma_weight (renderer_read=yes)
+- fx.edge_threshold (renderer_read=yes)
+- fx.edge_width (renderer_read=yes)
+- fx.wind_reach (renderer_read=yes)
+- fx.wind_trail (renderer_read=yes)
+- fx.wind_cutoff (renderer_read=yes)
+- fx.split_separation (renderer_read=yes)
+- fx.wind_displace (renderer_read=yes)
+- fx.signal_gain (renderer_read=yes)
+- fx.color_blur (renderer_read=yes)
+- fx.signal_softness (renderer_read=yes)
+- fx.signal_posterize (renderer_read=yes)
+- fx.fringe_coverage_mode (renderer_read=yes)
+- fx.fringe_coverage_threshold (renderer_read=yes)
+- fx.fringe_bayer_level (renderer_read=yes)
+- fx.fringe_pixel (renderer_read=yes)
+- fx.fringe_space (renderer_read=yes)
+- fx.fringe_coverage_gain (renderer_read=yes)
+- fx.rgb_gradient (renderer_read=yes)
+- fx.rgb_gradient_balance (renderer_read=yes)
+- fx.rgb_gradient_contrast (renderer_read=yes)
+- fx.fringe_color_a (renderer_read=yes)
+- fx.fringe_color_b (renderer_read=yes)
+- fx.fringe_bleed (renderer_read=yes)
+- fx.fringe_blend_mode (renderer_read=yes)
+- fx.geometry_units (renderer_read=yes)
+- fx.effect_mask_enabled (renderer_read=yes)
+- fx.effect_mask_invert (renderer_read=yes)
+- fx.effect_mask_threshold (renderer_read=yes)
+- fx.effect_mask_softness (renderer_read=yes)
+- fx.effect_mask_base (renderer_read=yes)
+- fx.edge_mask_path (renderer_read=yes)
+- fx.treatment_mask_path (renderer_read=yes)
+- fx.driver_mode (renderer_read=yes)
+- fx.driver_sampling_mode (renderer_read=yes)
+- fx.driver_pixel_size (renderer_read=yes)
+- fx.FIELD_STRENGTH (renderer_read=yes)
+- fx.FIELD_SPEED (renderer_read=yes)
+- fx.OUTWARDNESS (renderer_read=yes)
+- fx.FIELD_BREAKUP (renderer_read=yes)
+- fx.COORD_NUDGE (renderer_read=yes)
+- fx.FIELD_SIZE (renderer_read=yes)
+- fx.FIELD_CENTER_X (renderer_read=yes)
+- fx.FIELD_CENTER_Y (renderer_read=yes)
+- fx.LEGACY_SCALE (renderer_read=yes)
+- fx.LEGACY_SPEED (renderer_read=yes)
+- fx.LEGACY_RADIAL (renderer_read=yes)
+- fx.DRIVER_CENTER_X (renderer_read=yes)
+- fx.DRIVER_CENTER_Y (renderer_read=yes)
+- fx.DRIVER_SCALE (renderer_read=yes)
+- fx.DRIVER_STRETCH (renderer_read=yes)
+- fx.DRIVER_ANGLE (renderer_read=yes)
+- fx.DRIVER_SPEED (renderer_read=yes)
+- fx.DRIVER_DETAIL (renderer_read=yes)
+- fx.DRIVER_FLOW (renderer_read=yes)
+- fx.flow_strength (renderer_read=yes)
+- fx.flow_center_x (renderer_read=yes)
+- fx.flow_center_y (renderer_read=yes)
+- fx.rgb_shift_amount (renderer_read=yes)
+- fx.rgb_shift_angle (renderer_read=yes)
+- fx.rgb_shift_units (renderer_read=yes)
+- fx.rgb_shift_alpha (renderer_read=yes)
+- fx.temporal_hold (renderer_read=yes)
+- fx.palette_strategy (renderer_read=yes)
+- fx.palette_lock_a (renderer_read=yes)
+- fx.palette_lock_b (renderer_read=yes)
+- fx.palette_swap (renderer_read=yes)
+- fx.palette_source_color (renderer_read=yes)
+- fx.palette_hue_offset (renderer_read=yes)
+- fx.palette_saturation (renderer_read=yes)
+- fx.palette_value (renderer_read=yes)
+- fx.time_source (renderer_read=yes)
+- motion.tracks (renderer_read=yes)
+- motion.track.anchor (renderer_read=yes)
+- motion.track.anchor_time (renderer_read=yes)
+- motion.track.delay (renderer_read=yes)
+- motion.track.attack (renderer_read=yes)
+- motion.track.hold (renderer_read=yes)
+- motion.track.release (renderer_read=yes)
+- motion.track.sustain (renderer_read=yes)
+- motion.track.attack_curve (renderer_read=yes)
+- motion.track.release_curve (renderer_read=yes)
+
+## Advanced-only (UI-05/06 surface)
+- layer.blend_mode
+- layer.input
+- transform.position_px
+- transform.scale
+- transform.rotation_deg
+- transform.pivot
+- transform.flip_x
+- transform.flip_y
+- displacement.driver
+- displacement.amount_px
+- displacement.scale
+- displacement.speed
+- displacement.seed
+- displacement.angle_deg
+- displacement.edge_mode
+- mask.source
+- mask.region
+- mask.space
+- mask.expand_contract_px
+- mask.width_px
+- mask.feather_px
+- mask.invert
+- fx.size
+- fx.intensity
+- fx.fringe
+- fx.rgb
+- fx.dither
