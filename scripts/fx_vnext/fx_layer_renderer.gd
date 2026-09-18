@@ -48,7 +48,7 @@ func _init(screen_ref: Node, registry_ref) -> void:
 func apply_look(target_key: String, look: Dictionary) -> Dictionary:
 	# Keep the single-target API on the same deterministic composition path so a
 	# final layer can never be mistaken for a target-local plane.
-	return apply_composition([{"key": target_key, "look": look}])
+	return apply_composition([{"key": target_key, "look": look}], {"single_target": true})
 
 func final_composite_supported() -> bool:
 	# Explicit capability query: callers must not infer final-frame support from
@@ -171,7 +171,7 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 	# ---- pass 3: all composition-background layers (deterministic order) --------
 	# The anchor is resolved after target-local placement so the background group
 	# sits above every local target surface but remains below the foreground group.
-	var background_anchor := _foreground_anchor_index(root)
+	var background_anchor := _background_anchor_index(root) if bool(options.get("single_target", false)) else _foreground_anchor_index(root)
 	for stack in stacks:
 		for quad_entry in stack["entry"].get("quads", []):
 			if str(quad_entry.get("plane", "")) != "COMPOSITION_BACKGROUND":
