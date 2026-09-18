@@ -20,9 +20,15 @@ const NAMES := ["vs_enter", "stage_reveal", "fighter_reveal", "clash_impact", "h
 func _init() -> void:
 	for format in FAMILIES:
 		await _oracle_family(str(format))
+	# Realtime emission over ALL families (not a subset): the old 70ms MP
+	# clash drift must fail here, so tolerance is frame-based (0.05s),
+	# not the 0.15s that would have blessed the old bug.
 	await _realtime("1v1")
-	await _realtime("TEAM_2V2")
+	await _realtime("FFA_3")
 	await _realtime("FFA_4")
+	await _realtime("TEAM_2V2")
+	await _realtime("TEAM_2V1")
+	await _realtime("TEAM_3V1")
 	await _mp_envelope()
 	print("[FX-EVENT-ORACLE] done · checks=%d failures=%d" % [checks.size(), failures])
 	quit(1 if failures > 0 else 0)
@@ -81,7 +87,7 @@ func _realtime(format: String) -> void:
 	for n in NAMES:
 		var at := float(rt.screen.emitted_at(str(n)))
 		var want := float(marks.get(n, -99.0))
-		_check(at >= 0.0 and absf(at - want) < 0.15, "P0 realtime %s %s emitted at mark" % [format, str(n)], "at=%.3f want=%.3f" % [at, want])
+		_check(at >= 0.0 and absf(at - want) < 0.05, "P0 realtime %s %s emitted at mark" % [format, str(n)], "at=%.3f want=%.3f" % [at, want])
 	rt.subvp.queue_free()
 	await settle(4)
 

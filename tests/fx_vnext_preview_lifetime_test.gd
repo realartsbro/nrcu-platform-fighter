@@ -37,6 +37,7 @@ func _init() -> void:
 	rt.subvp.queue_free()
 	await settle(4)
 	await _game_full_flow()
+	await _preview_reconstruction_parity()
 	print("[FX-PREVIEW-LIFETIME] done · checks=%d failures=%d" % [checks.size(), failures])
 	quit(1 if failures > 0 else 0)
 
@@ -46,6 +47,10 @@ var _exit_count := 0
 func _game_full_flow() -> void:
 	# Real game lifecycle, no preview flag: start -> ENTRY -> HOLD ->
 	# match_ready -> exposure -> EXIT -> cover -> exit_finished -> free.
+	# Cursor contract (honest): the screen suspends via a guarded call, but
+	# the real Cursor service exposes NO set_overlay_suppressed API, so the
+	# call is a best-effort no-op and the flow must complete regardless.
+	# Wiring a real suspend API is game/frontend scope, not remediation.
 	var scr = load("res://scenes/vs_screen.tscn").instantiate()
 	root.add_child(scr)
 	await settle(10)
@@ -53,6 +58,8 @@ func _game_full_flow() -> void:
 	scr.connect("transition_cover_reached", func() -> void: _cover_count += 1)
 	scr.connect("exit_finished", func() -> void: _exit_count += 1)
 	scr.signal_match_ready()
+	var cursor = root.get_node_or_null("Cursor")
+	_check(cursor == null or not cursor.has_method("set_overlay_suppressed"), "Cursor suspend API absent: flow is best-effort guarded", str(cursor))
 	var frames := 0
 	while is_instance_valid(scr) and frames < 36000:
 		await process_frame
@@ -60,6 +67,37 @@ func _game_full_flow() -> void:
 	_check(_cover_count == 1, "Game flow emits transition_cover_reached once", str(_cover_count))
 	_check(_exit_count == 1, "Game flow emits exit_finished once", str(_exit_count))
 	_check(not is_instance_valid(scr), "Game flow frees the screen at the end")
+
+func _preview_reconstruction_parity() -> void:
+	# Resurrection must reconstruct the whole frame, not just visibility:
+	# EXIT -> seek-back state equals a fresh mount seeked straight there.
+	# Both screens pause so transport drift cannot fake a mismatch.
+	var rta = FxScreenRuntimeScript.new()
+	root.add_child(rta.subvp)
+	await settle(10)
+	rta.mount("1v1", "debug", "ice_mage", "doge_man")
+	await settle(10)
+	rta.screen.lab_preview_pause()
+	rta.seek(2.0)
+	await settle(10)
+	rta.seek(0.5)
+	await settle(10)
+	var rtb = FxScreenRuntimeScript.new()
+	root.add_child(rtb.subvp)
+	await settle(10)
+	rtb.mount("1v1", "debug", "ice_mage", "doge_man")
+	await settle(10)
+	rtb.screen.lab_preview_pause()
+	rtb.seek(0.5)
+	await settle(10)
+	_check(str(rta.screen.get("_state")) == str(rtb.screen.get("_state")), "Resurrection restores the phase", "%s vs %s" % [str(rta.screen.get("_state")), str(rtb.screen.get("_state"))])
+	_check(absf(float(rta.screen.get("_elapsed")) - float(rtb.screen.get("_elapsed"))) < 0.05, "Resurrection restores the clock", "%s vs %s" % [str(rta.screen.get("_elapsed")), str(rtb.screen.get("_elapsed"))])
+	var snap_a := JSON.stringify(rta.screen._static_state()) if rta.screen.has_method("_static_state") else ""
+	var snap_b := JSON.stringify(rtb.screen._static_state()) if rtb.screen.has_method("_static_state") else ""
+	_check(snap_a != "" and snap_a == snap_b, "Resurrection restores the entry snapshot")
+	rta.subvp.queue_free()
+	rtb.subvp.queue_free()
+	await settle(4)
 
 func _check(ok: bool, name: String, detail := "") -> void:
 	var line := "[CHECK] %s  %s%s" % ["PASS" if ok else "FAIL", name, (("  (" + detail + ")") if detail != "" else "")]
