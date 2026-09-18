@@ -3523,8 +3523,9 @@ func _build_advanced_page(tab_pages: Dictionary, layer: Dictionary, layer_id: St
 
 # UI-01 (slice) / UI-05: expert direct canonical controls, fully driven by
 # field metadata (no parallel ranges/enums here). Groups mirror macro domains
-# plus FIELD/DRIVER catalogues; colors live on PALETTE; assets have dedicated
-# rows; compat/rejected fields are listed, never controlled.
+# plus FIELD/DRIVER catalogues; palette colors live on PALETTE while final
+# composite color remains authorable in ADVANCED; assets have dedicated rows;
+# compat/rejected fields are listed, never controlled.
 func _build_expert_fx(page: VBoxContainer, layer: Dictionary, layer_id: String, protected: bool) -> void:
 	var fx: Dictionary = layer.get("fx", {})
 	var meta_all: Dictionary = FxLookScript.field_meta_all()
@@ -3549,6 +3550,7 @@ func _build_expert_fx(page: VBoxContainer, layer: Dictionary, layer_id: String, 
 		["EDGE SOURCE", ["edge_source_mode", "edge_alpha_weight", "edge_luma_weight", "edge_threshold"]],
 		["PIXEL GRIDS", ["source_pixel_size", "source_pixel_units"]],
 		["PALETTE DETAIL", ["palette_strategy", "palette_lock_a", "palette_lock_b", "palette_swap", "palette_hue_offset", "palette_saturation", "palette_value"]],
+		["FINAL COMPOSITE", ["final_tint_amount", "final_tint_color"]],
 	]
 	var pending_checks: Array = []
 	for group in groups:
@@ -3567,6 +3569,8 @@ func _build_expert_fx(page: VBoxContainer, layer: Dictionary, layer_id: String, 
 				page.add_child(_expert_option_row(str(key), spec, fx, layer_id, protected))
 			elif kind == "amount" or kind == "int":
 				page.add_child(_expert_spin_row(str(key), spec, fx, layer_id, protected))
+			elif kind == "color":
+				page.add_child(_expert_color_row(str(key), spec, fx, layer_id, protected))
 			elif kind == "asset":
 				var dep_row := _dep_asset_row(str(key), str(key), layer, layer_id, protected, func(text: String) -> void:
 					_edit_layer(layer_id, func(doc):
@@ -3616,6 +3620,29 @@ func _expert_spin_row(key: String, spec: Dictionary, fx: Dictionary, layer_id: S
 	, false, true, "layer:%s:expert:%s" % [layer_id, key]))
 	_wire_spin_transaction(spin, "layer:%s:expert:%s" % [layer_id, key])
 	row.add_child(spin)
+	return row
+
+func _expert_color_row(key: String, _spec: Dictionary, fx: Dictionary, layer_id: String, protected: bool) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.set_meta("canonical_field", key)
+	var lab := Label.new()
+	lab.text = key
+	lab.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	lab.custom_minimum_size.x = 150
+	row.add_child(lab)
+	var picker := ColorPickerButton.new()
+	var value: Array = fx.get(key, [1.0, 1.0, 1.0, 1.0])
+	if value.size() < 3:
+		value = [1.0, 1.0, 1.0, 1.0]
+	picker.color = Color(float(value[0]), float(value[1]), float(value[2]), float(value[3]) if value.size() > 3 else 1.0)
+	picker.disabled = protected
+	picker.custom_minimum_size = Vector2(96, 22)
+	picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	picker.color_changed.connect(func(color: Color) -> void: _edit_layer(layer_id, func(doc):
+		var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+		(l["fx"] as Dictionary)[key] = [color.r, color.g, color.b, color.a]
+	, false, true))
+	row.add_child(picker)
 	return row
 
 func _expert_check_row(keys: Array, fx: Dictionary, layer_id: String, protected: bool) -> HBoxContainer:

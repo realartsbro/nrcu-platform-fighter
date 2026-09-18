@@ -98,8 +98,9 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 	var errors: Array = []
 	# RT-02: build EVERYTHING before touching the live tree. clear_all() used
 	# to run first, so one invalid target committed a partial mixed frame.
-	# Now a failed build cleans up detached nodes and the last-known-good
-	# composition stays mounted untouched.
+	# Now a failed build cleans up detached nodes and tears down the live
+	# composition before returning. A rejected apply must never leave a stale
+	# stack mounted or hide the canonical target behind a half-built frame.
 	var root := screen.get_node_or_null("Root")
 	if root == null:
 		return {"ok": false, "errors": ["screen Root missing"], "targets": 0}
@@ -130,6 +131,7 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 	if not errors.is_empty():
 		for stack in stacks:
 			_cleanup_stack((stack as Dictionary).get("entry", {}))
+		clear_all()
 		return {"ok": false, "targets": 0, "background": 0, "foreground": 0, "errors": errors, "rolled_back": true}
 	var final_layers := _collect_final_layers(stacks)
 	var final_entry: Dictionary = {}
@@ -138,6 +140,7 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 		if not bool(final_build.get("ok", false)):
 			for stack in stacks:
 				_cleanup_stack((stack as Dictionary).get("entry", {}))
+			clear_all()
 			return {"ok": false, "targets": 0, "background": 0, "foreground": 0, "final_composite": 0, "errors": final_build.get("errors", []), "rolled_back": true}
 		final_entry = final_build["entry"]
 	clear_all()
@@ -168,7 +171,7 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 	# ---- pass 3: all composition-background layers (deterministic order) --------
 	# The anchor is resolved after target-local placement so the background group
 	# sits above every local target surface but remains below the foreground group.
-	var background_anchor := _foreground_anchor_index(root)
+	var background_anchor := _background_anchor_index(root)
 	for stack in stacks:
 		for quad_entry in stack["entry"].get("quads", []):
 			if str(quad_entry.get("plane", "")) != "COMPOSITION_BACKGROUND":
