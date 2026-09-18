@@ -369,7 +369,7 @@
             "DEFERRED_3D"
           ],
           "default": "TARGET_LOCAL",
-          "description": "Explicit execution lane. Omitted legacy layers are interpreted as TARGET_LOCAL; FINAL_COMPOSITE and DEFERRED_3D remain fail-closed until implemented."
+          "description": "Explicit execution lane. Omitted legacy layers are interpreted as TARGET_LOCAL. FINAL_COMPOSITE is a supported post-composition lane only when the dedicated full-canvas shader path is present; DEFERRED_3D remains fail-closed."
         },
         "input": {
           "enum": [
@@ -390,6 +390,27 @@
         },
         "fx": {
           "type": "object",
+          "properties": {
+            "final_tint_amount": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0,
+              "description": "Neutral-by-default FINAL_COMPOSITE tint amount. The final shader supplies the deterministic presentation-time scan phase."
+            },
+            "final_tint_color": {
+              "type": "array",
+              "prefixItems": [
+                {"type": "number", "minimum": 0, "maximum": 1},
+                {"type": "number", "minimum": 0, "maximum": 1},
+                {"type": "number", "minimum": 0, "maximum": 1},
+                {"type": "number", "minimum": 0, "maximum": 1}
+              ],
+              "minItems": 4,
+              "maxItems": 4,
+              "default": [1, 1, 1, 1]
+            }
+          },
           "additionalProperties": true
         },
         "motion": {

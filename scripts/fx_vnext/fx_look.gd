@@ -115,6 +115,7 @@ static func neutral_fx() -> Dictionary:
 		"palette_strategy": 0.0, "palette_lock_a": false, "palette_lock_b": false,
 		"palette_swap": false, "palette_source_color": [0.5, 0.5, 0.5, 1.0],
 		"palette_hue_offset": 0.0, "palette_saturation": 1.0, "palette_value": 1.0,
+		"final_tint_amount": 0.0, "final_tint_color": [1.0, 1.0, 1.0, 1.0],
 		"time_source": "PRESENTATION_TIME",
 	}
 
@@ -472,6 +473,8 @@ static func validate(doc: Dictionary) -> Dictionary:
 		errors.append_array(lane_result.get("errors", []))
 		if not bool(lane_result.get("ok", false)) and lane_result.get("errors", []).is_empty():
 			errors.append("lane: invalid (layer %s)" % layer_id)
+		if str(lane_result.get("lane", "")) == "FINAL_COMPOSITE" and type != TYPE_FX:
+			errors.append("FINAL_COMPOSITE lane requires an FX layer (layer %s)" % layer_id)
 		if str(layer.get("blend_mode", "")) not in BLEND_MODES:
 			errors.append("blend_mode: invalid %s (layer %s)" % [str(layer.get("blend_mode", "")), layer_id])
 		var opacity := float(layer.get("opacity", -1.0))
@@ -544,7 +547,7 @@ static func _validate_fx(fx, layer_id: String) -> Array:
 		"DRIVER_CENTER_Y", "DRIVER_SCALE", "DRIVER_STRETCH", "DRIVER_ANGLE", "DRIVER_SPEED", "DRIVER_DETAIL",
 		"DRIVER_FLOW", "flow_strength", "flow_center_x", "flow_center_y", "rgb_shift_amount", "rgb_shift_angle",
 		"rgb_shift_units", "rgb_shift_alpha", "temporal_hold", "palette_strategy", "palette_hue_offset",
-		"palette_saturation", "palette_value"]:
+		"palette_saturation", "palette_value", "final_tint_amount"]:
 		if f.has(key) and not _finite_number(f.get(key, null)):
 			errors.append("fx.%s: non-finite (layer %s)" % [key, layer_id])
 	for key in ["palette_lock_a", "palette_lock_b", "palette_swap"]:
@@ -554,7 +557,7 @@ static func _validate_fx(fx, layer_id: String) -> Array:
 		var source_color = f.get("palette_source_color", null)
 		if not (source_color is Array) or (source_color as Array).size() < 3 or not _finite_numbers(source_color as Array):
 			errors.append("fx.palette_source_color: expected finite color (layer %s)" % layer_id)
-	for key in ["fringe_color_a", "fringe_color_b"]:
+	for key in ["fringe_color_a", "fringe_color_b", "final_tint_color"]:
 		if not f.has(key):
 			continue
 		var color = f.get(key, null)
@@ -846,6 +849,8 @@ static func field_meta_more() -> Dictionary:
 		"palette_hue_offset": {"kind": "amount", "min": -180.0, "max": 180.0, "step": 1.0, "unit": "deg"},
 		"palette_saturation": {"kind": "amount", "min": 0.0, "max": 3.0, "step": 0.05},
 		"palette_value": {"kind": "amount", "min": 0.0, "max": 2.0, "step": 0.05},
+		"final_tint_amount": {"kind": "amount", "min": 0.0, "max": 1.0, "step": 0.01, "unit": "final"},
+		"final_tint_color": {"kind": "color", "scope": "FINAL_COMPOSITE"},
 		"time_source": {"kind": "option", "options": ["PRESENTATION_TIME", "FREE_RUN"]},
 	}
 

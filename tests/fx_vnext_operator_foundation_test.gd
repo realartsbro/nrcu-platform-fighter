@@ -86,9 +86,9 @@ func _lanes_are_explicit_and_fail_closed() -> void:
 	var final_layer := FxLookScript.new_layer("FX", "Final")
 	final_layer["lane"] = "FINAL_COMPOSITE"
 	var final_result: Dictionary = FxOperatorsScript.validate_layer_lane(final_layer)
-	_check(not bool(final_result.get("supported", true)), "FINAL_COMPOSITE remains unsupported")
-	_check(not bool(final_result.get("ok", true)), "FINAL_COMPOSITE fails closed")
-	_check(not FxOperatorsScript.final_composite_supported(), "no unproven final-composite path is advertised")
+	_check(bool(final_result.get("supported", false)), "FINAL_COMPOSITE is supported by the dedicated path")
+	_check(bool(final_result.get("ok", false)), "FINAL_COMPOSITE lane validates")
+	_check(FxOperatorsScript.final_composite_supported(), "dedicated final-composite path is advertised")
 
 func _neutral_contract_is_truthful() -> void:
 	var doc: Dictionary = FxLookScript.new_look("OP_NEUTRAL", "Operator neutral")
@@ -125,9 +125,9 @@ func _cost_fields_are_truthful_and_deterministic() -> void:
 	_check(is_equal_approx(float(look_cost.get("operator_cost_total", 0.0)), 1.0), "look operator total is deterministic", str(look_cost.get("operator_cost_total", "")))
 	var forged := layer.duplicate(true)
 	forged["lane"] = "FINAL_COMPOSITE"
-	var unsupported: Dictionary = FxCostScript.layer_cost(forged)
-	_check(not bool(unsupported.get("lane_supported", true)), "unsupported lane cost is not reported as renderable")
-	_check(str(unsupported.get("lane_status", "")) == "UNSUPPORTED", "unsupported lane cost carries truthful status")
+	var supported_final: Dictionary = FxCostScript.layer_cost(forged)
+	_check(bool(supported_final.get("lane_supported", false)), "supported final lane cost is reported as renderable")
+	_check(str(supported_final.get("lane_status", "")) == "SUPPORTED", "final lane cost carries truthful status")
 
 func _read_text(path: String) -> String:
 	var file := FileAccess.open(path, FileAccess.READ)

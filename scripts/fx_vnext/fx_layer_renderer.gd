@@ -17,6 +17,7 @@ extends RefCounted
 # unsupported until the blend unit lands.
 
 const SHADER_PATH := "res://shaders/nrcu_fx_vnext_layer.gdshader"
+const FINAL_SHADER_PATH := "res://shaders/nrcu_fx_vnext_final_composite.gdshader"
 const CANVAS := Vector2(1280.0, 720.0)
 const FxTargetsScript := preload("res://scripts/fx_vnext/fx_targets.gd")
 const FxAssetsScript := preload("res://scripts/fx_vnext/fx_assets.gd")
@@ -30,7 +31,9 @@ const BLEND_INDEX := {"NORMAL": 0, "ADD": 1, "SCREEN": 2, "MULTIPLY": 3}
 var screen: Node
 var registry
 var _shader: Shader
+var _final_shader: Shader
 var _stacks: Dictionary = {}
+var _final_composite: Dictionary = {}
 var _last_time: float = 0.0
 var _last_free: float = 0.0
 
@@ -38,55 +41,51 @@ func _init(screen_ref: Node, registry_ref) -> void:
 	screen = screen_ref
 	registry = registry_ref
 	_shader = load(SHADER_PATH)
+	_final_shader = load(FINAL_SHADER_PATH)
 
 # ---------------------------------------------------------------- public API
 
 func apply_look(target_key: String, look: Dictionary) -> Dictionary:
-	# Single-target entry: constructs the stack and places it around the
-	# canonical node (existing behavior, used by targeted tests/tools).
-	clear_target(target_key)
-	var stack := _construct_stack(target_key, look)
-	if not bool(stack.get("ok", false)):
-		_cleanup_stack(stack.get("entry", {}))
-		return {"ok": false, "errors": stack.get("errors", [])}
-	var entry: Dictionary = stack["entry"]
-	var canonical: TextureRect = entry["canonical"]
-	var root := screen.get_node_or_null("Root")
-	if root == null:
-		_cleanup_stack(entry)
-		return {"ok": false, "errors": ["screen Root missing"]}
-	var below_idx := canonical.get_index()
-	var overlay_count := 0
-	var plane_anchors: Dictionary = {}
-	for quad_entry in entry.get("quads", []):
-		var placement := _place_quad(root, canonical, str(quad_entry.get("plane", "TARGET_SOURCE")), quad_entry["node"], below_idx, overlay_count, plane_anchors)
-		below_idx = int(placement.get("below_idx", below_idx))
-		overlay_count = int(placement.get("overlay_count", overlay_count))
-		_pin_if_blend(entry, quad_entry)
-	entry["canonical_self_modulate"] = canonical.self_modulate
-	canonical.self_modulate = Color(1.0, 1.0, 1.0, 0.0)
-	_stacks[target_key] = entry
-	_push_current_time(entry)
-	_update_stack(target_key)
-	return {"ok": true, "errors": []}
+	# Keep the single-target API on the same deterministic composition path so a
+	# final layer can never be mistaken for a target-local plane.
+	return apply_composition([{"key": target_key, "look": look}])
 
 func final_composite_supported() -> bool:
 	# Explicit capability query: callers must not infer final-frame support from
 	# COMPOSITION_BACKGROUND/FOREGROUND planes.
-	return FxOperatorsScript.final_composite_supported()
+	return FxOperatorsScript.final_composite_supported() and _final_shader != null
 
 func final_composite_status() -> Dictionary:
+	var supported := final_composite_supported()
 	return {
 		"lane": "FINAL_COMPOSITE",
-		"supported": final_composite_supported(),
+		"supported": supported,
 		"ok": false,
-		"errors": ["FINAL_COMPOSITE unsupported: no full-frame post-composition viewport/pass"],
+		"errors": ["FINAL_COMPOSITE unsupported: dedicated full-canvas shader path is unavailable"] if not supported else ["FINAL_COMPOSITE requires an explicit layer"],
 	}
 
 func apply_final_composite(plan: Array, options := {}) -> Dictionary:
-	# There is intentionally no fallback to a composition plane. Such a fallback
-	# would make a per-target quad look like a final-frame operator.
-	return final_composite_status()
+	# This public entry is intentionally strict: a final pass can never be
+	# inferred from a target-local plane or installed without an explicit layer.
+	var final_layers: Array = []
+	for raw in plan:
+		if raw is Dictionary:
+			var layer: Dictionary = raw
+			if str(layer.get("lane", "")) == "FINAL_COMPOSITE":
+				final_layers.append(layer)
+	if final_layers.is_empty():
+		return final_composite_status()
+	var built := _build_final_entry(final_layers, options)
+	if not bool(built.get("ok", false)):
+		return {"ok": false, "lane": "FINAL_COMPOSITE", "errors": built.get("errors", [])}
+	clear_final_composite()
+	var root := screen.get_node_or_null("Root") if screen != null else null
+	if root == null or not _attach_final_entry(root, built["entry"]):
+		_cleanup_final_entry(built.get("entry", {}))
+		return {"ok": false, "lane": "FINAL_COMPOSITE", "errors": ["FINAL_COMPOSITE setup failed"]}
+	_final_composite = built["entry"]
+	_push_final_time()
+	return {"ok": true, "lane": "FINAL_COMPOSITE", "errors": [], "final_composite": 1}
 
 func apply_composition(plan: Array, options := {}) -> Dictionary:
 	# ONE pass for the whole visible composition (Round-2 Finding 1). plan is a
@@ -131,6 +130,15 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 		for stack in stacks:
 			_cleanup_stack((stack as Dictionary).get("entry", {}))
 		return {"ok": false, "targets": 0, "background": 0, "foreground": 0, "errors": errors, "rolled_back": true}
+	var final_layers := _collect_final_layers(stacks)
+	var final_entry: Dictionary = {}
+	if not final_layers.is_empty():
+		var final_build := _build_final_entry(final_layers, options)
+		if not bool(final_build.get("ok", false)):
+			for stack in stacks:
+				_cleanup_stack((stack as Dictionary).get("entry", {}))
+			return {"ok": false, "targets": 0, "background": 0, "foreground": 0, "final_composite": 0, "errors": final_build.get("errors", []), "rolled_back": true}
+		final_entry = final_build["entry"]
 	clear_all()
 
 	# ---- pass 1: all composition-background layers (deterministic order) --------
@@ -171,6 +179,14 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 			fg_index += 1
 			_pin_if_blend(stack["entry"], quad_entry)
 
+	# ---- pass 4: one explicit full-canvas final pass before impact/cover ---------
+	if not final_entry.is_empty():
+		if not _attach_final_entry(root, final_entry):
+			_cleanup_final_entry(final_entry)
+			for stack in stacks:
+				_cleanup_stack((stack as Dictionary).get("entry", {}))
+			return {"ok": false, "targets": 0, "background": 0, "foreground": 0, "final_composite": 0, "errors": ["FINAL_COMPOSITE setup failed"], "rolled_back": true}
+
 	# ---- commit ------------------------------------------------------------------
 	for stack in stacks:
 		var entry: Dictionary = stack["entry"]
@@ -179,9 +195,91 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 		canonical.self_modulate = Color(1.0, 1.0, 1.0, 0.0)
 		_stacks[str(stack["key"])] = entry
 		_push_current_time(entry)
+	if not final_entry.is_empty():
+		_final_composite = final_entry
+		_push_final_time()
 	for key in _stacks.keys():
 		_update_stack(str(key))
-	return {"ok": errors.is_empty(), "targets": stacks.size(), "background": bg_index, "foreground": fg_index, "errors": errors}
+	return {"ok": errors.is_empty(), "targets": stacks.size(), "background": bg_index, "foreground": fg_index, "final_composite": 1 if not final_entry.is_empty() else 0, "final_layers": final_layers.size(), "errors": errors}
+
+func _collect_final_layers(stacks: Array) -> Array:
+	var out: Array = []
+	for stack_raw in stacks:
+		var stack: Dictionary = stack_raw
+		var entry: Dictionary = stack.get("entry", {})
+		for layer in entry.get("final_layers", []):
+			if layer is Dictionary:
+				out.append((layer as Dictionary).duplicate(true))
+	return out
+
+func _build_final_entry(final_layers: Array, _options := {}) -> Dictionary:
+	if not final_composite_supported():
+		return {"ok": false, "errors": ["FINAL_COMPOSITE unsupported: dedicated shader path is unavailable"]}
+	if final_layers.is_empty():
+		return {"ok": false, "errors": ["FINAL_COMPOSITE requires an explicit layer"]}
+	if final_layers.size() != 1:
+		return {"ok": false, "errors": ["only one explicit FINAL_COMPOSITE layer is supported per composition"]}
+	var layer: Dictionary = final_layers[0] if final_layers[0] is Dictionary else {}
+	if layer.is_empty() or str(layer.get("lane", "")) != "FINAL_COMPOSITE":
+		return {"ok": false, "errors": ["FINAL_COMPOSITE setup received a non-explicit layer"]}
+	var lane_result: Dictionary = FxOperatorsScript.validate_layer_lane(layer)
+	if not bool(lane_result.get("ok", false)):
+		return {"ok": false, "errors": lane_result.get("errors", [])}
+	if str(layer.get("type", "")) != "FX":
+		return {"ok": false, "errors": ["FINAL_COMPOSITE lane requires an FX layer"]}
+	var fx: Dictionary = layer.get("fx", {}) if layer.get("fx", {}) is Dictionary else {}
+	var amount := float(fx.get("final_tint_amount", 0.0))
+	if not is_finite(amount):
+		amount = 0.0
+	var opacity := float(layer.get("opacity", 1.0))
+	if not is_finite(opacity):
+		opacity = 1.0
+	var quad := ColorRect.new()
+	quad.name = "vnext_final_composite"
+	quad.color = Color.WHITE
+	quad.position = Vector2.ZERO
+	quad.size = CANVAS
+	quad.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	quad.z_index = 0
+	var material := ShaderMaterial.new()
+	material.shader = _final_shader
+	material.set_shader_parameter("final_tint_amount", clampf(amount, 0.0, 1.0) * clampf(opacity, 0.0, 1.0))
+	material.set_shader_parameter("final_tint_color", _color(fx.get("final_tint_color", [1.0, 1.0, 1.0, 1.0])))
+	material.set_shader_parameter("presentation_time", _last_time)
+	material.set_shader_parameter("free_run_time", _last_free)
+	material.set_shader_parameter("final_time_source", 1.0 if str(fx.get("time_source", "PRESENTATION_TIME")) == "FREE_RUN" else 0.0)
+	quad.material = material
+	var bbc := BackBufferCopy.new()
+	bbc.name = "vnext_final_bbc"
+	bbc.copy_mode = BackBufferCopy.COPY_MODE_VIEWPORT
+	return {"ok": true, "errors": [], "entry": {"node": quad, "backbuffer_copy": bbc, "layer_id": str(layer.get("layer_id", ""))}}
+
+func _attach_final_entry(root: Node, entry: Dictionary) -> bool:
+	if root == null or entry.is_empty():
+		return false
+	var bbc = entry.get("backbuffer_copy", null)
+	var quad = entry.get("node", null)
+	if not (bbc is BackBufferCopy) or not (quad is ColorRect) or not is_instance_valid(bbc) or not is_instance_valid(quad):
+		return false
+	var anchor := _foreground_anchor_index(root)
+	root.add_child(bbc)
+	root.move_child(bbc, clampi(anchor, 0, root.get_child_count() - 1))
+	root.add_child(quad)
+	_fit_quad_global(quad, root)
+	root.move_child(quad, clampi(bbc.get_index() + 1, 0, root.get_child_count() - 1))
+	return true
+
+func _cleanup_final_entry(entry: Dictionary) -> void:
+	if entry.is_empty():
+		return
+	for key in ["node", "backbuffer_copy"]:
+		var node = entry.get(key, null)
+		if is_instance_valid(node):
+			node.free()
+
+func clear_final_composite() -> void:
+	_cleanup_final_entry(_final_composite)
+	_final_composite = {}
 
 func _construct_stack(target_key: String, look: Dictionary) -> Dictionary:
 	# Builds every quad + offscreen stage + material wiring for one target.
@@ -193,13 +291,25 @@ func _construct_stack(target_key: String, look: Dictionary) -> Dictionary:
 	var canonical: TextureRect = node
 	var rect: Rect2 = FxTargetsScript.presentation_rect(canonical)
 	var tint: Color = canonical.get_meta("fx_source_tint", Color.WHITE)
-	var entry := {"quads": [], "input_quads": [], "input_viewports": [], "backbuffer_copies": [], "canonical": canonical}
+	var entry := {"quads": [], "input_quads": [], "input_viewports": [], "backbuffer_copies": [], "final_layers": [], "canonical": canonical}
 	_quad_asset_errors.clear()
 
 	var enabled_layers: Array = []
 	for raw in look.get("layers", []):
 		if raw is Dictionary and bool((raw as Dictionary).get("enabled", true)):
-			enabled_layers.append(raw)
+			var candidate: Dictionary = raw
+			var candidate_lane := FxOperatorsScript.lane_for_layer(candidate)
+			if candidate_lane == "FINAL_COMPOSITE":
+				var final_result: Dictionary = FxOperatorsScript.validate_layer_lane(candidate)
+				if not bool(final_result.get("ok", false)):
+					errors.append_array(final_result.get("errors", []))
+					continue
+				if str(candidate.get("type", "")) != "FX":
+					errors.append("FINAL_COMPOSITE lane requires an FX layer (%s)" % str(candidate.get("layer_id", "")))
+					continue
+				(entry["final_layers"] as Array).append(candidate)
+			else:
+				enabled_layers.append(candidate)
 	var viewport_consumers := 0
 	var has_transformed_consumer := false
 	for layer in enabled_layers:
@@ -339,6 +449,7 @@ func clear_target(target_key: String) -> void:
 func clear_all() -> void:
 	for key in _stacks.keys():
 		clear_target(str(key))
+	clear_final_composite()
 
 func has_stack(target_key: String) -> bool:
 	return _stacks.has(target_key)
@@ -360,6 +471,7 @@ func set_time(t: float) -> void:
 				(quad.material as ShaderMaterial).set_shader_parameter("fx_time", t)
 				_refresh_envelope(quad)
 		_update_stack(str(key))
+	_push_final_time()
 
 func set_clocks(presentation_time: float, free_run_time: float) -> void:
 	# Explicit clock bundle for integrations that own both transports.
@@ -425,6 +537,7 @@ func set_free_run(t: float) -> void:
 			var quad = quad_entry["node"]
 			if is_instance_valid(quad) and quad.material is ShaderMaterial:
 				(quad.material as ShaderMaterial).set_shader_parameter("free_time", t)
+	_push_final_time()
 
 # ---------------------------------------------------------------- internals
 
@@ -903,3 +1016,10 @@ func _vec2(value) -> Vector2:
 	if value is Array and (value as Array).size() >= 2:
 		return Vector2(float((value as Array)[0]), float((value as Array)[1]))
 	return Vector2.ZERO
+
+func _push_final_time() -> void:
+	var node = _final_composite.get("node", null)
+	if is_instance_valid(node) and node.material is ShaderMaterial:
+		var material: ShaderMaterial = node.material
+		material.set_shader_parameter("presentation_time", _last_time)
+		material.set_shader_parameter("free_run_time", _last_free)

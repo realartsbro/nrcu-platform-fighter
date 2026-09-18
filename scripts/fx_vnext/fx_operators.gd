@@ -4,15 +4,16 @@ extends RefCounted
 #
 # This is a capability registry, not a claim that every named effect is a
 # standalone implementation. Existing shader/model primitives are explicitly
-# marked ADAPTER_ONLY. FINAL_COMPOSITE and DEFERRED_3D are fail-closed until a
-# real implementation and evidence reference exist.
+# marked ADAPTER_ONLY. DEFERRED_3D remains fail-closed until a real
+# implementation and evidence reference exist.
 
 const CONTRACT_VERSION := "NRCU_FX_OPERATORS_V1"
+const FINAL_COMPOSITE_SHADER_PATH := "res://shaders/nrcu_fx_vnext_final_composite.gdshader"
 const SCOPES := ["LOCAL", "FINAL_COMPOSITE", "DEFERRED_3D"]
 const LANES := ["TARGET_LOCAL", "FINAL_COMPOSITE", "DEFERRED_3D"]
 const TIME_SOURCES := ["PRESENTATION_TIME", "FREE_RUN"]
 const COST_CLASSES := ["NONE", "LOW", "MEDIUM", "HIGH", "DEFERRED"]
-const STATUSES := ["ADAPTER_ONLY", "UNSUPPORTED", "DEFERRED"]
+const STATUSES := ["ADAPTER_ONLY", "SUPPORTED", "UNSUPPORTED", "DEFERRED"]
 
 # Stable order is part of the contract. Do not derive this from Dictionary
 # iteration or from the order in which a shader happens to expose uniforms.
@@ -106,8 +107,10 @@ static func validate_registry() -> Dictionary:
 			errors.append("invalid status: %s" % str(operator_id))
 		if str(row.get("scope", "")) == "LOCAL" and str(row.get("status", "")) != "ADAPTER_ONLY":
 			errors.append("local operator must be classified ADAPTER_ONLY: %s" % str(operator_id))
-		if str(row.get("scope", "")) == "FINAL_COMPOSITE" and str(row.get("status", "")) != "UNSUPPORTED":
-			errors.append("final-composite operator must be classified UNSUPPORTED: %s" % str(operator_id))
+		if str(row.get("scope", "")) == "FINAL_COMPOSITE":
+			var expected_final_status := "SUPPORTED" if final_composite_supported() else "UNSUPPORTED"
+			if str(row.get("status", "")) != expected_final_status:
+				errors.append("final-composite operator status is not truthful: %s" % str(operator_id))
 		if str(row.get("scope", "")) == "DEFERRED_3D" and str(row.get("status", "")) != "DEFERRED":
 			errors.append("3D operator must be classified DEFERRED: %s" % str(operator_id))
 		if str(row.get("cost_class", "")) not in COST_CLASSES:
@@ -126,13 +129,19 @@ static func cost_for_operator(operator_id: String) -> float:
 	return float(COST_WEIGHT_BY_CLASS.get(str(entry.get("cost_class", "NONE")), 0.0)) if not entry.is_empty() else 0.0
 
 static func final_composite_supported() -> bool:
-	return false
+	# Capability is tied to the dedicated shader resource. There is no plane
+	# alias or fallback path that can make a target-local quad count as final.
+	if not ResourceLoader.exists(FINAL_COMPOSITE_SHADER_PATH):
+		return false
+	return load(FINAL_COMPOSITE_SHADER_PATH) is Shader
 
 static func clock_contract() -> Dictionary:
 	return {
 		"time_sources": TIME_SOURCES.duplicate(),
 		"raw_builtin_allowed": false,
 		"supplied_uniform": "supplied_time",
+		"final_presentation_uniform": "presentation_time",
+		"final_free_run_uniform": "free_run_time",
 		"presentation_name": "PRESENTATION_TIME",
 		"free_run_name": "FREE_RUN",
 	}
@@ -180,8 +189,9 @@ static func validate_layer_lane(layer: Dictionary) -> Dictionary:
 		errors.append("plane %s cannot be represented as FINAL_COMPOSITE" % plane)
 		supported = false
 	if lane == "FINAL_COMPOSITE":
-		errors.append("FINAL_COMPOSITE lane is unsupported: no full-frame post-composition pass")
-		supported = false
+		if not final_composite_supported():
+			errors.append("FINAL_COMPOSITE lane is unsupported: dedicated full-frame shader path is unavailable")
+			supported = false
 	elif lane == "DEFERRED_3D":
 		errors.append("DEFERRED_3D lane is deferred: no 3D operator path")
 		supported = false
@@ -189,6 +199,8 @@ static func validate_layer_lane(layer: Dictionary) -> Dictionary:
 
 static func operator_ids_for_layer(layer: Dictionary) -> Array:
 	var ids: Array = []
+	if lane_for_layer(layer) == "FINAL_COMPOSITE":
+		ids.append("final_composite")
 	var layer_type := str(layer.get("type", ""))
 	if layer_type == "SOURCE_COPY":
 		ids.append("source_copy")
@@ -261,7 +273,7 @@ static func _build_registry() -> Dictionary:
 		_row("rgb", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", "tests/fx_vnext_capability_parity_test.gd", "RGB separation is applied on a target-local sampled quad."),
 		_row("flow", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", "tests/fx_vnext_capability_parity_test.gd", "Flow/driver motion is local and clocked by supplied uniforms."),
 		_row("motion_envelope", "LOCAL", ["PRESENTATION_TIME"], true, true, true, true, "LOW", "tests/fx_vnext_temporal_model_test.gd#TM-03", "Motion envelopes modulate local adapter amounts; event authority remains presentation-owned."),
-		_row("final_composite", "FINAL_COMPOSITE", ["PRESENTATION_TIME"], true, false, false, false, "DEFERRED", "tests/fx_vnext_operator_foundation_test.gd#lane", "No full-frame post-composition viewport/pass is implemented. FINAL_COMPOSITE is unsupported and fail-closed."),
+		_row("final_composite", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, final_composite_supported(), final_composite_supported(), final_composite_supported(), "LOW", "tests/fx_vnext_final_composite_test.gd#runtime", "Dedicated BackBufferCopy + full-canvas shader pass; neutral by default and clocked by supplied presentation/free-run uniforms."),
 		_row("deferred_3d", "DEFERRED_3D", ["PRESENTATION_TIME"], true, false, false, false, "DEFERRED", "tests/fx_vnext_operator_foundation_test.gd#registry", "No 3D/depth-aware operator path exists in this renderer; deferred rather than implied."),
 	]
 	var out: Dictionary = {}
@@ -284,7 +296,7 @@ static func _row(operator_id: String, scope: String, time_sources: Array, neutra
 		"cost_class": cost_class,
 		"test_evidence_reference": evidence,
 		"semantic_notes": notes,
-		"status": "ADAPTER_ONLY" if authoring_reachable else ("UNSUPPORTED" if scope == "FINAL_COMPOSITE" else "DEFERRED"),
+		"status": "SUPPORTED" if scope == "FINAL_COMPOSITE" and authoring_reachable else ("ADAPTER_ONLY" if authoring_reachable else ("UNSUPPORTED" if scope == "FINAL_COMPOSITE" else "DEFERRED")),
 	}
 
 static func _neutral_transform(transform: Dictionary) -> bool:
