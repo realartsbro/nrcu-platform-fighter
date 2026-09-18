@@ -62,6 +62,16 @@ func _init() -> void:
 	_check(bool(retire3["ok"]), "unused delete succeeds", str(retire3.get("errors", [])))
 	_check(not prod.list_look_ids().has("LOOK_D"), "look D removed")
 
+	# ---- disabled-only reference remains a real delete dependency -------------
+	var look_f: Dictionary = _make_look("LOOK_F", "Look F")
+	_check(bool(prod.apply({"look": look_f})["ok"]), "look F written")
+	var doc4: Dictionary = prod.load_assignments()["doc"]
+	var disabled_id := FxResolverScript.upsert_binding(doc4, {"fighter_id": "ice_mage", "element_role": "primary", "visual_side": "right"}, "LOOK_F", "disabled reference")
+	_check(FxResolverScript.set_binding_enabled(doc4, disabled_id, false), "disabled reference created")
+	_check(bool(prod.apply({"assignments": doc4})["ok"]), "disabled reference persisted")
+	var usage_f: Dictionary = prod.usage("LOOK_F")
+	_check(int(usage_f.get("count", 0)) == 0 and int(usage_f.get("total_count", 0)) == 1, "disabled-only usage stays delete-protected", str(usage_f))
+
 	# ---- rejected replace leaves everything byte-identical -----------------------
 	var look_e: Dictionary = _make_look("LOOK_E", "Look E")
 	_check(bool(prod.apply({"look": look_e})["ok"]), "look E written")
