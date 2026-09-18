@@ -30,6 +30,11 @@ uniform float wind_displace = 1.0; // driver-to-position displacement multiplier
 uniform float signal_gain = 1.35; // edge signal to visible grid energy multiplier
 uniform float color_blur = 0.0; // post-driver signal blur before colour selection, in source pixels
 uniform float temporal_hold = 0.0; // 0=continuous motion, >=1 snaps driver time to this FPS
+// The legacy shader is still used by the original VFX lab. It must not read
+// Godot's implicit shader clock because that bypasses presentation/free-run
+// ownership and makes replay/seek semantics unverifiable. The caller supplies
+// the selected clock explicitly.
+uniform float supplied_time = 0.0;
 uniform float signal_softness = 0.0; // softens grid on/off threshold to reduce isolated popping
 uniform float signal_posterize = 0.0; // 0=continuous signal, >1 quantizes colour energy into wave-like bands
 uniform float panel_edge_guard = 3.0; // ignore RGB-split edges this many px after side-panel start
@@ -736,7 +741,7 @@ float dither_at(vec2 uv){
 		return clamp(r*1.35-n*0.35,0.0,1.0);
 	}
 	if(dither_mode<3.5){
-		return rng(cell+floor(TIME*0.0));
+		return rng(cell+floor(supplied_time*0.0));
 	}
 	if(dither_mode<4.5){
 		float checker=mod(cell.x+cell.y,2.0);
@@ -789,10 +794,10 @@ void fragment(){
 		float radial_len=max(length(radial),0.0001);
 		radial/=radial_len;
 
-		float driver_time=TIME;
+		float driver_time=supplied_time;
 		if(temporal_hold>0.01){
 			float fps=max(temporal_hold,1.0);
-			driver_time=floor(TIME*fps)/fps;
+			driver_time=floor(supplied_time*fps)/fps;
 		}
 		vec2 grid_uv=dither_pixel>0.5?pixelate_uv(UV,dither_pixel,tex_size):UV;
 		vec2 st=grid_uv*3.0;

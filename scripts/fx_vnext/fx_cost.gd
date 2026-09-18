@@ -7,6 +7,7 @@ extends RefCounted
 # the FX stage amounts. Pure logic: no rendering, no UI.
 
 const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
+const FxOperatorsScript := preload("res://scripts/fx_vnext/fx_operators.gd")
 
 static func layer_cost(layer: Dictionary) -> Dictionary:
 	var factors: Array = []
@@ -75,20 +76,88 @@ static func layer_cost(layer: Dictionary) -> Dictionary:
 		cost *= fx_size
 		factors.append("fx size factor ×%.2f" % fx_size)
 
-	return {"layer_id": str(layer.get("layer_id", "")), "cost": cost, "factors": factors}
+	var operator_ids: Array = FxOperatorsScript.operator_ids_for_layer(layer)
+	var operator_costs: Dictionary = FxOperatorsScript.operator_costs_for_layer(layer)
+	var operator_cost := 0.0
+	for operator_id in _sorted_keys(operator_costs):
+		operator_cost += float(operator_costs[operator_id])
+	if operator_cost > 0.0:
+		cost += operator_cost
+		factors.append("named operators +%.2f" % operator_cost)
+	var lane_result: Dictionary = FxOperatorsScript.validate_layer_lane(layer)
+	var lane := str(lane_result.get("lane", ""))
+	var lane_supported := bool(lane_result.get("supported", false))
+	var lane_status := "SUPPORTED" if lane_supported else ("UNSUPPORTED" if lane in ["FINAL_COMPOSITE", ""] else "DEFERRED")
+	# Unsupported/deferred lanes have no rendered work to charge. The status is
+	# still surfaced so a zero cost cannot be mistaken for a supported pass.
+	var lane_cost := 0.0
+	var lane_costs: Dictionary = {}
+	if lane != "":
+		lane_costs[lane] = lane_cost
+	if not lane_supported:
+		factors.append("lane %s %s (no rendered cost)" % [lane if lane != "" else "INVALID", lane_status])
+	return {
+		"layer_id": str(layer.get("layer_id", "")),
+		"cost": cost,
+		"factors": factors,
+		"operator_ids": operator_ids,
+		"operator_cost": operator_cost,
+		"operator_costs": operator_costs,
+		"lane": lane,
+		"lane_supported": lane_supported,
+		"lane_status": lane_status,
+		"lane_cost": lane_cost,
+		"lane_costs": lane_costs,
+	}
 
 static func look_cost(doc: Dictionary) -> Dictionary:
 	var layers: Array = []
 	var total := 0.0
+	var operator_cost_total := 0.0
+	var lane_cost_total := 0.0
+	var operator_costs: Dictionary = {}
+	var lane_costs: Dictionary = {}
+	var unsupported_lanes: Array = []
 	for raw in doc.get("layers", []):
 		if not (raw is Dictionary) or not bool((raw as Dictionary).get("enabled", true)):
 			continue
 		var entry := layer_cost(raw)
 		layers.append(entry)
 		total += float(entry["cost"])
+		operator_cost_total += float(entry.get("operator_cost", 0.0))
+		lane_cost_total += float(entry.get("lane_cost", 0.0))
+		for operator_id in (entry.get("operator_costs", {}) as Dictionary).keys():
+			operator_costs[str(operator_id)] = float(operator_costs.get(str(operator_id), 0.0)) + float((entry["operator_costs"] as Dictionary)[operator_id])
+		for lane in (entry.get("lane_costs", {}) as Dictionary).keys():
+			lane_costs[str(lane)] = float(lane_costs.get(str(lane), 0.0)) + float((entry["lane_costs"] as Dictionary)[lane])
+		if not bool(entry.get("lane_supported", false)) and str(entry.get("lane", "")) not in unsupported_lanes:
+			unsupported_lanes.append(str(entry.get("lane", "")))
+	operator_costs = _sorted_dictionary(operator_costs)
+	lane_costs = _sorted_dictionary(lane_costs)
+	unsupported_lanes.sort()
 	var level := "LOW"
 	if total > 6.0:
 		level = "HIGH"
 	elif total > 3.0:
 		level = "MEDIUM"
-	return {"layers": layers, "total": total, "level": level}
+	return {
+		"layers": layers,
+		"total": total,
+		"level": level,
+		"operator_cost_total": operator_cost_total,
+		"operator_costs": operator_costs,
+		"lane_cost_total": lane_cost_total,
+		"lane_costs": lane_costs,
+		"unsupported_lanes": unsupported_lanes,
+	}
+
+static func _sorted_keys(values: Dictionary) -> Array:
+	var keys: Array = values.keys()
+	keys.sort()
+	return keys
+
+static func _sorted_dictionary(values: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for key in _sorted_keys(values):
+		out[str(key)] = values[key]
+	return out

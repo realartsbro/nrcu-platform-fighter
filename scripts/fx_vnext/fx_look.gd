@@ -8,6 +8,7 @@ extends RefCounted
 
 const SCHEMA := "NRCU_FX_LOOK_V0_4"
 const FxAssetsScript := preload("res://scripts/fx_vnext/fx_assets.gd")
+const FxOperatorsScript := preload("res://scripts/fx_vnext/fx_operators.gd")
 
 const TYPE_SOURCE := "SOURCE"
 const TYPE_SOURCE_COPY := "SOURCE_COPY"
@@ -21,6 +22,7 @@ const STATUSES := ["DRAFT", "PRODUCTION", "MIGRATION_REVIEW_REQUIRED"]
 const DISPLACEMENT_DRIVERS := ["NOISE", "DIRECTIONAL", "WAVE", "CELLULAR", "FRINGE_DRIVER", "CUSTOM_TEXTURE"]
 const EDGE_MODES := ["TRANSPARENT", "CLAMP", "MIRROR", "REPEAT"]
 const TIME_SOURCES := ["PRESENTATION_TIME", "FREE_RUN"]
+const LANES := ["TARGET_LOCAL", "FINAL_COMPOSITE", "DEFERRED_3D"]
 const MASK_SOURCES := ["NONE", "ORIGINAL_SOURCE_ALPHA", "POST_DISPLACEMENT_ALPHA", "CUSTOM_MASK"]
 const MASK_REGIONS := ["FULL", "EDGE_BAND", "OUTER_BAND", "INNER_BAND"]
 const MASK_SPACES := ["SOURCE_SPACE", "LAYER_SPACE", "PRESENTATION_SPACE"]
@@ -140,6 +142,9 @@ static func new_layer(type: String, name: String) -> Dictionary:
 		"opacity": 1.0,
 		"blend_mode": "NORMAL",
 		"plane": "TARGET_SOURCE" if type == TYPE_SOURCE else "TARGET_OVERLAY",
+		# Lane is explicit metadata. Existing planes remain on the target-local
+		# renderer path; FINAL_COMPOSITE is not inferred from plane names.
+		"lane": "TARGET_LOCAL",
 		"transform": neutral_transform(),
 		"displacement": neutral_displacement(),
 		"mask": neutral_mask(),
@@ -180,6 +185,7 @@ static func materialize(doc: Dictionary) -> Dictionary:
 		layer["opacity"] = float(layer.get("opacity", 1.0))
 		layer["blend_mode"] = str(layer.get("blend_mode", "NORMAL"))
 		layer["plane"] = str(layer.get("plane", "TARGET_SOURCE" if layer["type"] == TYPE_SOURCE else "TARGET_OVERLAY"))
+		layer["lane"] = str(layer.get("lane", FxOperatorsScript.lane_for_plane(str(layer["plane"]))))
 		layer["transform"] = _coerce_transform(_materialize_into(neutral_transform(), layer.get("transform", {})))
 		layer["displacement"] = _coerce_displacement(_materialize_into(neutral_displacement(), layer.get("displacement", {})))
 		layer["mask"] = _coerce_mask(_materialize_into(neutral_mask(), layer.get("mask", {})))
@@ -462,6 +468,10 @@ static func validate(doc: Dictionary) -> Dictionary:
 			errors.append("non-FX layer must not carry input (layer %s)" % layer_id)
 		if str(layer.get("plane", "")) not in PLANES:
 			errors.append("plane: invalid %s (layer %s)" % [str(layer.get("plane", "")), layer_id])
+		var lane_result: Dictionary = FxOperatorsScript.validate_layer_lane(layer)
+		errors.append_array(lane_result.get("errors", []))
+		if not bool(lane_result.get("ok", false)) and lane_result.get("errors", []).is_empty():
+			errors.append("lane: invalid (layer %s)" % layer_id)
 		if str(layer.get("blend_mode", "")) not in BLEND_MODES:
 			errors.append("blend_mode: invalid %s (layer %s)" % [str(layer.get("blend_mode", "")), layer_id])
 		var opacity := float(layer.get("opacity", -1.0))
@@ -1045,7 +1055,25 @@ static func is_serialized_normalized(doc: Dictionary) -> bool:
 	# Numeric-type tolerant comparison: `revision: 1` and `revision: 1.0` are the
 	# same normalized value (Godot's recursive container equality is type-strict,
 	# JSON loading widens all numbers to float).
-	return equivalent(materialize(doc), doc) or _legacy_v03_shape_is_normalized(doc)
+	if equivalent(materialize(doc), doc):
+		return true
+	# Lane metadata was added after the v0.4 production shape. An older document
+	# that omits lane is still normalized when every omitted lane resolves to the
+	# existing TARGET_LOCAL path; FINAL_COMPOSITE is never inferred.
+	var normalized := materialize(doc)
+	var legacy := doc.duplicate(true)
+	var normalized_without_lane := normalized.duplicate(true)
+	_strip_default_lanes(legacy)
+	_strip_default_lanes(normalized_without_lane)
+	return equivalent(normalized_without_lane, legacy) or _legacy_v03_shape_is_normalized(doc)
+
+static func _strip_default_lanes(doc: Dictionary) -> void:
+	for raw in doc.get("layers", []):
+		if not (raw is Dictionary):
+			continue
+		var layer: Dictionary = raw
+		if str(layer.get("lane", "")) == "TARGET_LOCAL":
+			layer.erase("lane")
 
 static func _legacy_v03_shape_is_normalized(doc: Dictionary) -> bool:
 	# vNEXT 0.1/0.2 looks used the serialized `fx_size`/`fx_intensity`

@@ -20,6 +20,7 @@ const SHADER_PATH := "res://shaders/nrcu_fx_vnext_layer.gdshader"
 const CANVAS := Vector2(1280.0, 720.0)
 const FxTargetsScript := preload("res://scripts/fx_vnext/fx_targets.gd")
 const FxAssetsScript := preload("res://scripts/fx_vnext/fx_assets.gd")
+const FxOperatorsScript := preload("res://scripts/fx_vnext/fx_operators.gd")
 
 const OFFSET_INPUTS := ["LAYER_BELOW", "COMPOSITE_BELOW"]
 const SUPPORTED_INPUTS := ["ORIGINAL_SOURCE", "TRANSFORMED_SOURCE", "LAYER_BELOW", "COMPOSITE_BELOW"]
@@ -68,6 +69,24 @@ func apply_look(target_key: String, look: Dictionary) -> Dictionary:
 	_push_current_time(entry)
 	_update_stack(target_key)
 	return {"ok": true, "errors": []}
+
+func final_composite_supported() -> bool:
+	# Explicit capability query: callers must not infer final-frame support from
+	# COMPOSITION_BACKGROUND/FOREGROUND planes.
+	return FxOperatorsScript.final_composite_supported()
+
+func final_composite_status() -> Dictionary:
+	return {
+		"lane": "FINAL_COMPOSITE",
+		"supported": final_composite_supported(),
+		"ok": false,
+		"errors": ["FINAL_COMPOSITE unsupported: no full-frame post-composition viewport/pass"],
+	}
+
+func apply_final_composite(plan: Array, options := {}) -> Dictionary:
+	# There is intentionally no fallback to a composition plane. Such a fallback
+	# would make a per-target quad look like a final-frame operator.
+	return final_composite_status()
 
 func apply_composition(plan: Array, options := {}) -> Dictionary:
 	# ONE pass for the whole visible composition (Round-2 Finding 1). plan is a
@@ -209,6 +228,10 @@ func _construct_stack(target_key: String, look: Dictionary) -> Dictionary:
 		if layer_type == "FX" and input in OFFSET_INPUTS and _uses_offscreen_input(enabled_layers, index):
 			errors.append("nested offscreen inputs are not supported yet (%s)" % str(layer.get("layer_id", "")))
 		var plane := str(layer.get("plane", "TARGET_SOURCE"))
+		var lane_result: Dictionary = FxOperatorsScript.validate_layer_lane(layer)
+		var lane := str(lane_result.get("lane", ""))
+		if not bool(lane_result.get("ok", false)):
+			errors.append_array(lane_result.get("errors", []))
 		var quad := _make_quad(canonical, rect, tint, layer)
 		if layer_type == "FX" and input == "TRANSFORMED_SOURCE" and transformed_stage != null:
 			var t_material := quad.material as ShaderMaterial
@@ -237,6 +260,7 @@ func _construct_stack(target_key: String, look: Dictionary) -> Dictionary:
 			"node": quad,
 			"layer_id": str(layer.get("layer_id", "")),
 			"plane": plane,
+			"lane": lane,
 			"blend": blend,
 			"layer_flip_x": bool(transform.get("flip_x", false)),
 			"layer_flip_y": bool(transform.get("flip_y", false)),
@@ -325,6 +349,8 @@ func stack_quads(target_key: String) -> Array:
 	return _stacks[target_key].get("quads", [])
 
 func set_time(t: float) -> void:
+	# PRESENTATION_TIME is supplied by the owning transport; never use an
+	# implicit shader TIME source.
 	_last_time = t
 	for key in _stacks.keys():
 		for quad_entry in _all_quad_entries(_stacks[key]):
@@ -334,6 +360,14 @@ func set_time(t: float) -> void:
 				(quad.material as ShaderMaterial).set_shader_parameter("fx_time", t)
 				_refresh_envelope(quad)
 		_update_stack(str(key))
+
+func set_clocks(presentation_time: float, free_run_time: float) -> void:
+	# Explicit clock bundle for integrations that own both transports.
+	set_time(presentation_time)
+	set_free_run(free_run_time)
+
+func clock_state() -> Dictionary:
+	return {"presentation_time": _last_time, "free_run_time": _last_free}
 
 # UI-04: debug view actually switches renderer output. The shader has long
 # implemented modes 0..6; the renderer never drove the uniform (silent no-op).

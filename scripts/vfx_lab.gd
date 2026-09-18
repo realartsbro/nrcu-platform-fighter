@@ -119,6 +119,9 @@ var color_pickers := {}
 var debug_shader: Shader
 var debug_mode := 0
 var mask_preview_time := 0.0
+# Explicit FREE_RUN clock for the legacy dither shader. The shader never reads
+# Godot's implicit shader clock; this caller owns the supplied clock.
+var _legacy_free_run_time := 0.0
 var ui_dirty_enabled := false
 var suppress_dirty := false
 var current_preset_name := ""
@@ -189,6 +192,9 @@ func _process(dt: float) -> void:
 		mask_preview_time -= dt
 		if mask_preview_time <= 0.0:
 			mat.set_shader_parameter("rgb_mask_preview", 0.0)
+	_legacy_free_run_time += dt
+	if mat != null:
+		mat.set_shader_parameter("supplied_time", _legacy_free_run_time)
 	_apply_shader_inputs()
 
 

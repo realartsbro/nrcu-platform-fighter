@@ -362,6 +362,15 @@
             "COMPOSITION_FOREGROUND"
           ]
         },
+        "lane": {
+          "enum": [
+            "TARGET_LOCAL",
+            "FINAL_COMPOSITE",
+            "DEFERRED_3D"
+          ],
+          "default": "TARGET_LOCAL",
+          "description": "Explicit execution lane. Omitted legacy layers are interpreted as TARGET_LOCAL; FINAL_COMPOSITE and DEFERRED_3D remain fail-closed until implemented."
+        },
         "input": {
           "enum": [
             "ORIGINAL_SOURCE",
