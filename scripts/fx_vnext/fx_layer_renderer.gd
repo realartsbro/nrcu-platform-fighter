@@ -171,7 +171,7 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 	# ---- pass 3: all composition-background layers (deterministic order) --------
 	# The anchor is resolved after target-local placement so the background group
 	# sits above every local target surface but remains below the foreground group.
-	var background_anchor := _background_anchor_index(root)
+	var background_anchor := _foreground_anchor_index(root)
 	for stack in stacks:
 		for quad_entry in stack["entry"].get("quads", []):
 			if str(quad_entry.get("plane", "")) != "COMPOSITION_BACKGROUND":
