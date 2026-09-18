@@ -34,6 +34,7 @@ func _init() -> void:
 	for size in [Vector2i(1280, 720), Vector2i(1440, 900), Vector2i(1600, 900), Vector2i(1920, 1080)]:
 		root.size = size
 		await settle(25)
+		_assert_whole_window(size)
 		for tab in ["LOOK", "MOTION", "PALETTE", "ADVANCED"]:
 			_select_tab(tab)
 			await settle(15)
@@ -99,6 +100,47 @@ func _active_page(tab_name: String) -> Control:
 			return child
 	return null
 
+# P0 UI shell: the whole lab must live inside the real window client rect
+# (a stale 1600x900 counter-scale once zoomed everything to 125% at
+# 1280x720 while inspector-relative checks stayed green — whole-window
+# reachability needs final/global transforms, never local rects alone).
+func _assert_whole_window(size: Vector2i) -> void:
+	var tag := "SHELL@%dx%d" % [size.x, size.y]
+	var win := Rect2(Vector2.ZERO, Vector2(root.size))
+	_check(Rect2(shell.get_global_rect()).intersects(win), "UI-Resp %s shell presented" % tag)
+	# Net visual scale must be ~1.0 (native pixels): engine stretch times
+	# the shell counter-scale. Never assert the counter alone (it is 1/1.5
+	# at a 1920 window with a 1280 base — exactly correct).
+	var engine := root.get_final_transform().get_scale()
+	var sc: Vector2 = (shell as Control).scale
+	var net := Vector2(sc.x * engine.x, sc.y * engine.y)
+	_check(absf(net.x - 1.0) < 0.03 and absf(net.y - 1.0) < 0.03, "UI-Resp %s net scale is native" % [tag, str(net)])
+	# Geometry below compares PHYSICAL pixels: canvas rects times the
+	# engine scale (comparing canvas units to window units directly once
+	# faked 34px of toolbar overflow and hid real click heights).
+	var tol := 2.0
+	var regions := {
+		"shell": _px(shell.get_global_rect()),
+		"toolbar": _px(shell.toolbar.get_global_rect()),
+		"preview": _px(shell.viewport_host.get_global_rect()),
+		"dock": _px(shell.dock.get_global_rect()),
+		"timeline": _px(shell.timeline_panel.get_global_rect()),
+	}
+	if (shell.browser_panel as Control).is_visible_in_tree():
+		regions["browser"] = _px((shell.browser_panel as Control).get_global_rect())
+	elif (shell.browser_rail as Control).is_visible_in_tree():
+		regions["browser-rail"] = _px((shell.browser_rail as Control).get_global_rect())
+	for key in regions.keys():
+		var r: Rect2 = regions[key]
+		var inside := r.position.x >= win.position.x - tol and r.position.y >= win.position.y - tol and r.end.x <= win.end.x + tol and r.end.y <= win.end.y + tol
+		_check(inside, "UI-Resp %s %s inside window" % [tag, str(key)], str(r))
+
+func _px(r: Rect2) -> Rect2:
+	# Canvas units -> physical window pixels via the real stretch transform.
+	# (SceneTree root: no get_tree() here.)
+	var e: Vector2 = root.get_final_transform().get_scale()
+	return Rect2(r.position * e, r.size * e)
+
 func _assert_tab(tab_name: String, size: Vector2i) -> void:
 	var tag := "%s@%dx%d" % [tab_name, size.x, size.y]
 	_check(root.size == size, "UI-Resp %s window size applied" % tag, str(root.size))
@@ -109,7 +151,7 @@ func _assert_tab(tab_name: String, size: Vector2i) -> void:
 	# Geometry authority: the inspector ScrollContainer's visible rect, NOT
 	# the whole window (a 600px control can overflow a 390px dock while the
 	# window is 1280px wide — the old assertion was a false green).
-	var view := _inspector_view_rect()
+	var view := _px(_inspector_view_rect())
 	_check(view.size.x > 50.0, "UI-Resp %s inspector viewport found" % tag, str(view))
 	var bad_w := 0
 	var bad_h := 0
@@ -119,7 +161,7 @@ func _assert_tab(tab_name: String, size: Vector2i) -> void:
 			if not (child as Control).is_visible_in_tree():
 				continue
 			n += 1
-			var r: Rect2 = (child as Control).get_global_rect()
+			var r: Rect2 = _px((child as Control).get_global_rect())
 			# Left AND right clip edges against the visible viewport.
 			if r.position.x < view.position.x - 1.0 or r.end.x > view.end.x + 1.0:
 				bad_w += 1
@@ -159,7 +201,7 @@ func _no_sibling_overlap(page: Control) -> bool:
 			var rects: Array = []
 			for sub in (child as BoxContainer).get_children():
 				if sub is Control and (sub as Control).is_visible_in_tree():
-					rects.append((sub as Control).get_global_rect())
+					rects.append(_px((sub as Control).get_global_rect()))
 			for i in range(rects.size()):
 				for j in range(i + 1, rects.size()):
 					var a: Rect2 = rects[i]
@@ -192,30 +234,49 @@ func _scroll_reaches_ends(page: Control) -> bool:
 	await process_frame
 	await process_frame
 	var r1: Rect2 = (probe as Control).get_global_rect() if probe != null else Rect2()
-	var view: Rect2 = scroll.get_global_rect()
+	var view: Rect2 = _px(scroll.get_global_rect())
 	# The LAST control of the active page must be bringable into view.
 	var last = _last_control(page)
 	var last_ok := false
 	var detail := "no-last"
 	if last != null:
-		# User-facing capability: the container can bring any control into
-		# view (a footer below the tabs makes raw max-scroll overshoot the
-		# page end, so max-scroll alone proves nothing either way).
+		# User-facing capability: the container can bring any control FULLY
+		# into view (a footer below the tabs makes raw max-scroll overshoot
+		# the page end, so max-scroll alone proves nothing either way).
+		# A merely intersecting sliver is NOT reachable: require full
+		# containment inside the clip rect.
 		scroll.ensure_control_visible(last as Control)
 		await process_frame
 		await process_frame
 		await process_frame
 		await process_frame
-		var lr: Rect2 = (last as Control).get_global_rect()
+		var lr: Rect2 = _px((last as Control).get_global_rect())
 		detail = str(lr)
-		last_ok = view.intersects(lr)
+		last_ok = lr.position.y >= view.position.y - tol() and lr.end.y <= view.end.y + tol()
 	if not last_ok:
 		print("SCROLLMISS view=%s last=%s page=%s" % [str(view), detail, str(page.get_path())])
+		return false
+	# And back to top: the FIRST control must be fully visible too.
+	var first = _first_control(page)
+	if first == null:
+		return false
+	scroll.ensure_control_visible(first as Control)
+	await process_frame
+	await process_frame
+	await process_frame
+	await process_frame
+	var fr: Rect2 = _px((first as Control).get_global_rect())
+	var first_ok := fr.position.y >= view.position.y - tol() and fr.end.y <= view.end.y + tol()
+	if not first_ok:
+		print("SCROLLMISS-TOP view=%s first=%s page=%s" % [str(view), str(fr), str(page.get_path())])
 	bar.value = bar.min_value
 	scroll.scroll_vertical = 0
 	await process_frame
 	await process_frame
-	return last_ok
+	return first_ok
+
+func tol() -> float:
+	return 2.0
 
 func _first_control(node: Node):
 	for child in _walk(node):

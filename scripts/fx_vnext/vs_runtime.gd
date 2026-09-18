@@ -1,5 +1,5 @@
 extends Control
-# NRCU FX Lab vNEXT — ACTUAL VS runtime scene (Round-2 Finding 1).
+# NRCU FX Lab vNEXT — REFERENCE production-consumer scene (Round-2 Finding 1).
 #
 # Lifecycle label: PREVIEW / REFERENCE consumption path. This scene mounts
 # its screen with fx_preview_no_teardown, so seeks past minimum_exposure

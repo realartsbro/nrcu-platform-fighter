@@ -37,7 +37,6 @@ var shell: Control
 var shots: Array = []
 var preview_measurements: Array = []
 var rail_width := 1440.0
-var overflow_width := 1560.0
 var tall_timeline_height := 800.0
 
 func _init() -> void:
@@ -62,10 +61,12 @@ func _init() -> void:
 	_check(shell.has_method("_apply_browser_mode") and shell.has_method("_toggle_browser") and shell.has_method("_toggle_dock") and shell.has_method("_toggle_timeline_expanded"),
 		"shell exposes the responsive API", "lab_shell.gd")
 	rail_width = float(shell.AUTO_RAIL_WIDTH)
-	overflow_width = float(shell.OVERFLOW_WIDTH)
 	tall_timeline_height = float(shell.AUTO_TIMELINE_COLLAPSE_HEIGHT)
-	_check(absf(rail_width - 1440.0) < 0.001 and absf(overflow_width - 1560.0) < 0.001 and absf(tall_timeline_height - 800.0) < 0.001,
-		"responsive thresholds match the accepted contract", "rail=%.0f overflow=%.0f tall=%.0f" % [rail_width, overflow_width, tall_timeline_height])
+	_check(absf(rail_width - 1440.0) < 0.001 and absf(tall_timeline_height - 800.0) < 0.001,
+		"responsive thresholds match the accepted contract", "rail=%.0f tall=%.0f" % [rail_width, tall_timeline_height])
+	# Toolbar overflow is dynamic (measured fit, no static width tier):
+	# at the default narrow test window the menu must carry actions.
+	shell._toolbar_overflow()
 	_check(shell.toolbar != null and shell.browser_panel != null and shell.preview_area != null and shell.dock != null and shell.timeline_panel != null,
 		"shell exposes toolbar / browser / preview / dock / timeline", "lab_shell.gd")
 	_check(shell.overflow_button != null and shell.overflow_button.get_popup().item_count >= 1,
@@ -147,10 +148,15 @@ func _surface(spec: Array, label: String) -> void:
 		"[%s] browser pane follows the responsive rule at %s" % [label, tag],
 		"rail=%s browser=%s expected_rail=%s" % [str(shell.browser_rail.visible), str(shell.browser.visible), str(rail_expected)])
 
-	var overflow_expected: bool = float(actual.x) < overflow_width
-	_check(bool(shell.overflow_button.visible) == overflow_expected and bool(shell.remount_button.visible) == not overflow_expected,
-		"[%s] secondary actions move to the overflow menu at %s" % [label, tag],
-		"overflow=%s inline=%s" % [str(shell.overflow_button.visible), str(shell.remount_button.visible)])
+	# Dynamic overflow contract: the toolbar always fits, and the menu exists
+	# exactly when pool buttons are collapsed into it.
+	_check(float(shell.toolbar.get_combined_minimum_size().x) <= float(actual.x) + 1.0,
+		"[%s] toolbar fits the window at %s" % [label, tag],
+		"min=%.0f window=%d" % [float(shell.toolbar.get_combined_minimum_size().x), actual.x])
+	var pool_hidden: bool = not bool(shell.remount_button.visible) or not bool(shell.review_button.visible) or not bool(shell.preset_authoring.visible) or not bool(shell.preset_preview.visible)
+	_check(bool(shell.overflow_button.visible) == pool_hidden,
+		"[%s] overflow menu matches collapsed pool at %s" % [label, tag],
+		"overflow=%s items=%d" % [str(shell.overflow_button.visible), shell.overflow_button.get_popup().item_count])
 
 	_check(shell.play_button != null and shell.play_button.is_visible_in_tree() and _reachable(shell.play_button),
 		"[%s] play control reachable at %s" % [label, tag])
@@ -196,8 +202,7 @@ func _case_rapid_resize() -> void:
 	_check(outside.is_empty(), "rapid resize: no control outside the window", str(outside.slice(0, 4)))
 	var rail_expected: bool = float(actual.x) < rail_width
 	_check(bool(shell.browser_rail.visible) == rail_expected, "rapid resize: browser state matches the final width", "rail=%s width=%d" % [str(shell.browser_rail.visible), actual.x])
-	var overflow_expected: bool = float(actual.x) < overflow_width
-	_check(bool(shell.overflow_button.visible) == overflow_expected, "rapid resize: overflow state matches the final width", "overflow=%s width=%d" % [str(shell.overflow_button.visible), actual.x])
+	_check(float(shell.toolbar.get_combined_minimum_size().x) <= float(actual.x) + 1.0, "rapid resize: toolbar fits the final width", "min=%.0f width=%d" % [float(shell.toolbar.get_combined_minimum_size().x), actual.x])
 
 func _case_maximize_restore() -> void:
 	var before := _actual_size()

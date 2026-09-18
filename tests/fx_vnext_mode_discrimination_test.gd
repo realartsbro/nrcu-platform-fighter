@@ -1,8 +1,7 @@
 extends SceneTree
-# Researcher E: enum indices must visibly discriminate — each authorable mode
-# renders observably different output (no dead options, no hidden capability).
-# Direct ScreenRuntime + shared renderer (no shell), paused deterministic
-# screen, window capture (the proven readback path).
+# Researcher E: EVERY authorable mode discriminates — full chains per family
+# (mono/dither/fringe 0..5, bayer 1..5), each index against a semantic
+# neighbor, plus a quiet-floor proof. Labels must match visible behavior.
 
 const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
 const FxScreenRuntimeScript := preload("res://scripts/fx_vnext/fx_screen_runtime.gd")
@@ -14,6 +13,7 @@ var failures := 0
 var out_dir: String
 var rt
 var renderer
+var floor := 0.0
 
 func _init() -> void:
 	out_dir = ProjectSettings.globalize_path("res://evidence/vnext_build/mode_discrimination")
@@ -33,10 +33,25 @@ func _init() -> void:
 	rt.seek(1.0)
 	await settle(10)
 	renderer = FxLayerRendererScript.new(rt.screen, rt.registry)
-	await _family_mono()
-	await _family_dither()
-	await _family_fringe()
-	await _family_bayer()
+	await _floor_proof()
+	# Mono family carries its own threshold content (base stamp).
+	await _chain({"base_mode": 1.0, "mono_threshold": 0.5}, "mono_mode", [0.0, 1.0, 2.0, 3.0, 4.0, 5.0], "mono", false, [])
+	# Dither pairs: adjacent where the signal carries; modes 2/3 against
+	# baseline (both noise-like, mutually weak on dark content).
+	await _chain({"dither": 4.0, "dither_levels": 2.0, "dither_pixel": 32.0}, "dither_mode", [0.0, 1.0, 2.0, 3.0, 4.0, 5.0], "dither", true, [[0, 1], [1, 2], [2, 0], [3, 0], [3, 4], [4, 5]])
+	# Fringe family on the strong fringe signal.
+	await _chain({"fringe": 2.5, "edge_width": 12.0}, "fringe_coverage_mode", [0.0, 1.0, 2.0, 3.0, 4.0, 5.0], "fringe", false, [])
+	# Bayer levels share early_bayer_level(): adjacent highs converge by
+	# construction, so every level proves against the L1 baseline on the
+	# strong fringe path (function); per-family uniform arrival below
+	# proves each wiring (mono/dither/fringe level uniforms).
+	await _chain({"fringe": 2.5, "edge_width": 12.0, "fringe_coverage_mode": 1.0}, "fringe_bayer_level", [1.0, 2.0, 3.0, 4.0, 5.0], "bayer", true, [[1, 0], [2, 0], [3, 0], [4, 0]])
+	await _level_param({"base_mode": 1.0, "mono_threshold": 0.5, "mono_bayer_level": 1.0}, "mono_bayer_level", 1.0)
+	await _level_param({"base_mode": 1.0, "mono_threshold": 0.5, "mono_bayer_level": 5.0}, "mono_bayer_level", 5.0)
+	await _level_param({"dither": 4.0, "dither_bayer_level": 1.0}, "dither_bayer_level", 1.0)
+	await _level_param({"dither": 4.0, "dither_bayer_level": 5.0}, "dither_bayer_level", 5.0)
+	await _level_param({"fringe": 2.5, "edge_width": 12.0, "fringe_coverage_mode": 1.0, "fringe_bayer_level": 1.0}, "fringe_bayer_level", 1.0)
+	await _level_param({"fringe": 2.5, "edge_width": 12.0, "fringe_coverage_mode": 1.0, "fringe_bayer_level": 5.0}, "fringe_bayer_level", 5.0)
 	print("[FX-MODE-DISCRIMINATION] done · checks=%d failures=%d" % [checks.size(), failures])
 	quit(1 if failures > 0 else 0)
 
@@ -46,7 +61,7 @@ func _base_fx() -> Dictionary:
 	return fx
 
 func _look_with(patch: Dictionary) -> Dictionary:
-	var look: Dictionary = FxLookScript.new_look("DISC_%d" % int(Time.get_unix_time_from_system() * 1000.0) % 100000, "disc")
+	var look: Dictionary = FxLookScript.new_look("DISC%d" % (int(Time.get_unix_time_from_system() * 1000.0) % 1000000), "disc")
 	var layer: Dictionary = FxLookScript.new_layer("FX", "disc")
 	var fx: Dictionary = layer["fx"]
 	var base := _base_fx()
@@ -65,48 +80,47 @@ func _shot(name: String, fx_patch: Dictionary) -> Image:
 	img.save_png(out_dir.path_join(name + ".png"))
 	return img
 
-func _family_mono() -> void:
-	# base_mode=1 (MONO STAMP) isolates mono; other families stay neutral.
-	var p0 := {"base_mode": 1.0, "mono_threshold": 0.5, "mono_mode": 0.0}
-	var p1 := {"base_mode": 1.0, "mono_threshold": 0.5, "mono_mode": 1.0}
-	var p5 := {"base_mode": 1.0, "mono_threshold": 0.5, "mono_mode": 5.0}
-	var a := await _shot("mono_hard", p0)
-	var b := await _shot("mono_bayer", p1)
-	var c := await _shot("mono_invhalf", p5)
-	_check(_diff(a, b) > 0.001, "E mono HARD vs BAYER discriminates", "mean=%.5f" % _diff(a, b))
-	_check(_diff(b, c) > 0.001, "E mono BAYER vs mode-5 discriminates", "mean=%.5f" % _diff(b, c))
-
-func _family_dither() -> void:
-	# Coarse 32px blocks: HARD quantizes uniformly while BAYER offsets each
-	# block coherently — block tones must differ visibly.
-	var p0 := {"dither": 4.0, "dither_levels": 2.0, "dither_pixel": 32.0, "dither_mode": 0.0}
-	var p1 := {"dither": 4.0, "dither_levels": 2.0, "dither_pixel": 32.0, "dither_mode": 1.0}
-	var a := await _shot("dither_hard", p0)
-	var b := await _shot("dither_bayer", p1)
-	var b2 := await _shot("dither_bayer_again", p1)
-	var floor := _diff(b, b2)
+func _floor_proof() -> void:
+	var p := {"dither": 4.0, "dither_levels": 2.0, "dither_pixel": 32.0, "dither_mode": 1.0}
+	var b := await _shot("floor_a", p)
+	var b2 := await _shot("floor_b", p)
+	floor = _diff(b, b2)
 	_check(floor < 0.0002, "E readback floor is quiet", "mean=%.6f" % floor)
-	# Researcher-sanctioned ROI: the styled target's own rect (global means
-	# dilute localized FX on dark content; the target ROI does not).
-	var roi := _diff_target(a, b, "echo_left")
-	_check(roi > 0.001 and roi > floor * 5.0, "E dither HARD vs BAYER discriminates on target", "roi=%.5f floor=%.6f" % [roi, floor])
 
-func _family_fringe() -> void:
-	var p0 := {"fringe": 2.5, "edge_width": 12.0, "fringe_coverage_mode": 0.0}
-	var p4 := {"fringe": 2.5, "edge_width": 12.0, "fringe_coverage_mode": 4.0}
-	var a := await _shot("fringe_smooth", p0)
-	var b := await _shot("fringe_checker", p4)
-	_check(_diff(a, b) > 0.001, "E fringe SMOOTH vs CHECKER discriminates", "mean=%.5f" % _diff(a, b))
+func _chain(base: Dictionary, key: String, values: Array, tag: String, use_roi := false, pairs: Array = []) -> void:
+	var shots: Array = []
+	for v in values:
+		var patch := base.duplicate()
+		patch[key] = float(v)
+		shots.append(await _shot("%s_%s_%g" % [tag, key, float(v)], patch))
+	var links: Array = pairs
+	if links.is_empty():
+		for i in range(1, shots.size()):
+			links.append([i - 1, i])
+	for link in links:
+		var i: int = int((link as Array)[0])
+		var j: int = int((link as Array)[1])
+		var d := _diff_target(shots[i], shots[j], "echo_left") if use_roi else _diff(shots[i], shots[j])
+		_check(d > 0.001 and d > floor * 5.0, "E %s %s vs %s discriminates" % [tag, str(values[i]), str(values[j])], "mean=%.5f floor=%.6f" % [d, floor])
 
-func _family_bayer() -> void:
-	# Levels share early_bayer_level() across mono/dither/fringe. The dither
-	# path sits on dark content (few quantization borderlines), so the level
-	# proof rides the strong fringe signal: BAYER coverage with level 1 vs 5.
-	var p1 := {"fringe": 2.5, "edge_width": 12.0, "fringe_coverage_mode": 1.0, "fringe_bayer_level": 1.0}
-	var p5 := {"fringe": 2.5, "edge_width": 12.0, "fringe_coverage_mode": 1.0, "fringe_bayer_level": 5.0}
-	var a := await _shot("bayer_l1", p1)
-	var b := await _shot("bayer_l5", p5)
-	_check(_diff(a, b) > 0.001, "E bayer level 1 vs 5 discriminates", "mean=%.5f" % _diff(a, b))
+func _level_param(fx_patch: Dictionary, uniform: String, want: float) -> void:
+	# Wiring proof per family uniform: the authored level must arrive at
+	# SOME material (any-match: neutral SOURCE quads keep defaults).
+	renderer.apply_composition([{"key": "echo_left", "look": _look_with(fx_patch)}])
+	renderer.set_time(1.0)
+	await settle(4)
+	var hit := false
+	var seen := ""
+	var stacks: Dictionary = renderer.get("_stacks")
+	for key in stacks.keys():
+		for quad_entry in ((stacks[key] as Dictionary).get("quads", []) as Array):
+			var quad = (quad_entry as Dictionary).get("node")
+			if quad != null and is_instance_valid(quad) and (quad as Control).material is ShaderMaterial:
+				var v := float(((quad as Control).material as ShaderMaterial).get_shader_parameter(uniform))
+				seen += "%.2f " % v
+				if absf(v - want) < 0.001:
+					hit = true
+	_check(hit, "E %s reaches the material" % uniform, "want=%.2f seen=[%s]" % [want, seen])
 
 func _diff(a: Image, b: Image) -> float:
 	if a.get_width() != b.get_width() or a.get_height() != b.get_height():

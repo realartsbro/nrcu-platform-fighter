@@ -26,7 +26,6 @@ const TIMELINE_LEN := 2.4
 const FRAME_STEP := 1.0 / 30.0
 const AUTO_RAIL_WIDTH := 1440.0
 const AUTO_TIMELINE_COLLAPSE_HEIGHT := 800.0
-const OVERFLOW_WIDTH := 1560.0
 
 var ws
 var runtime
@@ -221,16 +220,23 @@ func _on_window_size_changed() -> void:
 		_on_resized()
 
 func _update_pixel_space() -> void:
-	# The project uses canvas_items stretch with a fixed 1600×900 canvas, so the
-	# engine would scale the whole UI. The lab is a desktop authoring tool: it
-	# lays out in native window pixels instead (specs/01 responsive acceptance),
-	# by counter-scaling itself against the engine scale. Net rendering scale
-	# is 1:1; input coordinates stay pixel-true.
+	# The project uses canvas_items stretch, so the engine scales the whole
+	# UI whenever the window differs from the stretch base. The lab is a
+	# desktop authoring tool: it lays out in native window pixels instead
+	# (specs/01 responsive acceptance), by counter-scaling itself against
+	# the REAL canvas transform — never a hardcoded base resolution (a stale
+	# 1600x900 assumption once zoomed the whole shell to 125% at 1280x720).
+	# Net rendering scale is 1:1; input coordinates stay pixel-true.
+	if not is_inside_tree():
+		return
 	var win := Vector2(DisplayServer.window_get_size())
 	if win.x < 10.0 or win.y < 10.0:
 		return
-	var engine_scale := minf(win.x / 1600.0, win.y / 900.0)
-	var counter := 1.0 / maxf(engine_scale, 0.0001)
+	var engine_scale := get_tree().root.get_final_transform().get_scale()
+	var s := minf(engine_scale.x, engine_scale.y)
+	if s <= 0.0 or not is_finite(s):
+		return
+	var counter := 1.0 / s
 	set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 	position = Vector2.ZERO
 	size = win
@@ -322,11 +328,8 @@ func _build_toolbar(parent: Node) -> void:
 	overflow_button.text = "⋯"
 	overflow_button.custom_minimum_size.x = 40
 	overflow_button.add_theme_font_size_override("font_size", UiTokens.T_META)
-	overflow_button.get_popup().add_item("⟲ REMOUNT", 1)
-	overflow_button.get_popup().id_pressed.connect(func(id: int) -> void:
-		if id == 1:
-			_remount_current()
-	)
+	# Items are rebuilt by _toolbar_overflow() (dynamic overflow set);
+	# dispatch lives in _on_toolbar_overflow_chosen (single connection).
 	toolbar.add_child(overflow_button)
 
 func _toolbar_button(text: String, callback: Callable) -> Button:
@@ -819,10 +822,54 @@ func _apply_layers_split() -> void:
 func _toolbar_overflow() -> void:
 	if toolbar == null:
 		return
-	var wide := size.x >= OVERFLOW_WIDTH
 	brand_label.visible = size.x >= 1240.0
-	remount_button.visible = wide
-	overflow_button.visible = not wide
+	# Dynamic overflow: collapse least-critical buttons into the "⋯" menu
+	# until the toolbar fits the real window width. Static width tiers are
+	# whack-a-mole across DPIs and fonts; measuring is the only honest gate
+	# (the 1280 minimum window once clipped 34px off the toolbar).
+	var pool: Array = [
+		[remount_button, "⟲ REMOUNT", _remount_current],
+		[review_button, "⚠ REVIEW", _open_migration_review_queue],
+		[preset_authoring, "AUTHORING", func() -> void: _apply_workspace_preset("AUTHORING")],
+		[preset_preview, "PREVIEW", func() -> void: _apply_workspace_preset("PREVIEW")],
+	]
+	var popup := overflow_button.get_popup()
+	popup.clear()
+	var hidden: Array = []
+	for entry in pool:
+		var btn: Button = entry[0]
+		if btn == null:
+			continue
+		btn.visible = true
+	for entry in pool:
+		var btn: Button = entry[0]
+		if btn == null:
+			continue
+		if toolbar.get_combined_minimum_size().x <= size.x:
+			break
+		btn.visible = false
+		hidden.append(entry)
+	for i in range(hidden.size()):
+		popup.add_item(str((hidden[i] as Array)[1]), i + 1)
+	overflow_button.visible = not hidden.is_empty()
+	if not popup.id_pressed.is_connected(_on_toolbar_overflow_chosen):
+		popup.id_pressed.connect(_on_toolbar_overflow_chosen)
+
+func _on_toolbar_overflow_chosen(id: int) -> void:
+	# Rebuild the current hidden set (same priority order as overflow).
+	var pool: Array = [
+		[remount_button, "⟲ REMOUNT", _remount_current],
+		[review_button, "⚠ REVIEW", _open_migration_review_queue],
+		[preset_authoring, "AUTHORING", func() -> void: _apply_workspace_preset("AUTHORING")],
+		[preset_preview, "PREVIEW", func() -> void: _apply_workspace_preset("PREVIEW")],
+	]
+	var hidden: Array = []
+	for entry in pool:
+		var btn: Button = entry[0]
+		if btn != null and not (btn as Button).visible:
+			hidden.append(entry)
+	if id >= 1 and id <= hidden.size():
+		((hidden[id - 1] as Array)[2] as Callable).call()
 
 func _is_dock_hidden() -> bool:
 	return bool(ws.data.get("dock_hidden", false))
@@ -2497,7 +2544,7 @@ func _fx_slider(label_text: String, fx_key: String, fx: Dictionary, layer_id: St
 	# UI-05: ranges/units come from the canonical field metadata (single
 	# source) — macros cannot drift from expert controls or the model.
 	var meta: Dictionary = FxLookScript.field_meta_all().get(fx_key, {"kind": "amount", "min": 0.0, "max": 4.0, "step": 0.05})
-	return _inspector_slider(label_text, float(meta.get("min", 0.0)), float(meta.get("max", 4.0)), float(meta.get("step", 0.05)), clampf(float(fx.get(fx_key, float(meta.get("min", 0.0)))), float(meta.get("min", 0.0)), float(meta.get("max", 4.0))), protected, func(value: float) -> void:
+	var row := _inspector_slider(label_text, float(meta.get("min", 0.0)), float(meta.get("max", 4.0)), float(meta.get("step", 0.05)), clampf(float(fx.get(fx_key, float(meta.get("min", 0.0)))), float(meta.get("min", 0.0)), float(meta.get("max", 4.0))), protected, func(value: float) -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["fx"] as Dictionary)[fx_key] = value
@@ -2505,6 +2552,8 @@ func _fx_slider(label_text: String, fx_key: String, fx: Dictionary, layer_id: St
 				_regenerate_palette(doc, layer_id)
 		, false, true)
 	)
+	row.set_meta("canonical_field", fx_key)
+	return row
 
 # UI-02 quality: palette intent edits immediately regenerate unlocked colors
 # in the SAME transaction — output can never silently go stale behind intent.
@@ -2591,7 +2640,7 @@ func _fx_option(label_text: String, fx_key: String, fx: Dictionary, layer_id: St
 		selected = maxi(0, options.find(str(current)))
 	else:
 		selected = clampi(int(float(current)), 0, maxi(0, options.size() - 1))
-	return _inspector_option(label_text, options, str(options[selected]) if not options.is_empty() else "", protected, func(value: String) -> void:
+	var optrow := _inspector_option(label_text, options, str(options[selected]) if not options.is_empty() else "", protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			if (fx.get(fx_key, 0.0)) is String or str(fx.get(fx_key, "")) in options:
@@ -2600,6 +2649,8 @@ func _fx_option(label_text: String, fx_key: String, fx: Dictionary, layer_id: St
 				(l["fx"] as Dictionary)[fx_key] = float(options.find(value))
 		, false)
 	)
+	optrow.set_meta("canonical_field", fx_key)
+	return optrow
 
 func _inspector_slider(label_text: String, min_value: float, max_value: float, step: float, value: float, disabled: bool, on_change: Callable) -> Control:
 	var row := HBoxContainer.new()
@@ -2652,6 +2703,7 @@ func _build_palette_page(tab_pages: Dictionary, layer: Dictionary, layer_id: Str
 	slab.custom_minimum_size.x = 70
 	scol.add_child(slab)
 	var picker := ColorPickerButton.new()
+	picker.set_meta("canonical_field", "palette_source_color")
 	var sc: Array = fx.get("palette_source_color", [0.5, 0.5, 0.5, 1.0])
 	picker.color = Color(float(sc[0]), float(sc[1]), float(sc[2]), 1.0)
 	picker.disabled = protected
@@ -2690,6 +2742,7 @@ func _build_palette_page(tab_pages: Dictionary, layer: Dictionary, layer_id: Str
 		cap.custom_minimum_size.x = 24
 		abrow.add_child(cap)
 		var pick := ColorPickerButton.new()
+		pick.set_meta("canonical_field", str(pair[1]))
 		var carr: Array = fx.get(str(pair[1]), [1.0, 1.0, 1.0, 1.0])
 		pick.color = Color(float(carr[0]), float(carr[1]), float(carr[2]), 1.0)
 		pick.disabled = protected
@@ -2914,7 +2967,7 @@ func _build_expert_fx(page: VBoxContainer, layer: Dictionary, layer_id: String, 
 		["DITHER DETAIL", ["dither_black_point", "dither_white_point", "dither_gamma", "dither_contrast", "dither_brightness", "dither_mode", "dither_bayer_level", "dither_space"]],
 		["FRINGE DETAIL", ["fringe_coverage_mode", "fringe_coverage_threshold", "fringe_bayer_level", "fringe_pixel", "fringe_space", "fringe_coverage_gain", "fringe_bleed", "fringe_blend_mode", "geometry_units"]],
 		["RGB DETAIL", ["rgb_gradient", "rgb_gradient_balance", "rgb_gradient_contrast", "rgb_shift_units"]],
-		["EFFECT MASK", ["effect_mask_enabled", "effect_mask_invert", "effect_mask_threshold", "effect_mask_softness", "effect_mask_base"]],
+		["EFFECT MASK", ["effect_mask_enabled", "effect_mask_invert", "effect_mask_threshold", "effect_mask_softness", "effect_mask_base", "treatment_mask_path"]],
 		["DRIVER", ["driver_mode", "driver_sampling_mode", "driver_pixel_size"]],
 		["FIELD", ["FIELD_STRENGTH", "FIELD_SPEED", "OUTWARDNESS", "FIELD_BREAKUP", "COORD_NUDGE", "FIELD_SIZE", "FIELD_CENTER_X", "FIELD_CENTER_Y", "LEGACY_SCALE", "LEGACY_SPEED", "LEGACY_RADIAL", "DRIVER_CENTER_X", "DRIVER_CENTER_Y", "DRIVER_SCALE", "DRIVER_STRETCH", "DRIVER_ANGLE", "DRIVER_SPEED", "DRIVER_DETAIL", "DRIVER_FLOW"]],
 		["FLOW DETAIL", ["flow_center_x", "flow_center_y"]],
@@ -2941,12 +2994,14 @@ func _build_expert_fx(page: VBoxContainer, layer: Dictionary, layer_id: String, 
 			elif kind == "amount" or kind == "int":
 				page.add_child(_expert_spin_row(str(key), spec, fx, layer_id, protected))
 			elif kind == "asset":
-				page.add_child(_asset_row(str(key), str(fx.get(str(key), "") or ""), protected, func(text: String) -> void:
+				var asset_row := _asset_row(str(key), str(fx.get(str(key), "") or ""), protected, func(text: String) -> void:
 					_edit_layer(layer_id, func(doc):
 						var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 						(l["fx"] as Dictionary)["treatment_mask_path"] = text.strip_edges()
 					, false)
-				))
+				)
+				asset_row.set_meta("canonical_field", str(key))
+				page.add_child(asset_row)
 		if not pending_checks.is_empty():
 			page.add_child(_expert_check_row(pending_checks, fx, layer_id, protected))
 			pending_checks.clear()
@@ -2966,6 +3021,7 @@ func _build_expert_fx(page: VBoxContainer, layer: Dictionary, layer_id: String, 
 
 func _expert_spin_row(key: String, spec: Dictionary, fx: Dictionary, layer_id: String, protected: bool) -> HBoxContainer:
 	var row := HBoxContainer.new()
+	row.set_meta("canonical_field", key)
 	var lab := Label.new()
 	lab.text = key
 	lab.add_theme_font_size_override("font_size", UiTokens.T_HELP)
@@ -2991,6 +3047,7 @@ func _expert_check_row(keys: Array, fx: Dictionary, layer_id: String, protected:
 	var row := HBoxContainer.new()
 	for key in keys:
 		var check := CheckBox.new()
+		check.set_meta("canonical_field", str(key))
 		check.text = str(key)
 		check.tooltip_text = str(key)
 		check.button_pressed = bool(fx.get(str(key), false))
@@ -3005,6 +3062,7 @@ func _expert_check_row(keys: Array, fx: Dictionary, layer_id: String, protected:
 
 func _expert_option_row(key: String, spec: Dictionary, fx: Dictionary, layer_id: String, protected: bool) -> HBoxContainer:
 	var row := HBoxContainer.new()
+	row.set_meta("canonical_field", key)
 	var lab := Label.new()
 	lab.text = key
 	lab.add_theme_font_size_override("font_size", UiTokens.T_HELP)

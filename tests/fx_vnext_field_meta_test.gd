@@ -95,12 +95,8 @@ func _init() -> void:
 		if ((meta.get(key, {}) as Dictionary).get("options", []) as Array).size() != int(counts[key]):
 			count_bad.append(key)
 	_check(count_bad.is_empty(), "UI-05 enum counts match shader branches", str(count_bad))
-	# No creative control kind on compat/rejected fields.
-	var creative_leak: Array = []
-	for key in meta.keys():
-		var kind := str((meta[key] as Dictionary).get("kind", ""))
-		if (kind == "compat" or kind == "rejected") and kind in ["amount", "int", "option", "check", "color", "asset"]:
-			creative_leak.append(str(key))
-	_check(creative_leak.is_empty(), "UI-05 compat/rejected expose no creative control", str(creative_leak))
+	# The behavioral version of this audit lives in the windowed advanced
+	# suite (controls tagged with canonical_field): compat/rejected must
+	# own no creative control anywhere in the built inspector.
 	print("[FX-FIELD-META] done · checks=%d failures=%d" % [_checks, _failures])
 	quit(_failures)

@@ -32,8 +32,34 @@ func _init() -> void:
 	rt.seek(0.2)
 	await settle(10)
 	_check(is_instance_valid(rt.screen), "A preview screen resurrects back to entry")
+	var rootn = rt.screen.get_node_or_null("Root") as Control
+	_check(rootn != null and absf(float((rootn as Control).modulate.a) - 1.0) < 0.01, "Resurrection restores Root opacity (un-fades EXIT)", str((rootn as Control).modulate) if rootn != null else "missing")
+	rt.subvp.queue_free()
+	await settle(4)
+	await _game_full_flow()
 	print("[FX-PREVIEW-LIFETIME] done · checks=%d failures=%d" % [checks.size(), failures])
 	quit(1 if failures > 0 else 0)
+
+var _cover_count := 0
+var _exit_count := 0
+
+func _game_full_flow() -> void:
+	# Real game lifecycle, no preview flag: start -> ENTRY -> HOLD ->
+	# match_ready -> exposure -> EXIT -> cover -> exit_finished -> free.
+	var scr = load("res://scenes/vs_screen.tscn").instantiate()
+	root.add_child(scr)
+	await settle(10)
+	_check(bool(scr.start("ice_mage", "doge_man", "debug")), "Game flow starts")
+	scr.connect("transition_cover_reached", func() -> void: _cover_count += 1)
+	scr.connect("exit_finished", func() -> void: _exit_count += 1)
+	scr.signal_match_ready()
+	var frames := 0
+	while is_instance_valid(scr) and frames < 36000:
+		await process_frame
+		frames += 1
+	_check(_cover_count == 1, "Game flow emits transition_cover_reached once", str(_cover_count))
+	_check(_exit_count == 1, "Game flow emits exit_finished once", str(_exit_count))
+	_check(not is_instance_valid(scr), "Game flow frees the screen at the end")
 
 func _check(ok: bool, name: String, detail := "") -> void:
 	var line := "[CHECK] %s  %s%s" % ["PASS" if ok else "FAIL", name, (("  (" + detail + ")") if detail != "" else "")]

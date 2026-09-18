@@ -212,43 +212,17 @@ func _records_for(format: String) -> Array:
 	return records
 
 # ------------------------------------------------------- canonical event marks
-# P0 single authority: presentation flow events with deterministic epochs.
-# The lab preview AND the reference/game runtime consume THIS table, so an
-# anchor name always means the same presentation time on every path.
-# Timing source: the same motion_timing JSON the screen choreography uses.
-const CANONICAL_EVENTS := ["vs_enter", "stage_reveal", "fighter_reveal", "clash_impact", "hold_enter"]
-
-var _timing_1v1: Dictionary = {}
-var _timing_mp: Dictionary = {}
+# P0 single authority: the authorable motion anchors (a documented SUBSET of
+# the motion_timing lifecycle signals — entry/hold anchors only, e.g. NOT
+# fighter_lock/match_ready/cover events). Timestamps ALWAYS come from the
+# running screen's actual schedule (authorable_motion_event_marks); this
+# table is never reconstructed a second time from JSON here.
+const AUTHORABLE_MOTION_EVENTS := ["vs_enter", "stage_reveal", "fighter_reveal", "clash_impact", "hold_enter"]
 
 func event_marks() -> Dictionary:
-	if _timing_1v1.is_empty():
-		_timing_1v1 = _load_json("res://assets/vs/schema/motion_timing.json")
-	if _timing_mp.is_empty():
-		_timing_mp = _load_json("res://assets/vs/schema/multiplayer_motion_timing.json")
-	var out := {}
-	if mode_format == "1v1":
-		var entry: Dictionary = _timing_1v1.get("entry", {})
-		out["vs_enter"] = 0.0
-		out["stage_reveal"] = float((entry.get("stage", {}) as Dictionary).get("start", 0.0))
-		out["fighter_reveal"] = float((entry.get("primaries", {}) as Dictionary).get("start", 0.18))
-		out["clash_impact"] = float(((entry.get("vs", {}) as Dictionary).get("impact_flash", {}) as Dictionary).get("center_time", 0.615))
-		out["hold_enter"] = float(entry.get("hold_start", 0.93))
-	else:
-		var shared: Dictionary = _timing_mp.get("shared", {})
-		out["vs_enter"] = 0.0
-		out["stage_reveal"] = float((shared.get("stage", [0.0, 0.18]) as Array)[0])
-		out["fighter_reveal"] = float((shared.get("primaries", [0.14, 0.46]) as Array)[0])
-		out["clash_impact"] = float((shared.get("vs", [0.52, 0.66]) as Array)[1])
-		out["hold_enter"] = float(shared.get("hold_start", 0.88))
-	return out
-
-func _load_json(path: String) -> Dictionary:
-	var f := FileAccess.open(path, FileAccess.READ)
-	if f == null:
-		return {}
-	var parsed = JSON.parse_string(f.get_as_text())
-	return parsed if parsed is Dictionary else {}
+	if screen != null and is_instance_valid(screen) and screen.has_method("authorable_motion_event_marks"):
+		return screen.authorable_motion_event_marks()
+	return {}
 
 # ---------------------------------------------------------------- assets
 

@@ -24,6 +24,7 @@ func _init() -> void:
 	_bools_layout()
 	_option_edit_writes_canonical(fx_id)
 	_check_edit_writes_canonical(fx_id)
+	_meta_leak_audit()
 	print("[FX-ADVANCED-UI] done · checks=%d failures=%d" % [checks.size(), failures])
 	quit(1 if failures > 0 else 0)
 
@@ -145,6 +146,31 @@ func _option_edit_writes_canonical(_fx_id: String) -> void:
 		_check(str(_fx().get("time_source", "")) == "FREE_RUN", "UI-05 string enum writes canonical value", str(_fx().get("time_source", "?")))
 	else:
 		_check(false, "UI-05 time_source option reachable")
+
+func _meta_leak_audit() -> void:
+	# Behavioral creative-leak audit: every built creative control carries
+	# its canonical field id; compat/rejected fields must own NO creative
+	# control anywhere in the inspector (macros, expert, palette).
+	var FxLookScript = load("res://scripts/fx_vnext/fx_look.gd")
+	var meta: Dictionary = FxLookScript.field_meta_all()
+	var found := {}
+	for child in _walk(shell.inspector_content):
+		if child is Object and (child as Object).has_meta("canonical_field"):
+			var f := str((child as Object).get_meta("canonical_field"))
+			found[f] = int(found.get(f, 0)) + 1
+	var creative := ["amount", "int", "option", "check", "color", "asset"]
+	var missing: Array = []
+	var leaked: Array = []
+	for key in meta.keys():
+		var kind := str((meta[key] as Dictionary).get("kind", ""))
+		if kind in creative and int(found.get(str(key), 0)) == 0:
+			missing.append(str(key))
+		if (kind == "compat" or kind == "rejected") and int(found.get(str(key), 0)) > 0:
+			leaked.append(str(key))
+	_check(missing.is_empty(), "UI-05 every creative field has a control", str(missing))
+	_check(leaked.is_empty(), "UI-05 compat/rejected own no creative control", str(leaked))
+	_check(str(found.get("dither_threshold", 0)) == "0", "UI-05 dither_threshold has no control")
+	_check(str(found.get("edge_mask_path", 0)) == "0", "UI-05 edge_mask_path has no control")
 
 func _check_edit_writes_canonical(_fx_id: String) -> void:
 	var check := _check_for("palette_lock_a")

@@ -588,7 +588,7 @@ static func _validate_motion(motion, layer_id: String) -> Array:
 		# An unknown name (e.g. a clash_impct typo) must fail closed here,
 		# never silently behave like fixed anchor_time in production.
 		var anchor := str(track.get("anchor", "manual"))
-		if anchor != "manual" and anchor != "fixed" and not (anchor in FxScreenRuntime.CANONICAL_EVENTS):
+		if anchor != "manual" and anchor != "fixed" and not (anchor in FxScreenRuntime.AUTHORABLE_MOTION_EVENTS):
 			errors.append("motion.%s.anchor: unknown event '%s' (layer %s)" % [key, anchor, layer_id])
 		for numeric in ["anchor_time", "delay", "attack", "hold", "release", "sustain"]:
 			if not _finite_number(track.get(numeric, null)):

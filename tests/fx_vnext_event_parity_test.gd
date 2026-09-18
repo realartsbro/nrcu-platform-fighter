@@ -1,7 +1,7 @@
 extends SceneTree
-# P0 event-authority parity (windowed, REAL scene): a production look with
-# anchor=clash_impact must fire at the canonical event time through the
-# actual nrcu_vs_runtime.tscn consumption path — never silently at
+# P0 event-authority parity (windowed, reference scene): a production look
+# with anchor=clash_impact must fire at the canonical event time through the
+# reference nrcu_vs_runtime.tscn consumption path — never silently at
 # anchor_time. The renderer is NEVER configured directly here; marks flow
 # from FxScreenRuntime.event_marks() on both lab and runtime paths.
 #

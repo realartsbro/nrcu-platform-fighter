@@ -1,9 +1,9 @@
 extends SceneTree
-# vNext ACTUAL VS runtime check (Round-2 Finding 1, Pflichtbeweis):
-# A Production look is written to disk; a FRESH instance of the real runtime
-# scene (res://scenes/nrcu_vs_runtime.tscn — no Lab, no session, no editor
-# state) loads it, resolves every target through the shared resolver and
-# renders through the shared composition renderer.
+# vNext REFERENCE production-consumer check (Round-2 Finding 1, Pflichtbeweis):
+# A Production look is written to disk; a FRESH instance of the reference
+# runtime scene (res://scenes/nrcu_vs_runtime.tscn — no Lab, no session, no
+# editor state) loads it, resolves every target through the shared resolver
+# and renders through the shared composition renderer.
 # Windowed: needs rendering.
 
 const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
@@ -86,11 +86,22 @@ func _init() -> void:
 	_check(int(summary.get("styled_targets", -1)) == 2, "runtime resolves both production looks", str(summary))
 	var delta := _mean_abs_diff(baseline, styled)
 	var roi_delta := _mean_abs_diff_targets(baseline, styled, runtime2, ["echo_left", "mark"])
-	_check(roi_delta > 0.004, "stored production looks appear in the actual VS runtime", "mean=%.5f roi=%.5f" % [delta, roi_delta])
+	_check(roi_delta > 0.004, "stored production looks appear in the reference runtime", "mean=%.5f roi=%.5f" % [delta, roi_delta])
 
 	# ---- 4. same semantics as the shared composition renderer --------------------
+	# Each path captures ALONE: runtime2 is freed first, then the direct
+	# path shows through its own visible container. (A bare subvp never
+	# composites into the window, so capturing both at once would compare
+	# runtime2 with itself — the previous pair_delta was a false green.)
+	var runtime_plan_ids := str(runtime2.last_summary.get("plan_ids", []))
+	runtime2.queue_free()
+	await settle(10)
 	var mount2 = FxScreenRuntimeScript.new()
-	root.add_child(mount2.subvp)
+	var disp2 := SubViewportContainer.new()
+	disp2.stretch = false
+	disp2.set_anchors_preset(Control.PRESET_FULL_RECT)
+	root.add_child(disp2)
+	disp2.add_child(mount2.subvp)
 	await settle(30)
 	mount2.mount("1v1", "debug", "ice_mage", "doge_man")
 	await settle(60)
@@ -111,23 +122,22 @@ func _init() -> void:
 		if bool(loaded.get("ok", false)):
 			plan.append({"key": key_str, "look": loaded["doc"]})
 			direct_ids.append("%s:%s:r%d" % [key_str, str(res["look_id"]), int((loaded["doc"] as Dictionary).get("revision", 0))])
-	print("[RUNTIME] runtime plan: %s" % str(runtime2.last_summary.get("plan_ids", [])))
+	print("[RUNTIME] runtime plan: %s" % runtime_plan_ids)
 	print("[RUNTIME] direct plan:  %s" % str(direct_ids))
-	_check(str(runtime2.last_summary.get("plan_ids", [])) == str(direct_ids), "both paths resolve the same plan", "")
+	_check(runtime_plan_ids == str(direct_ids), "both paths resolve the same plan", "")
 	renderer2.apply_composition(plan)
 	renderer2.set_time(0.3)
 	await settle(10)
-	# Styled looks carry no motion tracks here: freeze both paths at the same
-	# clock so the comparison is composition, not transport.
-	runtime2.seek(0.3)
-	await settle(10)
+	# Styled looks carry no motion tracks here: the direct path is already
+	# frozen (paused screen + fixed clock); styled was captured frozen too.
 	var direct: Image = await capture_root("runtime_direct_composition")
 	var direct_again: Image = await capture_root("runtime_direct_later")
+	_check(_content_bins(direct) > 50, "direct renderer surface carries content", "bins=%d" % _content_bins(direct))
 	_check(_mean_abs_diff(direct, direct_again) < 0.0005, "shared renderer frame is frozen and deterministic", "mean=%.6f" % _mean_abs_diff(direct, direct_again))
 	var pair_delta := _mean_abs_diff(styled, direct)
 	_check(pair_delta < 0.0005, "runtime output equals the shared composition renderer", "mean=%.6f" % pair_delta)
 
-	runtime2.queue_free()
+	disp2.queue_free()
 	mount2.subvp.queue_free()
 	await settle(6)
 
@@ -182,6 +192,16 @@ func _wipe_dir_abs(abs: String) -> void:
 		DirAccess.remove_absolute(abs.path_join(file_name))
 	for sub in DirAccess.get_directories_at(abs):
 		_wipe_dir_abs(abs.path_join(sub))
+
+func _content_bins(img: Image) -> int:
+	var seen := {}
+	var w := img.get_width()
+	var h := img.get_height()
+	for y in range(0, h, 8):
+		for x in range(0, w, 8):
+			var c: Color = img.get_pixel(x, y)
+			seen[int(c.r * 15.0) * 512 + int(c.g * 15.0) * 16 + int(c.b * 15.0)] = true
+	return seen.size()
 
 func _mean_abs_diff_targets(a: Image, b: Image, rt, keys: Array) -> float:
 	# Styled-target union ROI: full-frame means dilute localized FX with

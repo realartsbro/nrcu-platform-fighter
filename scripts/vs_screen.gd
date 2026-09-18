@@ -995,6 +995,22 @@ func _tween_impact_flash(tw: Tween, flash: Dictionary) -> void:
 func _on_entry_tween_finished() -> void:
 	_entry_tween = null
 
+func authorable_motion_event_marks() -> Dictionary:
+	# Single event authority: the SAME schedule _process() actually emits
+	# (_entry_events built at start, plus the hold epoch). Timestamps are
+	# never reconstructed a second time from JSON anywhere else.
+	# Empty before start(): no schedule, no marks, no silent fallback.
+	if _entry_events.is_empty():
+		return {}
+	var marks := {"vs_enter": 0.0}
+	for ev_raw in _entry_events:
+		var ev: Dictionary = ev_raw
+		var nm := str(ev.get("name", ""))
+		if nm != "vs_enter" and nm in FxScreenRuntime.AUTHORABLE_MOTION_EVENTS:
+			marks[nm] = float(ev.get("t", 0.0))
+	marks["hold_enter"] = hold_start_time()
+	return marks
+
 func _entry_event_schedule() -> Array:
 	var entry: Dictionary = _timing.get("entry", {})
 	var events: Array = [
