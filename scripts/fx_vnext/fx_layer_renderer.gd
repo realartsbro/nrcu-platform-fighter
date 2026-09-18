@@ -19,6 +19,7 @@ extends RefCounted
 const SHADER_PATH := "res://shaders/nrcu_fx_vnext_layer.gdshader"
 const CANVAS := Vector2(1280.0, 720.0)
 const FxTargetsScript := preload("res://scripts/fx_vnext/fx_targets.gd")
+const FxAssetsScript := preload("res://scripts/fx_vnext/fx_assets.gd")
 
 const OFFSET_INPUTS := ["LAYER_BELOW", "COMPOSITE_BELOW"]
 const SUPPORTED_INPUTS := ["ORIGINAL_SOURCE", "TRANSFORMED_SOURCE", "LAYER_BELOW", "COMPOSITE_BELOW"]
@@ -516,7 +517,7 @@ func _make_quad(canonical: TextureRect, rect: Rect2, tint: Color, layer: Diction
 	material.set_shader_parameter("disp_time_source", 1.0 if str(displacement.get("time_source", "PRESENTATION_TIME")) == "FREE_RUN" else 0.0)
 	var disp_custom = displacement.get("custom_texture", null)
 	if disp_custom != null and str(disp_custom) != "":
-		var tex = load(str(disp_custom))
+		var tex = FxAssetsScript.load_texture(str(disp_custom))
 		if tex is Texture2D:
 			material.set_shader_parameter("disp_custom_tex", tex)
 			material.set_shader_parameter("disp_custom_loaded", 1.0)
@@ -536,7 +537,7 @@ func _make_quad(canonical: TextureRect, rect: Rect2, tint: Color, layer: Diction
 	material.set_shader_parameter("disp_infl_invert", 1.0 if bool(infl_dict.get("invert", false)) else 0.0)
 	var infl_custom = infl_dict.get("custom_mask", null)
 	if infl_custom != null and str(infl_custom) != "":
-		var infl_tex = load(str(infl_custom))
+		var infl_tex = FxAssetsScript.load_texture(str(infl_custom))
 		if infl_tex is Texture2D:
 			material.set_shader_parameter("disp_infl_custom_tex", infl_tex)
 			material.set_shader_parameter("disp_infl_custom_loaded", 1.0)
@@ -552,7 +553,7 @@ func _make_quad(canonical: TextureRect, rect: Rect2, tint: Color, layer: Diction
 	material.set_shader_parameter("mask_invert", 1.0 if bool(mask.get("invert", false)) else 0.0)
 	var mask_custom = mask.get("custom_mask", null)
 	if mask_custom != null and str(mask_custom) != "":
-		var mask_tex = load(str(mask_custom))
+		var mask_tex = FxAssetsScript.load_texture(str(mask_custom))
 		if mask_tex is Texture2D:
 			material.set_shader_parameter("mask_custom_tex", mask_tex)
 			material.set_shader_parameter("mask_custom_loaded", 1.0)
@@ -680,7 +681,7 @@ func _set_fx_uniforms(material: ShaderMaterial, fx, motion := {}, layer_id := ""
 			material.set_shader_parameter("custom_edge_mask_loaded", 1.0)
 		_quad_asset_errors.append("fx.edge_mask_path: unsupported — custom edge source is not wired (%s)" % layer_id)
 	if treatment_path != "":
-		var treatment_tex = load(treatment_path)
+		var treatment_tex = FxAssetsScript.load_texture(treatment_path)
 		if treatment_tex is Texture2D:
 			material.set_shader_parameter("treatment_mask_tex", treatment_tex)
 			material.set_shader_parameter("treatment_mask_loaded", 1.0)

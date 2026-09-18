@@ -7,6 +7,7 @@ extends RefCounted
 # semantic validation (specs/09 §3). Pure data: no UI, no rendering.
 
 const SCHEMA := "NRCU_FX_LOOK_V0_4"
+const FxAssetsScript := preload("res://scripts/fx_vnext/fx_assets.gd")
 
 const TYPE_SOURCE := "SOURCE"
 const TYPE_SOURCE_COPY := "SOURCE_COPY"
@@ -652,6 +653,10 @@ static func _validate_displacement(displacement, layer_id: String) -> Array:
 			errors.append("displacement.%s: non-finite (layer %s)" % [key, layer_id])
 	if d.get("custom_texture") != null:
 		errors.append_array(_validate_asset_path(d["custom_texture"], "displacement.custom_texture", layer_id))
+	# UI-07/08: CUSTOM_TEXTURE without a texture would silently render the
+	# procedural field — fail closed like MK-03/treatment-mask.
+	if str(d.get("driver", "")) == "CUSTOM_TEXTURE" and (d.get("custom_texture") == null or str(d.get("custom_texture")).strip_edges() == ""):
+		errors.append("displacement.custom_texture: required when driver is CUSTOM_TEXTURE (layer %s)" % layer_id)
 	if d.get("influence_mask") != null and d["influence_mask"] is Dictionary:
 		errors.append_array(_validate_mask(d["influence_mask"], layer_id))
 	return errors
@@ -696,6 +701,12 @@ static func _validate_asset_path(path, label: String, layer_id: String) -> Array
 		# look valid while the renderer silently samples an empty texture.
 		if not FileAccess.file_exists(text) and not ResourceLoader.exists(text):
 			errors.append("%s: asset does not exist: %s (layer %s)" % [label, text, layer_id])
+			return errors
+		# UI-07/08: existence is not loadability. A present-but-corrupt or
+		# non-texture file must fail closed here (same rules as FxAssets
+		# asset_health), never survive to silent renderer fallback.
+		if not FxAssetsScript.is_image_path(text) or FxAssetsScript.load_texture(text) == null:
+			errors.append("%s: asset not loadable as Texture2D: %s (layer %s)" % [label, text, layer_id])
 	elif text.contains("://"):
 		errors.append("%s: must be project-local (layer %s)" % [label, layer_id])
 	elif text.begins_with("/") or text.contains(":\\"):

@@ -17,6 +17,7 @@ const FxProductionScript := preload("res://scripts/fx_vnext/fx_production.gd")
 const FxDraftsScript := preload("res://scripts/fx_vnext/fx_drafts.gd")
 const FxSessionScript := preload("res://scripts/fx_vnext/fx_session.gd")
 const FxLayerRendererScript := preload("res://scripts/fx_vnext/fx_layer_renderer.gd")
+const FxAssetsScript := preload("res://scripts/fx_vnext/fx_assets.gd")
 const FxCostScript := preload("res://scripts/fx_vnext/fx_cost.gd")
 const FxTemplatesScript := preload("res://scripts/fx_vnext/fx_templates.gd")
 const FxLayerRowScript := preload("res://scripts/fx_vnext_ui/fx_layer_row.gd")
@@ -2270,6 +2271,7 @@ func _rebuild_inspector() -> void:
 			(l["displacement"] as Dictionary)["driver"] = value
 		, true)
 	)
+	driver_row.set_meta("canonical_field", "displacement.driver")
 	_tab_page(tab_pages, tab_motion).add_child(driver_row)
 	var amount_row := HBoxContainer.new()
 	var amount_label := Label.new()
@@ -2342,18 +2344,19 @@ func _rebuild_inspector() -> void:
 			(l["displacement"] as Dictionary)["time_source"] = value
 		, true)
 	))
-	_tab_page(tab_pages, tab_motion).add_child(_asset_row("Custom tex", str(displacement.get("custom_texture", "") or ""), protected, func(text: String) -> void:
+	_tab_page(tab_pages, tab_motion).add_child(_dep_asset_row("displacement.custom_texture", "Custom tex", layer, layer_id, protected, func(text: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["displacement"] as Dictionary)["custom_texture"] = text.strip_edges() if text.strip_edges() != "" else null
 		, true)
 	))
-	_disp_incomplete(tab_pages, tab_motion, _disp_custom_incomplete(displacement))
+	_dep_note(tab_pages, tab_motion, "displacement.custom_texture", layer)
 	# --- influence mask subgroup (same contract as layer.mask, pre-displacement)
 	_tab_page(tab_pages, tab_motion).add_child(_fx_group_header("INFLUENCE"))
 	var infl = displacement.get("influence_mask", null)
 	var infl_dict: Dictionary = infl if infl is Dictionary else {}
 	var infl_check := CheckBox.new()
+	infl_check.set_meta("canonical_field", "displacement.influence.enabled")
 	infl_check.text = "INFLUENCE"
 	infl_check.button_pressed = bool(infl_dict.get("enabled", false))
 	infl_check.disabled = protected
@@ -2365,11 +2368,13 @@ func _rebuild_inspector() -> void:
 		(d["influence_mask"] as Dictionary)["enabled"] = pressed
 	, true))
 	_tab_page(tab_pages, tab_motion).add_child(infl_check)
-	_tab_page(tab_pages, tab_motion).add_child(_inspector_option("I-Source", FxLookScript.MASK_SOURCES, str(infl_dict.get("source", "NONE")), protected, func(value: String) -> void:
+	var infl_source_row := _inspector_option("I-Source", FxLookScript.MASK_SOURCES, str(infl_dict.get("source", "NONE")), protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			_disp_ensure_influence(doc, layer_id)["source"] = value
 		, true)
-	))
+	)
+	infl_source_row.set_meta("canonical_field", "displacement.influence.source")
+	_tab_page(tab_pages, tab_motion).add_child(infl_source_row)
 	_tab_page(tab_pages, tab_motion).add_child(_inspector_option("I-Region", FxLookScript.MASK_REGIONS, str(infl_dict.get("region", "FULL")), protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			_disp_ensure_influence(doc, layer_id)["region"] = value
@@ -2406,12 +2411,12 @@ func _rebuild_inspector() -> void:
 	, true))
 	infl_misc.add_child(infl_invert)
 	_tab_page(tab_pages, tab_motion).add_child(infl_misc)
-	_tab_page(tab_pages, tab_motion).add_child(_asset_row("I-Custom", str(infl_dict.get("custom_mask", "") or ""), protected, func(text: String) -> void:
+	_tab_page(tab_pages, tab_motion).add_child(_dep_asset_row("displacement.influence_mask.custom_mask", "I-Custom", layer, layer_id, protected, func(text: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			_disp_ensure_influence(doc, layer_id)["custom_mask"] = text.strip_edges() if text.strip_edges() != "" else null
 		, true)
 	))
-	_disp_incomplete(tab_pages, tab_motion, _disp_influence_incomplete(displacement))
+	_dep_note(tab_pages, tab_motion, "displacement.influence_mask.custom_mask", layer)
 
 	# --- Mask -------------------------------------------------------------------------
 	var mask: Dictionary = layer.get("mask", {})
@@ -2477,16 +2482,13 @@ func _rebuild_inspector() -> void:
 	, false))
 	mask_misc.add_child(invert_check)
 	_tab_page(tab_pages, "MASK").add_child(mask_misc)
-	_tab_page(tab_pages, "MASK").add_child(_asset_row("Custom", str(mask.get("custom_mask", "") or ""), protected, func(text: String) -> void:
+	_tab_page(tab_pages, "MASK").add_child(_dep_asset_row("mask.custom_mask", "Custom", layer, layer_id, protected, func(text: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["mask"] as Dictionary)["custom_mask"] = text.strip_edges() if text.strip_edges() != "" else null
 		, true)
 	))
-	if bool(mask.get("enabled", false)) and str(mask.get("source", "")) == "CUSTOM_MASK":
-		var mref = mask.get("custom_mask", null)
-		if mref == null or str(mref).strip_edges() == "":
-			_disp_incomplete(tab_pages, "MASK", "mask CUSTOM_MASK needs an asset (Custom row)")
+	_dep_note(tab_pages, "MASK", "mask.custom_mask", layer)
 
 	# --- FX amounts + cost ---------------------------------------------------------------
 	if is_fx:
@@ -2582,22 +2584,124 @@ func _regenerate_palette(doc: Dictionary, layer_id: String) -> void:
 # UI-01/UI-07: asset reference row (LineEdit committed on submit) for
 # dependency-bearing modes. Empty clears to null (procedural path).
 func _asset_row(label_text: String, current: String, protected: bool, on_submit: Callable) -> Control:
+	# Legacy plain path row (kept for non-dependency uses, if any). All
+	# dependency-bearing asset fields use _dep_asset_row instead.
+	return _dep_asset_row("", label_text, {}, "", protected, on_submit)
+
+# UI-07/08: one shared typed asset control for every dependency-bearing
+# asset field (displacement.custom_texture, influence custom_mask,
+# mask.custom_mask, fx.treatment_mask_path). Display + BROWSE/REPLACE +
+# CLEAR + status badge share FxAssets dependency truth — never local
+# string-emptiness checks.
+var asset_dialog: FileDialog
+var _asset_pick_setter: Callable
+
+func _ensure_asset_dialog() -> void:
+	if asset_dialog != null:
+		return
+	asset_dialog = FileDialog.new()
+	asset_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	asset_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	asset_dialog.filters = PackedStringArray(["*.png ; PNG images", "*.jpg,*.jpeg ; JPEG images", "*.webp ; WebP images", "*.bmp ; BMP images", "*.exr ; EXR images"])
+	asset_dialog.file_selected.connect(_on_asset_picked)
+	add_child(asset_dialog)
+
+func _open_asset_picker(setter: Callable, current: String) -> void:
+	_ensure_asset_dialog()
+	_asset_pick_setter = setter
+	if current.strip_edges() != "":
+		asset_dialog.current_path = current.strip_edges()
+	asset_dialog.popup_centered(Vector2i(720, 480))
+
+func _on_asset_picked(path: String) -> void:
+	asset_dialog.hide()
+	if _asset_pick_setter.is_valid():
+		_asset_pick_setter.call(path)
+		_asset_pick_setter = Callable()
+
+func _dep_asset_row(field_id: String, label_text: String, layer: Dictionary, layer_id: String, protected: bool, set_path: Callable) -> Control:
+	var raw_path = FxAssetsScript.field_path(field_id, layer) if field_id != "" else null
+	# NOTE: GDScript `or` returns bool — never `str(x or "")` (yields "false").
+	var current := str(raw_path) if raw_path != null else ""
+	var wrap := VBoxContainer.new()
+	if field_id != "":
+		wrap.set_meta("canonical_field", field_id)
 	var row := HBoxContainer.new()
 	var label := Label.new()
 	label.text = label_text
 	label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	label.custom_minimum_size.x = 70
 	row.add_child(label)
+	var current := str(raw_path) if raw_path != null else ""
 	var edit := LineEdit.new()
+	edit.name = "AssetPath"
 	edit.text = current
-	edit.placeholder_text = "res://… / user://… (empty = procedural)"
+	edit.tooltip_text = current
+	edit.placeholder_text = "pick or type a texture path"
 	edit.editable = not protected
 	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	edit.text_submitted.connect(func(text: String) -> void:
-		on_submit.call(text)
+		set_path.call(text.strip_edges())
 	)
 	row.add_child(edit)
-	return row
+	var pick := Button.new()
+	pick.name = "AssetBrowse"
+	pick.text = "REPLACE" if current.strip_edges() != "" else "BROWSE"
+	pick.disabled = protected
+	pick.pressed.connect(func() -> void:
+		_open_asset_picker(set_path, current)
+	)
+	row.add_child(pick)
+	var clear := Button.new()
+	clear.name = "AssetClear"
+	clear.text = "CLEAR"
+	clear.tooltip_text = "Clears the path only — never changes the mode."
+	clear.disabled = protected or current.strip_edges() == ""
+	clear.pressed.connect(func() -> void:
+		set_path.call("")
+	)
+	row.add_child(clear)
+	wrap.add_child(row)
+	var badge := Label.new()
+	badge.name = "AssetStatus"
+	badge.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	badge.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	if field_id == "":
+		badge.text = "○ path"
+		badge.add_theme_color_override("font_color", UiTokens.DISABLED)
+	else:
+		var st: Dictionary = FxAssetsScript.dependency_status(field_id, layer, production.data_dir)
+		var state := str(st.get("state", ""))
+		match state:
+			"COMPLETE":
+				if bool(st.get("needs_harvest", false)):
+					badge.text = "✓ COMPLETE · harvest on apply"
+					badge.add_theme_color_override("font_color", UiTokens.CREAM)
+				elif bool(st.get("required", true)):
+					badge.text = "✓ COMPLETE"
+					badge.add_theme_color_override("font_color", UiTokens.TEAM_A)
+				else:
+					badge.text = "✓ set · not required by mode"
+					badge.add_theme_color_override("font_color", UiTokens.DISABLED)
+			"MISSING":
+				badge.text = "⚠ INCOMPLETE — " + str(st.get("detail", "required asset missing"))
+				badge.add_theme_color_override("font_color", UiTokens.ERROR)
+			"NOT_REQUIRED":
+				badge.text = "○ not required by current mode"
+				badge.add_theme_color_override("font_color", UiTokens.DISABLED)
+			_:
+				badge.text = "✖ INVALID — " + str(st.get("detail", state))
+				badge.add_theme_color_override("font_color", UiTokens.ERROR)
+		badge.tooltip_text = str(st.get("detail", ""))
+	wrap.add_child(badge)
+	return wrap
+
+# Tab-level INCOMPLETE note from the SAME central truth (replaces the loose
+# per-mode string-emptiness chains).
+func _dep_note(tab_pages: Dictionary, tab_name: String, field_id: String, layer: Dictionary) -> void:
+	var st: Dictionary = FxAssetsScript.dependency_status(field_id, layer, production.data_dir)
+	if bool(st.get("required", false)) and str(st.get("state", "")) != "COMPLETE":
+		_disp_incomplete(tab_pages, tab_name, str(st.get("detail", field_id)))
 
 # UI-01/UI-07: honest INCOMPLETE state — a visible red row iff a required
 # asset is missing. Empty message = complete (no row).
@@ -2613,23 +2717,6 @@ func _disp_incomplete(tab_pages: Dictionary, tab_name: String, message: String) 
 	if message == "":
 		return
 	_tab_page(tab_pages, tab_name).add_child(_incomplete_note(message))
-
-func _disp_custom_incomplete(displacement: Dictionary) -> String:
-	if str(displacement.get("driver", "NOISE")) == "CUSTOM_TEXTURE":
-		var ref = displacement.get("custom_texture", null)
-		if ref == null or str(ref).strip_edges() == "":
-			return "custom driver needs a texture (Custom tex row)"
-	return ""
-
-func _disp_influence_incomplete(displacement: Dictionary) -> String:
-	var infl = displacement.get("influence_mask", null)
-	if not (infl is Dictionary) or not bool((infl as Dictionary).get("enabled", false)):
-		return ""
-	if str((infl as Dictionary).get("source", "")) == "CUSTOM_MASK":
-		var ref = (infl as Dictionary).get("custom_mask", null)
-		if ref == null or str(ref).strip_edges() == "":
-			return "influence CUSTOM_MASK needs an asset (I-Custom row)"
-	return ""
 
 func _disp_ensure_influence(doc: Dictionary, layer_id: String) -> Dictionary:
 	var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
@@ -3003,14 +3090,14 @@ func _build_expert_fx(page: VBoxContainer, layer: Dictionary, layer_id: String, 
 			elif kind == "amount" or kind == "int":
 				page.add_child(_expert_spin_row(str(key), spec, fx, layer_id, protected))
 			elif kind == "asset":
-				var asset_row := _asset_row(str(key), str(fx.get(str(key), "") or ""), protected, func(text: String) -> void:
+				var dep_row := _dep_asset_row("fx." + str(key), str(key), layer, layer_id, protected, func(text: String) -> void:
 					_edit_layer(layer_id, func(doc):
 						var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
-						(l["fx"] as Dictionary)["treatment_mask_path"] = text.strip_edges()
+						(l["fx"] as Dictionary)[str(key)] = text.strip_edges() if text.strip_edges() != "" else null
 					, false)
 				)
-				asset_row.set_meta("canonical_field", str(key))
-				page.add_child(asset_row)
+				page.add_child(dep_row)
+				_dep_note({"ADVANCED": page}, "ADVANCED", "fx." + str(key), layer)
 		if not pending_checks.is_empty():
 			page.add_child(_expert_check_row(pending_checks, fx, layer_id, protected))
 			pending_checks.clear()
