@@ -12,6 +12,15 @@ const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
 const FxResolverScript := preload("res://scripts/fx_vnext/fx_resolver.gd")
 
 const FIGHTER_ROLES := ["primary", "echo", "name"]
+const ASSIGNMENT_SCOPE_MODES := [
+	"CURRENT_OCCURRENCE",
+	"FIGHTER_ROLE_SIDE",
+	"FIGHTER_ROLE",
+	"ROLE_SIDE",
+	"ROLE",
+	"STATIC_ELEMENT",
+	"ADVANCED",
+]
 
 var production
 var drafts
@@ -27,10 +36,13 @@ var look: Dictionary = {}
 var base: Dictionary = {} # {kind: unassigned|production|draft, look_id, revision, shared_count}
 var mode: String = "NONE" # NONE | EDIT_UNASSIGNED | EDIT_PRODUCTION_UNIQUE | SHARED_PROTECTED | EDIT_SHARED_DRAFT
 var dirty: bool = false
+var stash_override: Callable = Callable()
 var last_errors: Array = []
 var last_warnings: Array = []
 var resolution: Dictionary = {}
 var styling_enabled: bool = true
+var assignment_scope_mode: String = "CURRENT_OCCURRENCE"
+var assignment_selector_override: Dictionary = {}
 var _undo_stack: Array = []
 var _redo_stack: Array = []
 var _stacks_by_sig: Dictionary = {}
@@ -113,15 +125,18 @@ func revert_draft() -> Dictionary:
 # ================================================================ library / assignment ops
 
 func unassign_target() -> Dictionary:
-	# I — Unassign removes the binding for the target's novice scope; the Look
-	# stays in the Library untouched.
+	# I — Unassign removes the binding for the user-selected assignment scope;
+	# the Look stays in the Library untouched.
 	if mode == "NONE":
 		return {"ok": false, "errors": ["no target open"]}
 	var assignments: Dictionary = production.load_assignments()
 	if not bool(assignments.get("ok", false)):
 		return {"ok": false, "errors": ["assignments invalid; fix Production first"]}
 	var asg_doc: Dictionary = assignments["doc"]
-	var key := FxResolverScript.selector_key(novice_selector())
+	var selector := assignment_selector()
+	if selector.is_empty():
+		return {"ok": false, "errors": ["assignment scope has no usable selector fields"]}
+	var key := FxResolverScript.selector_key(selector)
 	asg_doc["bindings"] = (asg_doc.get("bindings", []) as Array).filter(func(raw):
 		return not (raw is Dictionary) or FxResolverScript.selector_key((raw as Dictionary).get("selector", {})) != key
 	)
@@ -163,10 +178,6 @@ func enable_binding(binding_id: String) -> Dictionary:
 		return result
 	_refresh_resolution()
 	return {"ok": true, "errors": []}
-
-func assignment_scope_text() -> String:
-	# RS-07: the exact semantic scope every Apply/Styling/Unassign commits to.
-	return _selector_human(FxResolverScript.selector_key(novice_selector()))
 
 func look_library() -> Array:
 	var out: Array = []
@@ -220,6 +231,8 @@ func open_target(key: String, ctx: Dictionary, signature_: String, role_: String
 	dirty = false
 	last_errors = []
 	last_warnings = []
+	assignment_scope_mode = "CURRENT_OCCURRENCE"
+	assignment_selector_override = {}
 
 	var assignments: Dictionary = production.load_assignments()
 	resolution = FxResolverScript.resolve(assignments.get("doc", {}), context) if bool(assignments.get("ok", false)) else {"status": "BROKEN", "chain": []}
@@ -299,7 +312,7 @@ func open_target(key: String, ctx: Dictionary, signature_: String, role_: String
 	return {"ok": true, "opened": "neutral", "errors": last_errors.duplicate()}
 
 func _breadcrumb_name() -> String:
-	var selector := novice_selector()
+	var selector := assignment_selector()
 	var parts: Array = []
 	if selector.has("fighter_id"):
 		parts.append(str(selector["fighter_id"]).replace("_", " ").capitalize())
@@ -312,6 +325,49 @@ func _breadcrumb_name() -> String:
 	return " ".join(parts) if not parts.is_empty() else "Untitled Design"
 
 # ================================================================ scope
+
+func set_assignment_scope(mode_: String, custom_selector: Dictionary = {}) -> Dictionary:
+	var normalized_mode := str(mode_).to_upper()
+	if not ASSIGNMENT_SCOPE_MODES.has(normalized_mode):
+		return {"ok": false, "errors": ["unknown assignment scope: " + normalized_mode]}
+	assignment_scope_mode = normalized_mode
+	assignment_selector_override = FxResolverScript.normalize_selector(custom_selector) if normalized_mode == "ADVANCED" else {}
+	return {"ok": true, "selector": assignment_selector(), "scope": assignment_scope_text()}
+
+func _context_selector() -> Dictionary:
+	var selector: Dictionary = {}
+	for field in FxResolverScript.SELECTOR_FIELDS:
+		var value := str(context.get(str(field), ""))
+		if value != "":
+			selector[str(field)] = value
+	return FxResolverScript.normalize_selector(selector)
+
+func assignment_selector() -> Dictionary:
+	var exact := _context_selector()
+	match assignment_scope_mode:
+		"CURRENT_OCCURRENCE": return exact
+		"FIGHTER_ROLE_SIDE": return FxResolverScript.normalize_selector({"fighter_id": context.get("fighter_id", ""), "element_role": context.get("element_role", role), "visual_side": context.get("visual_side", "")})
+		"FIGHTER_ROLE": return FxResolverScript.normalize_selector({"fighter_id": context.get("fighter_id", ""), "element_role": context.get("element_role", role)})
+		"ROLE_SIDE": return FxResolverScript.normalize_selector({"element_role": context.get("element_role", role), "visual_side": context.get("visual_side", "")})
+		"ROLE": return FxResolverScript.normalize_selector({"element_role": context.get("element_role", role)})
+		"STATIC_ELEMENT": return FxResolverScript.normalize_selector({"element_id": context.get("element_id", "")})
+		"ADVANCED": return FxResolverScript.normalize_selector(assignment_selector_override)
+	return exact
+
+func assignment_scope_text() -> String:
+	var selector := assignment_selector()
+	var labels := {
+		"CURRENT_OCCURRENCE": "CURRENT OCCURRENCE / EXACT TARGET",
+		"FIGHTER_ROLE_SIDE": "FIGHTER + ROLE + VISUAL SIDE",
+		"FIGHTER_ROLE": "FIGHTER + ROLE",
+		"ROLE_SIDE": "ROLE + VISUAL SIDE",
+		"ROLE": "ROLE",
+		"STATIC_ELEMENT": "STATIC ELEMENT",
+		"ADVANCED": "ADVANCED SELECTOR",
+	}
+	var label := str(labels.get(assignment_scope_mode, assignment_scope_mode.replace("_", " ")))
+	var key := FxResolverScript.selector_key(selector)
+	return "%s · %s" % [label, key if key != "" else "no matching fields"]
 
 func novice_selector() -> Dictionary:
 	# specs/15 §8: exact novice scope rules.
@@ -331,7 +387,7 @@ func novice_selector() -> Dictionary:
 	return FxResolverScript.normalize_selector(selector)
 
 func proposed_look_id() -> String:
-	var selector := novice_selector()
+	var selector := assignment_selector()
 	var parts: Array = []
 	if selector.has("fighter_id"):
 		parts.append(str(selector["fighter_id"]))
@@ -387,6 +443,8 @@ func edit(mutator: Callable) -> Dictionary:
 	return {"ok": true, "errors": [], "warnings": last_warnings.duplicate()}
 
 func stash() -> Dictionary:
+	if stash_override.is_valid():
+		return stash_override.call()
 	# Auto-stash (specs/10 §2) — crash-safe editor work, never Production.
 	if base.get("kind", "") == "production" and int(base.get("shared_count", 0)) > 1 and mode == "EDIT_SHARED_DRAFT":
 		return drafts.save_shared(str(base["look_id"]), int(base["revision"]), look, dirty)
@@ -400,7 +458,38 @@ func save_draft() -> Dictionary:
 		return {"ok": true, "errors": [], "message": "Draft saved"}
 	return result
 
-# ================================================================ apply / update
+func prepare_for_remount() -> Dictionary:
+	# A remount is an authority transition, never a visual-only reset. Persist the
+	# current dirty target before releasing its identity; a failed stash keeps the
+	# old authority intact so the user can retry without data loss.
+	if mode == "NONE" or str(current_key) == "":
+		return {"ok": true, "stashed": false, "errors": []}
+	if dirty:
+		var result: Dictionary = stash()
+		if not bool(result.get("ok", false)):
+			return {"ok": false, "stashed": false, "errors": result.get("errors", [])}
+	return {"ok": true, "stashed": dirty, "errors": []}
+
+func close_target() -> void:
+	current_key = ""
+	context = {}
+	signature = ""
+	role = ""
+	look = {}
+	base = {}
+	mode = "NONE"
+	dirty = false
+	last_errors = []
+	last_warnings = []
+	resolution = {}
+	styling_enabled = true
+	assignment_scope_mode = "CURRENT_OCCURRENCE"
+	assignment_selector_override = {}
+	_undo_stack.clear()
+	_redo_stack.clear()
+	_stacks_by_sig.clear()
+	stash_override = Callable()
+
 
 func _prepare_doc(final_id: String, revision: int) -> Dictionary:
 	var doc: Dictionary = look.duplicate(true)
@@ -430,7 +519,9 @@ func apply(look_id_override := "") -> Dictionary:
 	var disabled_notice := _disabled_binding_notice()
 	if disabled_notice != "" and not last_warnings.has(disabled_notice):
 		last_warnings.append(disabled_notice)
-	var selector := novice_selector()
+	var selector := assignment_selector()
+	if selector.is_empty():
+		return {"ok": false, "errors": ["assignment scope has no usable selector fields"]}
 	var keep := ""
 	var revision := 1
 	if str(base.get("kind", "")) == "production":
@@ -485,7 +576,9 @@ func make_unique() -> Dictionary:
 		return {"ok": false, "errors": ["Make Unique is only needed for shared Looks"]}
 	var original_id := str(base.get("look_id", ""))
 	var proposal := unique_look_id(original_id + "_UNIQUE", "")
-	var selector := novice_selector()
+	var selector := assignment_selector()
+	if selector.is_empty():
+		return {"ok": false, "errors": ["assignment scope has no usable selector fields"]}
 	var doc := _prepare_doc(proposal, 1)
 	var assignments: Dictionary = production.load_assignments()
 	if not bool(assignments.get("ok", false)):
@@ -541,7 +634,9 @@ func set_styling(enabled: bool) -> Dictionary:
 	if not bool(assignments.get("ok", false)):
 		return {"ok": false, "errors": ["assignments invalid; fix Production first"]}
 	var asg_doc: Dictionary = assignments["doc"]
-	var selector := novice_selector()
+	var selector := assignment_selector()
+	if selector.is_empty():
+		return {"ok": false, "errors": ["assignment scope has no usable selector fields"]}
 	if enabled:
 		FxResolverScript.remove_bypass(asg_doc, selector)
 	else:

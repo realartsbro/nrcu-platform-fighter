@@ -37,6 +37,7 @@ func _init() -> void:
 	await _displace_phase_time_editable(fx_id)
 	await _custom_texture_incomplete_cycle(fx_id)
 	await _expert_typed_edit(fx_id)
+	await _numeric_spin_transactions(fx_id)
 	await _slider_drag_is_one_transaction(fx_id)
 	_inventory_reachability_rose()
 	print("[FX-AUTHORING-UI] done · checks=%d failures=%d" % [checks.size(), failures])
@@ -346,6 +347,32 @@ func _custom_texture_incomplete_cycle(fx_id: String) -> void:
 	await settle(5)
 	_check(str(_disp().get("custom_texture", "")) == "res://assets/vs/generated/accent_left_mask.png", "UI-01 asset path persists in session")
 	_check(not _has_incomplete(), "UI-01 INCOMPLETE clears after asset set")
+
+func _numeric_spin_transactions(fx_id: String) -> void:
+	await _probe_spin_transaction("Phase", "phase", true, [0.3, 0.7, 1.1])
+	await _probe_spin_transaction("signal_gain", "signal_gain", false, [1.1, 1.7, 2.1])
+
+func _probe_spin_transaction(label_text: String, field: String, displacement: bool, values: Array) -> void:
+	var spin := _find_spin(label_text)
+	_check(spin != null, "UI-13 %s SpinBox transaction probe reachable" % label_text)
+	if spin == null:
+		return
+	var before := float((_disp() if displacement else _fx()).get(field, 0.0))
+	shell._ui_transactions.clear()
+	shell.session._undo_stack.clear()
+	for value in values:
+		spin.value = float(value)
+		await settle(1)
+	await settle(20)
+	_check(shell.session._undo_stack.size() == 1, "UI-13 %s intermediate edits create one undo transaction" % label_text, "stack=%d" % shell.session._undo_stack.size())
+	var undone: bool = shell.session.undo()
+	await settle(2)
+	var after_undo := float((_disp() if displacement else _fx()).get(field, 0.0))
+	_check(undone and absf(after_undo - before) < 0.001, "UI-13 %s undo restores exact pre-edit value" % label_text, "before=%.3f after=%.3f" % [before, after_undo])
+	var redone: bool = shell.session.redo()
+	await settle(2)
+	var after_redo := float((_disp() if displacement else _fx()).get(field, 0.0))
+	_check(redone and absf(after_redo - float(values[values.size() - 1])) < 0.001, "UI-13 %s redo restores exact final value" % label_text, "final=%.3f after=%.3f" % [float(values[values.size() - 1]), after_redo])
 
 func _slider_drag_is_one_transaction(fx_id: String) -> void:
 	var slider := _find_slider("Brightness")

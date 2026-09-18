@@ -12,6 +12,7 @@ var out_dir: String
 var shots: Array = []
 
 const SIZES := [[1366, 768], [1600, 900], [1920, 1080], [2560, 1440]]
+const FxLookScript = preload("res://scripts/fx_vnext/fx_look.gd")
 
 func _init() -> void:
 	out_dir = OS.get_environment("FXLAB_EVIDENCE_DIR")
@@ -146,6 +147,18 @@ func _init() -> void:
 	_check(shell.breadcrumb_label.text == "ICE MAGE › ECHO › LEFT", "breadcrumb reflects selection", shell.breadcrumb_label.text)
 	_check("presentation" in shell.status_detail.text, "status shows spatial readout", shell.status_detail.text)
 	_check(shell.selection_outline.visible, "selection outline visible")
+	# UI-09: scope disclosure must be backed by an actual user-selectable selector.
+	shell.assignment_scope_option.select(1)
+	shell.assignment_scope_option.item_selected.emit(1)
+	await settle(2)
+	_check(str(shell.session.assignment_scope_mode) == "FIGHTER_ROLE_SIDE" and str(shell.action_apply.text).contains("FIGHTER + ROLE + VISUAL SIDE"), "scope choice changes canonical Apply selector", shell.action_apply.text)
+	shell.assignment_scope_option.select(6)
+	shell.assignment_scope_option.item_selected.emit(6)
+	await settle(2)
+	var advanced_fighter: LineEdit = shell.assignment_scope_fields["fighter_id"]
+	advanced_fighter.text = "ice_mage"
+	advanced_fighter.text_changed.emit("ice_mage")
+	_check(str(shell.session.assignment_scope_mode) == "ADVANCED" and str(shell.session.assignment_selector().get("fighter_id", "")) == "ice_mage", "advanced scope UI round-trips selector fields", str(shell.session.assignment_selector()))
 	# UI-15: focus is a presentation-only modulation with deterministic restore.
 	var focus_other_key := ""
 	for candidate in shell.runtime.registry.slot_nodes.keys():
@@ -164,11 +177,22 @@ func _init() -> void:
 	await settle(4)
 	_check(absf(focus_other.modulate.a - focus_base_alpha) < 0.02, "NORMAL restores focus modulation")
 	# UI-11: remount clears authority, not just the browser highlight.
+	shell._set_preview_focus("DIM OTHERS")
+	await settle(3)
+	var remount_layer_id: String = shell.selected_layer_id
+	shell._edit_layer(remount_layer_id, func(doc):
+		var layer: Dictionary = FxLookScript.find_layer(doc, remount_layer_id)
+		(layer["fx"] as Dictionary)["brightness"] = 0.73
+	)
+	_check(shell.session.dirty, "remount fixture has a dirty pending draft")
 	shell._remount_current()
 	await settle(12)
 	_check(shell.status_title.text == "NO TARGET SELECTED" and not bool(shell.target_action_row.visible) and not bool(shell.target_action_row3.visible), "remount returns to no-target state")
+	_check(shell.layers_empty.visible and shell.layers_rows.get_child_count() == 0 and not shell.add_layer_menu.visible and not shell.recipe_rows.visible and shell.inspector_empty.visible, "no-target clears all target-bound edit surfaces")
 	shell._select_key("echo_left", false)
 	await settle(8)
+	var focus_other_after_remount: CanvasItem = shell.runtime.registry.slot_nodes[focus_other_key]
+	_check(focus_other_after_remount.modulate.a < 0.5, "DIM focus reapplies after remount and reselection")
 
 	# ---- dock toggle ---------------------------------------------------------
 	shell._toggle_dock()
@@ -234,25 +258,33 @@ func _group_labels(item: TreeItem) -> Array:
 
 func _bounds_violations() -> Array:
 	var win := Vector2(DisplayServer.window_get_size())
-	var phys_scale := win.x / 1600.0
 	var flag: Array = []
 	var targets: Array = [shell.toolbar, shell.browser_panel, shell.preview_area, shell.dock, shell.timeline_panel]
 	for control in targets:
-		_collect_violations(control, win, phys_scale, flag)
+		_collect_violations(control, win, flag)
 	for control in shell.toolbar.get_children():
 		if control is Control and control.visible:
-			_collect_violations(control, win, phys_scale, flag)
+			_collect_violations(control, win, flag)
 	return flag
 
-func _collect_violations(control: Control, win: Vector2, phys_scale: float, flag: Array) -> void:
+func _collect_violations(control: Control, win: Vector2, flag: Array) -> void:
 	if control == null or not control.visible:
 		return
-	# Control rects live in the fixed 1600×900 canvas space; convert to physical
-	# pixels before comparing against the window.
-	var rect: Rect2 = control.get_global_rect()
-	var phys := Rect2(rect.position * phys_scale, rect.size * phys_scale)
-	if phys.position.x < -2.0 or phys.position.y < -2.0 or phys.end.x > win.x + 2.0 or phys.end.y > win.y + 2.0:
-		flag.append("%s %s" % [control.name, str(phys)])
+	# Use the same live canvas transform as the product, not a legacy 1600px
+	# estimate. This keeps the geometry oracle tied to native pixels.
+	var canvas_transform: Transform2D = control.get_global_transform_with_canvas()
+	var local_rect := Rect2(Vector2.ZERO, control.size)
+	var corners: Array[Vector2] = [
+		canvas_transform * local_rect.position,
+		canvas_transform * Vector2(local_rect.end.x, local_rect.position.y),
+		canvas_transform * Vector2(local_rect.position.x, local_rect.end.y),
+		canvas_transform * local_rect.end,
+	]
+	var canvas_rect := Rect2(corners[0], Vector2.ZERO)
+	for corner in corners:
+		canvas_rect = canvas_rect.expand(corner)
+	if canvas_rect.position.x < -2.0 or canvas_rect.position.y < -2.0 or canvas_rect.end.x > win.x + 2.0 or canvas_rect.end.y > win.y + 2.0:
+		flag.append("%s %s" % [control.name, str(canvas_rect)])
 
 func _screenshot() -> Image:
 	await RenderingServer.frame_post_draw

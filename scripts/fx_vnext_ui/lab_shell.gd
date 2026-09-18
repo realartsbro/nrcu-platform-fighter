@@ -138,17 +138,26 @@ var viewport_host: Control
 var disp: SubViewportContainer
 var selection_outline: ReferenceRect
 var right_handle: ColorRect
-var dock: PanelContainer
+var dock: Control
+var dock_panel: PanelContainer
+var dock_host: Control
 var dock_box: VBoxContainer
 var status_title: Label
 var status_badge: Label
 var status_detail: Label
 var protected_banner: Label
+var protected_banner_host: Control
+var assignment_scope_option: OptionButton
+var assignment_scope_count: Label
+var assignment_scope_advanced: VBoxContainer
+var assignment_scope_fields: Dictionary = {}
 var layers_box: VBoxContainer
 var inspector_box: VBoxContainer
 var layers_split_handle: ColorRect
 var layers_rows: VBoxContainer
 var layers_empty: Label
+var add_layer_menu: MenuButton
+var recipe_add_buttons: Array = []
 var inspector_content: VBoxContainer
 var inspector_empty: Label
 var selected_layer_id := ""
@@ -161,6 +170,8 @@ var action_edit_shared: Button
 var action_why: Button
 var target_action_row: HBoxContainer
 var target_action_row2: HBoxContainer
+var protected_actions_host: Control
+var protected_actions_spacer: Control
 var target_action_row3: HBoxContainer
 var action_status: Label
 var why_label: Label
@@ -455,15 +466,24 @@ func _build_preview() -> void:
 	viewport_host.add_child(debug_badge)
 
 func _build_dock() -> void:
-	dock = PanelContainer.new()
-	dock.custom_minimum_size.x = 390
-	dock.add_theme_stylebox_override("panel", UiTokens.flat(UiTokens.BASE, UiTokens.RULE, UiTokens.STROKE, 0))
-	body.add_child(dock)
+	dock_host = Control.new()
+	dock_host.custom_minimum_size.x = 390
+	dock_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.add_child(dock_host)
+	dock = Control.new()
+	dock.custom_minimum_size.x = 0
+	dock.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dock.clip_contents = true
+	dock_host.add_child(dock)
+	dock_panel = PanelContainer.new()
+	dock_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dock_panel.add_theme_stylebox_override("panel", UiTokens.flat(UiTokens.BASE, UiTokens.RULE, UiTokens.STROKE, 0))
+	dock.add_child(dock_panel)
 
 	var dock_margin := MarginContainer.new()
 	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
 		dock_margin.add_theme_constant_override(side, 8)
-	dock.add_child(dock_margin)
+	dock_panel.add_child(dock_margin)
 
 	dock_box = VBoxContainer.new()
 	dock_box.add_theme_constant_override("separation", 6)
@@ -494,20 +514,36 @@ func _build_dock() -> void:
 	status_badge.text = "○ UNASSIGNED"
 	status_badge.add_theme_font_size_override("font_size", UiTokens.T_META)
 	status_badge.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
+	status_badge.clip_text = true
+	status_badge.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	status_badge.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	status_badge.custom_minimum_size.x = 120.0
 	status_box.add_child(status_badge)
 	status_detail = Label.new()
 	status_detail.text = "-"
 	status_detail.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	status_detail.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
 	status_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	status_detail.clip_text = true
+	status_detail.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	status_detail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	status_detail.custom_minimum_size.x = 240.0
 	status_box.add_child(status_detail)
 	protected_banner = Label.new()
 	protected_banner.text = ""
 	protected_banner.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	protected_banner.add_theme_color_override("font_color", UiTokens.ACCENT)
 	protected_banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	protected_banner.visible = false
-	status_box.add_child(protected_banner)
+	protected_banner.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	protected_banner.clip_text = true
+	protected_banner.visible = true
+	protected_banner_host = Control.new()
+	protected_banner_host.custom_minimum_size = Vector2(0, 28)
+	protected_banner_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	protected_banner_host.visible = false
+	protected_banner_host.add_child(protected_banner)
+	status_box.add_child(protected_banner_host)
+	_build_assignment_scope_controls(status_box)
 
 	# ---- authoring actions (specs/06) ----
 	target_action_row = HBoxContainer.new()
@@ -523,7 +559,16 @@ func _build_dock() -> void:
 		target_action_row.add_child(button)
 	target_action_row2 = HBoxContainer.new()
 	target_action_row2.add_theme_constant_override("separation", 4)
-	status_box.add_child(target_action_row2)
+	protected_actions_host = Control.new()
+	protected_actions_host.custom_minimum_size = Vector2(0, 28)
+	protected_actions_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	protected_actions_host.visible = false
+	target_action_row2.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	protected_actions_host.add_child(target_action_row2)
+	status_box.add_child(protected_actions_host)
+	protected_actions_spacer = Control.new()
+	protected_actions_spacer.custom_minimum_size = Vector2(220, 28)
+	target_action_row2.add_child(protected_actions_spacer)
 	for button in [action_unique, action_edit_shared]:
 		target_action_row2.add_child(button)
 	target_action_row3 = HBoxContainer.new()
@@ -571,13 +616,13 @@ func _build_dock() -> void:
 	layers_cost_label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	layers_cost_label.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
 	layers_header.add_child(layers_cost_label)
-	var add_button := MenuButton.new()
-	add_button.text = "+ ADD LAYER"
-	add_button.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	add_layer_menu = MenuButton.new()
+	add_layer_menu.text = "+ ADD LAYER"
+	add_layer_menu.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	for template in FxTemplatesScript.TEMPLATES:
-		add_button.get_popup().add_item(template)
-	add_button.get_popup().id_pressed.connect(func(index: int) -> void: _action_add_layer(FxTemplatesScript.TEMPLATES[index]))
-	layers_header.add_child(add_button)
+		add_layer_menu.get_popup().add_item(template)
+	add_layer_menu.get_popup().id_pressed.connect(func(index: int) -> void: _action_add_layer(FxTemplatesScript.TEMPLATES[index]))
+	layers_header.add_child(add_layer_menu)
 	layers_empty = _section_empty(layers_box, "No design yet.\nSelect a target — the layer stack opens here.")
 	layers_rows = VBoxContainer.new()
 	layers_rows.add_theme_constant_override("separation", 2)
@@ -635,9 +680,98 @@ func _build_dock() -> void:
 		recipe_row.add_child(recipe_label)
 		var recipe_add := _styled_button("ADD", func() -> void: _action_add_layer(str(template)))
 		recipe_add.tooltip_text = "Instantiate this recipe into the current draft; it is not a Production Look."
+		recipe_add_buttons.append(recipe_add)
 		recipe_row.add_child(recipe_add)
 		recipe_rows.add_child(recipe_row)
 	inspector_inner.add_child(recipe_rows)
+
+func _build_assignment_scope_controls(parent: Node) -> void:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 2)
+	var title := Label.new()
+	title.text = "ASSIGNMENT SCOPE · USER CHOICE"
+	title.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	title.add_theme_color_override("font_color", UiTokens.ACCENT)
+	box.add_child(title)
+	var row := HBoxContainer.new()
+	assignment_scope_option = OptionButton.new()
+	var labels := ["CURRENT OCCURRENCE / EXACT TARGET", "FIGHTER + ROLE + VISUAL SIDE", "FIGHTER + ROLE", "ROLE + VISUAL SIDE", "ROLE", "STATIC ELEMENT", "ADVANCED SELECTOR"]
+	for label in labels:
+		assignment_scope_option.add_item(label)
+	assignment_scope_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	assignment_scope_option.item_selected.connect(func(index: int) -> void:
+		if session == null:
+			return
+		var modes: Array = FxSessionScript.ASSIGNMENT_SCOPE_MODES
+		var chosen_mode := str(modes[index])
+		var custom: Dictionary = {}
+		if chosen_mode == "ADVANCED":
+			for field in assignment_scope_fields.keys():
+				var edit: LineEdit = assignment_scope_fields[field]
+				if edit.text.strip_edges() != "":
+					custom[str(field)] = edit.text.strip_edges()
+		session.set_assignment_scope(chosen_mode, custom)
+		_refresh_scope_ui()
+		_sync_actions()
+	)
+	row.add_child(assignment_scope_option)
+	assignment_scope_count = Label.new()
+	assignment_scope_count.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	assignment_scope_count.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
+	row.add_child(assignment_scope_count)
+	box.add_child(row)
+	assignment_scope_advanced = VBoxContainer.new()
+	assignment_scope_advanced.add_theme_constant_override("separation", 1)
+	assignment_scope_advanced.visible = false
+	for field in FxResolverScript.SELECTOR_FIELDS:
+		var field_row := HBoxContainer.new()
+		var field_label := Label.new()
+		field_label.text = str(field)
+		field_label.custom_minimum_size.x = 120
+		field_label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+		field_row.add_child(field_label)
+		var edit := LineEdit.new()
+		edit.placeholder_text = "optional"
+		edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		edit.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+		edit.text_changed.connect(func(_value: String) -> void: _update_advanced_scope_field(str(field)))
+		field_row.add_child(edit)
+		assignment_scope_fields[str(field)] = edit
+		assignment_scope_advanced.add_child(field_row)
+	box.add_child(assignment_scope_advanced)
+	parent.add_child(box)
+
+func _update_advanced_scope_field(_field: String) -> void:
+	if session == null or str(session.assignment_scope_mode) != "ADVANCED":
+		return
+	var custom: Dictionary = {}
+	for field in assignment_scope_fields.keys():
+		var edit: LineEdit = assignment_scope_fields[field]
+		if edit.text.strip_edges() != "":
+			custom[str(field)] = edit.text.strip_edges()
+	session.set_assignment_scope("ADVANCED", custom)
+	_refresh_scope_ui()
+	_sync_actions()
+
+func _refresh_scope_ui() -> void:
+	if assignment_scope_option == null or session == null:
+		return
+	var modes: Array = FxSessionScript.ASSIGNMENT_SCOPE_MODES
+	var index := modes.find(str(session.assignment_scope_mode))
+	assignment_scope_option.select(maxi(0, index))
+	assignment_scope_advanced.visible = str(session.assignment_scope_mode) == "ADVANCED"
+	var selector: Dictionary = session.assignment_selector()
+	for field in assignment_scope_fields.keys():
+		var edit: LineEdit = assignment_scope_fields[field]
+		var expected := str(selector.get(str(field), ""))
+		if edit.text != expected and str(session.assignment_scope_mode) != "ADVANCED":
+			edit.text = expected
+	var affected := 0
+	if runtime != null and runtime.registry != null and not selector.is_empty():
+		for key in runtime.registry.keys():
+			if FxResolverScript.selector_matches(selector, runtime.registry.context_for_key(str(key))):
+				affected += 1
+	assignment_scope_count.text = "affects %d target%s" % [affected, "" if affected == 1 else "s"]
 
 func _section_header(parent: Node, text: String) -> void:
 	var label := Label.new()
@@ -814,11 +948,13 @@ func _on_resized() -> void:
 	_apply_layers_split()
 
 func _apply_state() -> void:
-	dock.visible = not _is_dock_hidden()
+	var dock_hidden := _is_dock_hidden()
+	dock_host.visible = not dock_hidden
+	dock.visible = not dock_hidden
 	# R3 §17 finding: dock_w is persisted on drag but was never re-applied on
 	# boot, so the inspector always reopened at the build-time width.
 	if ws != null and ws.data.has("dock_w"):
-		dock.custom_minimum_size.x = clampf(float(ws.data.get("dock_w", 390.0)), 320.0, 900.0)
+		dock_host.custom_minimum_size.x = maxf(clampf(float(ws.data.get("dock_w", 390.0)), 320.0, 900.0), 390.0)
 	_apply_browser_mode()
 	_apply_timeline()
 	_apply_layers_split()
@@ -954,7 +1090,7 @@ func _handle_drag(event: InputEvent, kind: String) -> void:
 			"dock":
 				var dock_right := dock.global_position.x + dock.size.x
 				ws.data["dock_w"] = clampf(dock_right - pos.x, 320.0, 900.0)
-				dock.custom_minimum_size.x = float(ws.data["dock_w"])
+				dock_host.custom_minimum_size.x = maxf(float(ws.data["dock_w"]), 390.0)
 			"layers":
 				var total := maxf(dock.size.y - 40.0, 1.0)
 				var y_local := pos.y - dock.global_position.y
@@ -1036,7 +1172,9 @@ func _toggle_browser() -> void:
 
 func _toggle_dock() -> void:
 	ws.data["dock_hidden"] = not _is_dock_hidden()
-	dock.visible = not _is_dock_hidden()
+	var hidden := _is_dock_hidden()
+	dock_host.visible = not hidden
+	dock.visible = not hidden
 	ws.save_state()
 
 func _toggle_timeline_expanded() -> void:
@@ -1051,31 +1189,43 @@ func _reset_workspace() -> void:
 	_apply_state()
 	ws.save_state()
 
+func _prepare_for_remount() -> bool:
+	if session != null:
+		var result: Dictionary = session.prepare_for_remount()
+		if not bool(result.get("ok", false)):
+			action_status.text = "✗ Remount refused — draft stash failed: " + str(result.get("errors", []))
+			return false
+		session.close_target()
+	_stash_pending = false
+	_ui_transactions.clear()
+	_focus_originals.clear()
+	selected_key = ""
+	selected_layer_id = ""
+	return true
+
 func _remount_current() -> void:
+	if not _prepare_for_remount():
+		return
 	runtime.mount()
 	renderer = null
 	_rendered_key = ""
-	if session != null:
-		session.current_key = ""
-		session.mode = "NONE"
 	event_marks = _compute_event_marks()
 	browser.rebuild()
 	browser.refresh_context()
-	selected_key = ""
+	_apply_preview_focus()
 	_refresh_selection_ui()
 	_sync_time(0.0)
 
 func _on_remount_requested(format: String, stage: String, left: String, right: String) -> void:
+	if not _prepare_for_remount():
+		return
 	runtime.mount(format, stage, left, right)
 	renderer = null
 	_rendered_key = ""
-	if session != null:
-		session.current_key = ""
-		session.mode = "NONE"
 	event_marks = _compute_event_marks()
 	browser.rebuild()
 	browser.refresh_context()
-	selected_key = ""
+	_apply_preview_focus()
 	_refresh_selection_ui()
 	_sync_time(0.0)
 
@@ -1163,6 +1313,13 @@ func _apply_preview_focus() -> void:
 		return
 	var nodes: Dictionary = runtime.registry.slot_nodes
 	var mode := str(ws.data.get("preview_focus", "NORMAL"))
+	if selected_key == "":
+		# A remount releases the old nodes. Preserve the user preference, but do
+		# not apply DIM/SOLO to a targetless fresh substrate; reapply on selection.
+		_focus_originals.clear()
+		for key in nodes.keys():
+			nodes[key].modulate = Color.WHITE
+		return
 	if mode == "NORMAL":
 		for key in _focus_originals.keys():
 			if nodes.has(key):
@@ -1225,11 +1382,13 @@ func _refresh_selection_ui() -> void:
 		status_detail.text = "-"
 		if protected_banner != null:
 			protected_banner.visible = false
+			protected_banner_host.visible = false
 			protected_banner.text = ""
 		selection_outline.visible = false
 		if why_label != null:
 			why_label.visible = false
 		why_open = false
+		_refresh_scope_ui()
 		_sync_actions()
 		_rebuild_layers_panel()
 		_rebuild_inspector()
@@ -1243,12 +1402,14 @@ func _refresh_selection_ui() -> void:
 		if protected_banner != null:
 			var is_protected := str(session.mode) == "SHARED_PROTECTED"
 			protected_banner.visible = is_protected
+			protected_banner_host.visible = is_protected
 			protected_banner.text = "PROTECTED SHARED LOOK — EDIT SHARED or MAKE UNIQUE to change values." if is_protected else ""
 	else:
 		status_badge.text = _status_badge_for(selected_key)
 		status_detail.text = _spatial_readout(selected_key)
 		if protected_banner != null:
 			protected_banner.visible = false
+			protected_banner_host.visible = false
 			protected_banner.text = ""
 	status_badge.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
 	if why_label != null:
@@ -1345,7 +1506,7 @@ func _spatial_readout(key: String) -> String:
 # ================================================================ authoring session
 
 func _session_ready() -> bool:
-	return session != null and str(session.current_key) == selected_key and str(session.mode) != "NONE"
+	return session != null and runtime != null and runtime.registry != null and runtime.registry.slot_nodes.has(selected_key) and str(session.current_key) == selected_key and str(session.mode) != "NONE"
 
 func _open_session_for(key: String) -> void:
 	var registry = runtime.registry
@@ -1360,6 +1521,8 @@ func _open_session_for(key: String) -> void:
 		ctx["element_id"] = key.replace("_fx_proxy", "")
 	var sig: String = registry.signature_for_key(key)
 	session.open_target(key, ctx, sig, role)
+	_ui_transactions.clear()
+	_refresh_scope_ui()
 	var layers: Array = session.look.get("layers", [])
 	selected_layer_id = str((layers[0] as Dictionary).get("layer_id", "")) if not layers.is_empty() else ""
 	action_status.text = ""
@@ -1445,7 +1608,7 @@ func _schedule_stash() -> void:
 	_stash_at = Time.get_ticks_msec() / 1000.0 + 0.5
 	_stash_pending = true
 
-func _edit_layer(_layer_id: String, mutator: Callable, rebuild := true, live := false) -> void:
+func _edit_layer(_layer_id: String, mutator: Callable, rebuild := true, live := false, transaction_key := "") -> void:
 	if not _session_ready():
 		return
 	if not session.is_editable():
@@ -1455,6 +1618,14 @@ func _edit_layer(_layer_id: String, mutator: Callable, rebuild := true, live := 
 	if bool(current_layer.get("locked", false)):
 		action_status.text = "✗ Layer locked — unlock it before editing"
 		return
+	var implicit_key := ""
+	if not rebuild and not live:
+		implicit_key = "layer:%s:control" % _layer_id
+	if str(transaction_key) == "" and implicit_key != "":
+		transaction_key = implicit_key
+		live = true
+	if live and str(transaction_key) != "":
+		_begin_ui_transaction(str(transaction_key))
 	if not live:
 		session.snapshot()
 	var result: Dictionary = session.edit(mutator)
@@ -1462,6 +1633,7 @@ func _edit_layer(_layer_id: String, mutator: Callable, rebuild := true, live := 
 		_schedule_stash()
 		_render_current_look()
 		_refresh_inspector_cost()
+		_refresh_layers_cost_surfaces()
 		if status_badge != null:
 			status_badge.text = session.badge_text()
 		var warnings: Array = result.get("warnings", [])
@@ -1475,10 +1647,12 @@ func _edit_layer(_layer_id: String, mutator: Callable, rebuild := true, live := 
 		_refresh_library()
 
 func _begin_ui_transaction(key: String) -> void:
-	if not _session_ready() or _ui_transactions.has(key):
+	if not _session_ready():
 		return
-	session.snapshot()
-	_ui_transactions[key] = true
+	var now := Time.get_ticks_msec() / 1000.0
+	if not _ui_transactions.has(key):
+		session.snapshot()
+	_ui_transactions[key] = now
 
 func _end_ui_transaction(key: String) -> void:
 	_ui_transactions.erase(key)
@@ -1492,6 +1666,39 @@ func _refresh_inspector_cost() -> void:
 		return
 	var cost: Dictionary = FxCostScript.layer_cost(layer)
 	inspector_cost_badge.text = "LIVE COST %.1f · %s" % [float(cost.get("cost", 0.0)), ", ".join(cost.get("factors", []))]
+
+func _refresh_layers_cost_surfaces() -> void:
+	if not _session_ready() or session == null:
+		if layers_cost_label != null:
+			layers_cost_label.text = ""
+		return
+	var total: Dictionary = FxCostScript.look_cost(session.look)
+	if layers_cost_label != null:
+		layers_cost_label.text = "cost %.1f · %s" % [float(total.get("total", 0.0)), str(total.get("level", ""))]
+	if layers_rows != null:
+		_refresh_cost_nodes(layers_rows)
+
+func _refresh_cost_nodes(node: Node) -> void:
+	if node.has_meta("cost_layer_id"):
+		var layer_id := str(node.get_meta("cost_layer_id"))
+		var layer := FxLookScript.find_layer(session.look, layer_id)
+		if not layer.is_empty():
+			(node as Label).text = "c%.1f" % float(FxCostScript.layer_cost(layer).get("cost", 0.0))
+	for child in node.get_children():
+		_refresh_cost_nodes(child)
+
+func _wire_spin_transaction(spin: SpinBox, key: String) -> void:
+	if spin == null:
+		return
+	spin.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+			if (event as InputEventMouseButton).pressed:
+				_begin_ui_transaction(key)
+			else:
+				_end_ui_transaction(key)
+	)
+	spin.focus_entered.connect(func() -> void: _begin_ui_transaction(key))
+	spin.focus_exited.connect(func() -> void: _end_ui_transaction(key))
 
 func _wire_slider_transaction(row: Control, key: String, protected: bool) -> void:
 	if protected or row == null or row.get_child_count() == 0:
@@ -1950,6 +2157,7 @@ func _sync_actions() -> void:
 	if action_apply == null:
 		return
 	var has: bool = _session_ready() and selected_key != ""
+	var scope_valid: bool = has and not session.assignment_selector().is_empty()
 	# No-target is a real authoring state, not a disabled target editor. Hide
 	# target-mutating rows entirely so the workspace cannot imply an action
 	# exists before a target is selected.
@@ -1958,24 +2166,35 @@ func _sync_actions() -> void:
 	if target_action_row3 != null:
 		target_action_row3.visible = has
 	action_save.disabled = not has
-	action_apply.disabled = not has or str(session.mode) == "SHARED_PROTECTED"
-	action_styling.disabled = not has
+	action_apply.disabled = not scope_valid or str(session.mode) == "SHARED_PROTECTED"
+	action_styling.disabled = not scope_valid
 	action_why.disabled = not has
 	var scope: String = session.assignment_scope_text() if has else ""
 	action_styling.text = ("Active in Game: " + ("ON" if session.styling_enabled else "OFF")) if has else "Active in Game"
 	action_styling.tooltip_text = "Styling scope: " + scope if has else ""
 	if action_unassign != null:
 		action_unassign.text = "UNASSIGN"
-		action_unassign.tooltip_text = "Unassign scope: " + scope if has else ""
+		action_unassign.disabled = not scope_valid
+		action_unassign.tooltip_text = "Unassign scope: " + scope if scope_valid else "Choose a non-empty assignment scope"
 	action_apply.text = "Update Target Style" if (has and str(session.base.get("kind", "")) == "production") else "Apply to Target"
 	# RS-07: the commit scope is part of the action label, not hidden.
 	if has:
 		action_apply.text += " · " + session.assignment_scope_text()
 		action_apply.tooltip_text = "Commits to assignment scope: " + session.assignment_scope_text()
-	action_unique.visible = has and str(session.mode) == "SHARED_PROTECTED"
-	action_edit_shared.visible = has and str(session.mode) == "SHARED_PROTECTED"
+	action_unique.visible = scope_valid and str(session.mode) == "SHARED_PROTECTED"
+	action_edit_shared.visible = scope_valid and str(session.mode) == "SHARED_PROTECTED"
 	if target_action_row2 != null:
-		target_action_row2.visible = has and str(session.mode) == "SHARED_PROTECTED"
+		target_action_row2.visible = has
+	if protected_actions_host != null:
+		protected_actions_host.visible = has
+	if protected_actions_spacer != null:
+		protected_actions_spacer.visible = has and str(session.mode) != "SHARED_PROTECTED"
+	if add_layer_menu != null:
+		add_layer_menu.visible = has
+	for recipe_button in recipe_add_buttons:
+		(recipe_button as Button).disabled = not has or not session.is_editable()
+	if recipe_rows != null:
+		recipe_rows.visible = has
 	if undo_button != null:
 		var editable: bool = has and session.is_editable()
 		undo_button.disabled = not editable
@@ -1987,9 +2206,10 @@ func _rebuild_layers_panel() -> void:
 	for child in layers_rows.get_children():
 		layers_rows.remove_child(child)
 		child.queue_free()
-	var layers: Array = session.look.get("layers", []) if session != null else []
+	var has_target := _session_ready()
+	var layers: Array = session.look.get("layers", []) if has_target and session != null else []
 	if layers_empty != null:
-		layers_empty.visible = layers.is_empty()
+		layers_empty.visible = not has_target or layers.is_empty()
 	if layers_cost_label != null:
 		if layers.is_empty() or session == null:
 			layers_cost_label.text = ""
@@ -2084,6 +2304,7 @@ func _layer_row(layer: Dictionary) -> Control:
 	row.add_child(pick)
 	var layer_cost: Dictionary = FxCostScript.layer_cost(layer)
 	var cost_label := Label.new()
+	cost_label.set_meta("cost_layer_id", layer_id)
 	cost_label.text = "c%.1f" % float(layer_cost["cost"])
 	cost_label.tooltip_text = "\n".join(layer_cost["factors"])
 	cost_label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
@@ -2114,6 +2335,8 @@ func layer_display_name(layer_id: String) -> String:
 	return str(layer.get("name", layer_id))
 
 func _layer_menu_action(id: int, layer_id: String) -> void:
+	if not _session_ready():
+		return
 	var layer: Dictionary = FxLookScript.find_layer(session.look, layer_id)
 	if layer.is_empty():
 		return
@@ -2212,7 +2435,7 @@ func _rebuild_inspector() -> void:
 	for child in inspector_content.get_children():
 		inspector_content.remove_child(child)
 		child.queue_free()
-	var layer: Dictionary = FxLookScript.find_layer(session.look, selected_layer_id) if session != null else {}
+	var layer: Dictionary = FxLookScript.find_layer(session.look, selected_layer_id) if _session_ready() and session != null else {}
 	if inspector_empty != null:
 		inspector_empty.visible = layer.is_empty()
 	if layer.is_empty():
@@ -2258,15 +2481,6 @@ func _rebuild_inspector() -> void:
 		)
 	)
 	_tab_page(tab_pages, tab_identity).add_child(name_edit)
-	if protected:
-		var note := Label.new()
-		note.text = "Protected shared Look — EDIT SHARED or MAKE UNIQUE to change values."
-		note.custom_minimum_size.x = 0.0
-		note.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-		note.add_theme_font_size_override("font_size", UiTokens.T_HELP)
-		note.add_theme_color_override("font_color", UiTokens.DISABLED)
-		note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		_tab_page(tab_pages, tab_identity).add_child(note)
 
 	# --- Opacity / Blend ---------------------------------------------------------
 	var opacity_slider := _inspector_slider("Opacity", 0.0, 1.0, 0.01, float(layer.get("opacity", 1.0)), protected, func(value: float) -> void:
@@ -2324,7 +2538,8 @@ func _rebuild_inspector() -> void:
 		spin.value_changed.connect(func(value: float) -> void: _edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["transform"] as Dictionary)["position_px"][axis] = value
-		, false))
+		, false, true, "layer:%s:transform.position_px.%d" % [layer_id, axis]))
+		_wire_spin_transaction(spin, "layer:%s:transform.position_px.%d" % [layer_id, axis])
 		pos_row.add_child(spin)
 	_tab_page(tab_pages, tab_transform).add_child(pos_row)
 
@@ -2344,7 +2559,8 @@ func _rebuild_inspector() -> void:
 		scale_spin.value_changed.connect(func(value: float) -> void: _edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["transform"] as Dictionary)["scale"][axis] = value
-		, false))
+		, false, true, "layer:%s:transform.scale.%d" % [layer_id, axis]))
+		_wire_spin_transaction(scale_spin, "layer:%s:transform.scale.%d" % [layer_id, axis])
 		scale_row.add_child(scale_spin)
 	_tab_page(tab_pages, tab_transform).add_child(scale_row)
 
@@ -2362,7 +2578,8 @@ func _rebuild_inspector() -> void:
 	rot_spin.value_changed.connect(func(value: float) -> void: _edit_layer(layer_id, func(doc):
 		var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 		(l["transform"] as Dictionary)["rotation_deg"] = value
-	, false))
+	, false, true, "layer:%s:transform.rotation_deg" % layer_id))
+	_wire_spin_transaction(rot_spin, "layer:%s:transform.rotation_deg" % layer_id)
 	rot_pivot_row.add_child(rot_spin)
 	var pivot_label := Label.new()
 	pivot_label.text = "  Pivot"
@@ -2378,7 +2595,8 @@ func _rebuild_inspector() -> void:
 		pivot_spin.value_changed.connect(func(value: float) -> void: _edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["transform"] as Dictionary)["pivot"][axis] = value
-		, false))
+		, false, true, "layer:%s:transform.pivot.%d" % [layer_id, axis]))
+		_wire_spin_transaction(pivot_spin, "layer:%s:transform.pivot.%d" % [layer_id, axis])
 		rot_pivot_row.add_child(pivot_spin)
 	_tab_page(tab_pages, tab_transform).add_child(rot_pivot_row)
 
@@ -2439,7 +2657,8 @@ func _rebuild_inspector() -> void:
 		amount_spin.value_changed.connect(func(value: float) -> void: _edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["displacement"] as Dictionary)["amount_px"][axis] = value
-		, false))
+		, false, true, "layer:%s:displacement.amount_px.%d" % [layer_id, axis]))
+		_wire_spin_transaction(amount_spin, "layer:%s:displacement.amount_px.%d" % [layer_id, axis])
 		amount_row.add_child(amount_spin)
 	_tab_page(tab_pages, tab_motion).add_child(amount_row)
 	var disp_misc := HBoxContainer.new()
@@ -2458,7 +2677,8 @@ func _rebuild_inspector() -> void:
 		misc_spin.value_changed.connect(func(value: float) -> void: _edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["displacement"] as Dictionary)[str(spec[1])] = value
-		, false))
+		, false, true, "layer:%s:displacement.%s" % [layer_id, str(spec[1])]))
+		_wire_spin_transaction(misc_spin, "layer:%s:displacement.%s" % [layer_id, str(spec[1])])
 		disp_misc.add_child(misc_spin)
 	_tab_page(tab_pages, tab_motion).add_child(disp_misc)
 	var edge_row := _inspector_option("Edge", FxLookScript.EDGE_MODES, str(displacement.get("edge_mode", "TRANSPARENT")), protected, func(value: String) -> void:
@@ -2485,7 +2705,8 @@ func _rebuild_inspector() -> void:
 		extra_spin.value_changed.connect(func(value: float) -> void: _edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["displacement"] as Dictionary)[str(spec[1])] = value
-		, false))
+		, false, true, "layer:%s:displacement.%s" % [layer_id, str(spec[1])]))
+		_wire_spin_transaction(extra_spin, "layer:%s:displacement.%s" % [layer_id, str(spec[1])])
 		disp_extra.add_child(extra_spin)
 	_tab_page(tab_pages, tab_motion).add_child(disp_extra)
 	_tab_page(tab_pages, tab_motion).add_child(_inspector_option("Time", FxLookScript.TIME_SOURCES, str(displacement.get("time_source", "PRESENTATION_TIME")), protected, func(value: String) -> void:
@@ -2550,7 +2771,8 @@ func _rebuild_inspector() -> void:
 		infl_spin.editable = not protected
 		infl_spin.value_changed.connect(func(value: float) -> void: _edit_layer(layer_id, func(doc):
 			_disp_ensure_influence(doc, layer_id)[str(spec[1])] = value
-		, false))
+		, false, true, "layer:%s:influence.%s" % [layer_id, str(spec[1])]))
+		_wire_spin_transaction(infl_spin, "layer:%s:influence.%s" % [layer_id, str(spec[1])])
 		infl_misc.add_child(infl_spin)
 	var infl_invert := CheckBox.new()
 	infl_invert.text = "INV"
@@ -2619,7 +2841,8 @@ func _rebuild_inspector() -> void:
 		misc_spin2.value_changed.connect(func(value: float) -> void: _edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["mask"] as Dictionary)[str(spec[1])] = value
-		, false))
+		, false, true, "layer:%s:mask.%s" % [layer_id, str(spec[1])]))
+		_wire_spin_transaction(misc_spin2, "layer:%s:mask.%s" % [layer_id, str(spec[1])])
 		mask_misc.add_child(misc_spin2)
 	var invert_check := CheckBox.new()
 	invert_check.set_meta("canonical_field", "mask.invert")
@@ -3346,7 +3569,8 @@ func _expert_spin_row(key: String, spec: Dictionary, fx: Dictionary, layer_id: S
 	spin.value_changed.connect(func(value: float) -> void: _edit_layer(layer_id, func(doc):
 		var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 		(l["fx"] as Dictionary)[key] = value
-	, false, true))
+	, false, true, "layer:%s:expert:%s" % [layer_id, key]))
+	_wire_spin_transaction(spin, "layer:%s:expert:%s" % [layer_id, key])
 	row.add_child(spin)
 	return row
 
@@ -3436,6 +3660,9 @@ func _inspector_option(label_text: String, options: Array, current: String, disa
 func _process(_delta: float) -> void:
 	if runtime == null or viewport_host == null or disp == null:
 		return
+	if dock_host != null and dock != null and dock_host.size.x > 0.0:
+		dock.position = Vector2.ZERO
+		dock.size = dock_host.size
 	var available := viewport_host.size
 	if available.x > 10.0 and available.y > 10.0:
 		var scale_factor := minf(available.x / 1280.0, available.y / 720.0)
@@ -3488,6 +3715,10 @@ func _process(_delta: float) -> void:
 				action_status.text = "✗ Draft stash failed — retrying: " + str(stash_result.get("errors", []))
 			if status_badge != null and _session_ready():
 				status_badge.text = session.badge_text()
+	var transaction_now := Time.get_ticks_msec() / 1000.0
+	for transaction_key in _ui_transactions.keys().duplicate():
+		if transaction_now - float(_ui_transactions[transaction_key]) >= 0.25:
+			_ui_transactions.erase(transaction_key)
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not (event as InputEventKey).pressed or (event as InputEventKey).echo:

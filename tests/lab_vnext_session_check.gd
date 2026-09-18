@@ -16,6 +16,10 @@ func _init() -> void:
 
 	var data_dir := OS.get_environment("NRCU_FX_DATA_DIR")
 	var draft_dir := OS.get_environment("NRCU_FX_DRAFT_DIR")
+	if data_dir.strip_edges() == "" or draft_dir.strip_edges() == "" or not data_dir.begins_with("user://") or not draft_dir.begins_with("user://"):
+		print("[SESSION-CHECK] REFUSED — explicit NRCU_FX_DATA_DIR and NRCU_FX_DRAFT_DIR user:// sandboxes are required")
+		quit(2)
+		return
 	_wipe_dir(ProjectSettings.globalize_path(data_dir))
 	_wipe_dir(ProjectSettings.globalize_path(draft_dir))
 
@@ -197,6 +201,30 @@ func _init() -> void:
 	shell._refresh_selection_ui()
 	await settle(4)
 	_check(str(shell.layers_cost_label.text).contains("cost"), "cost indicator rendered", shell.layers_cost_label.text)
+	# UI-09/13/16: remount is an authority transition, not a visual reset.
+	shell._set_preview_focus("DIM OTHERS")
+	shell._edit_layer(source_id, func(doc):
+		var l: Dictionary = FxLookScriptLocal.find_layer(doc, source_id)
+		l["opacity"] = 0.66
+	)
+	_check(shell.session.dirty and shell._stash_pending, "dirty remount candidate has pending stash")
+	shell._remount_current()
+	await settle(8)
+	_check(shell.selected_key == "" and str(shell.session.current_key) == "" and str(shell.session.mode) == "NONE", "remount closes target authority")
+	_check(shell.session.look.is_empty() and shell.session.base.is_empty() and not shell.session.dirty and shell.session._undo_stack.is_empty() and shell.session._redo_stack.is_empty() and not shell._stash_pending, "remount clears target-bound state")
+	_check(shell.layers_rows.get_child_count() == 0 and not shell.add_layer_menu.visible and not shell.recipe_rows.visible, "no-target hides stale layer and recipe actions")
+	_check(shell._focus_originals.is_empty(), "remount clears stale preview focus cache")
+	shell._select_key("echo_left", false)
+	await settle(6)
+	var dimmed_other := false
+	for focus_key in shell.runtime.registry.slot_nodes.keys():
+		if str(focus_key) != "echo_left" and float((shell.runtime.registry.slot_nodes[focus_key] as CanvasItem).modulate.a) < 0.99:
+			dimmed_other = true
+	_check(dimmed_other, "persisted DIM focus reapplies to new nodes after remount")
+	shell._set_preview_focus("NORMAL")
+	await settle(2)
+	var dock_rect_before_shared: Rect2 = shell.dock.get_global_rect()
+	var preview_rect_before_shared: Rect2 = shell.preview_area.get_global_rect()
 	# UI-18/UI-12: shared production state exposes a persistent protected banner
 	# and gates history actions, including after a selection refresh.
 	var shared_asg: Dictionary = shell.production.load_assignments()["doc"]
@@ -206,6 +234,9 @@ func _init() -> void:
 	await settle(8)
 	_check(str(shell.session.mode) == "SHARED_PROTECTED", "shared target reopens protected", str(shell.session.mode))
 	_check(shell.protected_banner.visible and shell.protected_banner.text.contains("PROTECTED SHARED LOOK"), "protected banner remains visible", shell.protected_banner.text)
+	var dock_rect_after_shared: Rect2 = shell.dock.get_global_rect()
+	var preview_rect_after_shared: Rect2 = shell.preview_area.get_global_rect()
+	_check(absf(dock_rect_after_shared.size.x - dock_rect_before_shared.size.x) <= 1.0 and absf(preview_rect_after_shared.position.x - preview_rect_before_shared.position.x) <= 1.0 and absf(preview_rect_after_shared.size.x - preview_rect_before_shared.size.x) <= 1.0, "protected banner stays within existing geometry", "dock=%s→%s preview=%s→%s local=[dock %.1f host %.1f box %.1f]" % [dock_rect_before_shared, dock_rect_after_shared, preview_rect_before_shared, preview_rect_after_shared, shell.dock.size.x, shell.dock_host.size.x, shell.dock_box.get_combined_minimum_size().x])
 	_check(shell.undo_button.disabled and shell.redo_button.disabled, "protected history actions disabled")
 	await capture("session_05_layer_ops")
 

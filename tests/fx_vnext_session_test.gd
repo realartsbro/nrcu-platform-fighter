@@ -39,6 +39,21 @@ func _init() -> void:
 	_check(session.look["layers"].size() == 1 and str(session.look["layers"][0]["type"]) == "SOURCE", "neutral look is SOURCE-only")
 	_check(session.badge_text() == "○ UNASSIGNED", "badge unassigned", session.badge_text())
 	_check(session.novice_selector() == {"fighter_id": "ice_mage", "element_role": "echo", "visual_side": "left"}, "novice selector per spec 15 §8", str(session.novice_selector()))
+	var scope_expectations := {
+		"CURRENT_OCCURRENCE": {"element_id": "echo_left", "fighter_id": "ice_mage", "element_role": "echo", "visual_side": "left", "presentation_slot": "a_back", "team_side": "left", "mode_family": "1v1", "stage_id": "dojo"},
+		"FIGHTER_ROLE_SIDE": {"fighter_id": "ice_mage", "element_role": "echo", "visual_side": "left"},
+		"FIGHTER_ROLE": {"fighter_id": "ice_mage", "element_role": "echo"},
+		"ROLE_SIDE": {"element_role": "echo", "visual_side": "left"},
+		"ROLE": {"element_role": "echo"},
+		"STATIC_ELEMENT": {"element_id": "echo_left"},
+	}
+	for scope_mode in scope_expectations.keys():
+		var scope_result: Dictionary = session.set_assignment_scope(str(scope_mode))
+		_check(bool(scope_result["ok"]) and session.assignment_selector() == scope_expectations[scope_mode], "scope agency selects exact %s" % scope_mode, str(session.assignment_selector()))
+	var advanced: Dictionary = {"fighter_id": "ice_mage", "element_role": "echo", "stage_id": "dojo"}
+	var advanced_result: Dictionary = session.set_assignment_scope("ADVANCED", advanced)
+	_check(bool(advanced_result["ok"]) and session.assignment_selector() == advanced, "advanced selector builder round-trips", str(session.assignment_selector()))
+	session.set_assignment_scope("CURRENT_OCCURRENCE")
 	_check(session.proposed_look_id() == "ICE_MAGE_ECHO_LEFT", "proposed id ICE_MAGE_ECHO_LEFT", session.proposed_look_id())
 
 	# ---- edit + dirty + stash --------------------------------------------------
@@ -131,6 +146,46 @@ func _init() -> void:
 	# ---- update via apply keeps id + bumps revision ----------------------------------
 	var upd: Dictionary = session.apply()
 	_check(bool(upd["ok"]) and str(upd["look_id"]) == "ICE_MAGE_ECHO_LEFT_UNIQUE_2" and int(upd["revision"]) == 2, "update keeps id and bumps revision", str(upd))
+	# Use a fresh unassigned target so the scope probe exercises a new Look
+	# revision-1 apply rather than updating the collision fixture.
+	var scope_ctx := {"element_id": "scope_target", "fighter_id": "scope_fighter", "element_role": "echo", "visual_side": "left", "presentation_slot": "scope", "team_side": "left", "mode_family": "1v1", "stage_id": "scope_stage"}
+	session.open_target("scope_target", scope_ctx, "scope_target|scope_fighter|echo|left|scope|left|1v1|scope_stage", "echo")
+	_check(str(session.mode) == "EDIT_UNASSIGNED", "scope probe starts from a neutral target", session.mode)
+	var role_scope: Dictionary = session.set_assignment_scope("ROLE")
+	var scope_apply: Dictionary = session.apply("SCOPE_AGENCY_PROBE")
+	var scope_assignments: Dictionary = prod.load_assignments()
+	var scope_bindings: Array = scope_assignments["doc"].get("bindings", [])
+	var scope_key: String = FxResolverScript.selector_key(role_scope["selector"])
+	var scope_binding_found := false
+	for raw_binding in scope_bindings:
+		if raw_binding is Dictionary and FxResolverScript.selector_key((raw_binding as Dictionary).get("selector", {})) == scope_key and str((raw_binding as Dictionary).get("look_id", "")) == "SCOPE_AGENCY_PROBE":
+			scope_binding_found = true
+	_check(bool(scope_apply["ok"]) and scope_binding_found, "Apply commits the selected ROLE selector exactly", str(scope_apply) + " bindings=" + str(scope_bindings))
+	var scope_off: Dictionary = session.set_styling(false)
+	var scope_after_off: Dictionary = prod.load_assignments()
+	var bypass_found := false
+	for raw_bypass in scope_after_off["doc"].get("bypasses", []):
+		if raw_bypass is Dictionary and FxResolverScript.selector_key((raw_bypass as Dictionary).get("selector", {})) == scope_key:
+			bypass_found = true
+	_check(bool(scope_off["ok"]) and bypass_found, "Styling OFF commits the same selected selector", scope_key)
+	var scope_unassign: Dictionary = session.unassign_target()
+	var scope_after_unassign: Dictionary = prod.load_assignments()
+	var binding_removed := true
+	for raw_binding in scope_after_unassign["doc"].get("bindings", []):
+		if raw_binding is Dictionary and FxResolverScript.selector_key((raw_binding as Dictionary).get("selector", {})) == scope_key:
+			binding_removed = false
+	_check(bool(scope_unassign["ok"]) and binding_removed, "Unassign removes exactly the selected selector", str(scope_unassign))
+	# Remount failure must preserve the live authority and dirty work.
+	session.edit(func(doc):
+		doc["name"] = "Remount Probe"
+	)
+	session.stash_override = func(): return {"ok": false, "errors": ["forced stash failure"]}
+	var refused_remount: Dictionary = session.prepare_for_remount()
+	_check(not bool(refused_remount["ok"]) and session.current_key == "scope_target" and session.dirty, "failed stash refuses remount without losing authority", str(refused_remount))
+	session.stash_override = Callable()
+	var accepted_remount: Dictionary = session.prepare_for_remount()
+	_check(bool(accepted_remount["ok"]), "successful stash permits remount", str(accepted_remount))
+	session.close_target()
 
 	var f := FileAccess.open(out_dir.path_join("unit_fx_session.log"), FileAccess.WRITE)
 	var summary := "[FX-SESSION] done · checks=%d failures=%d" % [checks.size(), failures]
