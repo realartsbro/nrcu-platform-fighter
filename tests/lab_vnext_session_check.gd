@@ -63,6 +63,7 @@ func _init() -> void:
 	_check(shell.production.list_look_ids() == ["ICE_MAGE_ECHO_LEFT"], "production look written on apply", str(shell.production.list_look_ids()))
 	_check(not shell.session.dirty and shell.status_badge.text == "● ASSIGNED", "badge assigned after apply", shell.status_badge.text)
 	_check(shell.action_status.text.begins_with("✓ Applied"), "apply feedback shown", shell.action_status.text)
+	_check(shell.action_styling.tooltip_text.contains("echo") and shell.action_unassign.tooltip_text.contains("echo"), "styling and unassign expose assignment scope")
 	await capture("session_02_applied")
 
 	# ---- why? -------------------------------------------------------------------
