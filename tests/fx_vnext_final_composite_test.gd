@@ -7,16 +7,23 @@ const FxOperatorsScript := preload("res://scripts/fx_vnext/fx_operators.gd")
 const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
 const FxScreenRuntimeScript := preload("res://scripts/fx_vnext/fx_screen_runtime.gd")
 const FxLayerRendererScript := preload("res://scripts/fx_vnext/fx_layer_renderer.gd")
+const FxEvidenceScript := preload("res://scripts/fx_vnext/fx_evidence.gd")
 
 var checks := 0
 var failures := 0
 var host: Control
 var runtime
 var renderer
+var evidence_dir: String = ""
+var neutral_readback: Image
+var active_readback: Image
 
 func _init() -> void:
+	var supplied: String = OS.get_environment("FXLAB_EVIDENCE_DIR")
+	evidence_dir = ProjectSettings.globalize_path(supplied) if supplied != "" else ProjectSettings.globalize_path("user://fx_evidence/final_composite")
 	_static_contract()
 	await _runtime_contract()
+	_write_evidence_summary()
 	print("[FX-FINAL-COMPOSITE] done · checks=%d failures=%d" % [checks, failures])
 	quit(1 if failures > 0 else 0)
 
@@ -94,9 +101,8 @@ func _runtime_contract() -> void:
 			_check(is_equal_approx(float(clock_mat.get_shader_parameter("free_run_time")), 9.0), "final quad receives free-run clock")
 
 	var readback_enabled := OS.get_environment("FX_FINAL_READBACK") != ""
-	var neutral_image: Image
 	if readback_enabled:
-		neutral_image = await _capture()
+		neutral_readback = await _capture()
 	var active_fx: Dictionary = _final_layer(1.0)
 	(active_fx["fx"] as Dictionary)["final_tint_color"] = [0.0, 0.0, 0.0, 1.0]
 	var active_result: Dictionary = renderer.apply_composition([{"key": "echo_left", "look": _look("FINAL_ACTIVE", active_fx)}])
@@ -108,8 +114,8 @@ func _runtime_contract() -> void:
 		if active_mat != null:
 			_check(float(active_mat.get_shader_parameter("final_tint_amount")) > 0.0, "non-neutral final uniform is non-zero")
 	if readback_enabled:
-		var active_image: Image = await _capture()
-		_check(_mean_abs_diff(neutral_image, active_image) > 0.0005, "non-neutral final pass changes rendered pixels")
+		active_readback = await _capture()
+		_check(_mean_abs_diff(neutral_readback, active_readback) > 0.0005, "non-neutral final pass changes rendered pixels")
 	else:
 		_check(true, "pixel readback is opt-in for headless contract runs")
 
@@ -124,6 +130,25 @@ func _runtime_contract() -> void:
 	forged_final["plane"] = "COMPOSITION_BACKGROUND"
 	var forged_result: Dictionary = renderer.apply_final_composite([forged_final])
 	_check(not bool(forged_result.get("ok", false)), "direct final pass rejects composition-plane masquerading")
+
+func _write_evidence_summary() -> void:
+	var captures: Array[String] = []
+	if neutral_readback != null:
+		var neutral_path := evidence_dir.path_join("final_composite_neutral.png")
+		if FxEvidenceScript.save_png(neutral_readback, neutral_path):
+			captures.append(neutral_path)
+	if active_readback != null:
+		var active_path := evidence_dir.path_join("final_composite_active.png")
+		if FxEvidenceScript.save_png(active_readback, active_path):
+			captures.append(active_path)
+	FxEvidenceScript.write_json(evidence_dir.path_join("final_composite_summary.json"), {
+		"status": "PASS" if failures == 0 else "FAIL",
+		"checks": checks,
+		"failures": failures,
+		"presentation_time": 2.5,
+		"free_run_time": 9.0,
+		"captures": captures,
+	})
 
 func _final_layer(amount: float):
 	var layer: Dictionary = FxLookScript.new_layer("FX", "Final")
