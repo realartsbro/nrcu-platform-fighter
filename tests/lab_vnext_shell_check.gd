@@ -146,6 +146,12 @@ func _init() -> void:
 	_check(shell.breadcrumb_label.text == "ICE MAGE › ECHO › LEFT", "breadcrumb reflects selection", shell.breadcrumb_label.text)
 	_check("presentation" in shell.status_detail.text, "status shows spatial readout", shell.status_detail.text)
 	_check(shell.selection_outline.visible, "selection outline visible")
+	# UI-11: remount clears authority, not just the browser highlight.
+	shell._remount_current()
+	await settle(12)
+	_check(shell.status_title.text == "NO TARGET SELECTED" and not bool(shell.target_action_row.visible) and not bool(shell.target_action_row3.visible), "remount returns to no-target state")
+	shell._select_key("echo_left", false)
+	await settle(8)
 
 	# ---- dock toggle ---------------------------------------------------------
 	shell._toggle_dock()
