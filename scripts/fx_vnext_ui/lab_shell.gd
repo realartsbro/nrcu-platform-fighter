@@ -2143,6 +2143,7 @@ func _rebuild_inspector() -> void:
 	)
 	if is_source:
 		plane_opt.tooltip_text = "Mandatory SOURCE is fixed to TARGET_SOURCE"
+	plane_opt.set_meta("canonical_field", "layer.plane")
 	_tab_page(tab_pages, tab_identity).add_child(plane_opt)
 
 	if type == "FX":
@@ -2151,6 +2152,7 @@ func _rebuild_inspector() -> void:
 				(FxLookScript.find_layer(doc, layer_id))["input"] = value
 			, false)
 		)
+		input_row.set_meta("canonical_field", "layer.input")
 		_tab_page(tab_pages, "LOOK").add_child(input_row)
 
 	# --- Transform ------------------------------------------------------------------
@@ -2414,6 +2416,7 @@ func _rebuild_inspector() -> void:
 	# --- Mask -------------------------------------------------------------------------
 	var mask: Dictionary = layer.get("mask", {})
 	var mask_check := CheckBox.new()
+	mask_check.set_meta("canonical_field", "mask.enabled")
 	mask_check.text = "MASK"
 	mask_check.button_pressed = bool(mask.get("enabled", false))
 	mask_check.disabled = protected
@@ -2422,18 +2425,22 @@ func _rebuild_inspector() -> void:
 		(l["mask"] as Dictionary)["enabled"] = pressed
 	, true))
 	_tab_page(tab_pages, "MASK").add_child(mask_check)
-	_tab_page(tab_pages, "MASK").add_child(_inspector_option("Source", FxLookScript.MASK_SOURCES, str(mask.get("source", "NONE")), protected, func(value: String) -> void:
+	var mask_source_row := _inspector_option("Source", FxLookScript.MASK_SOURCES, str(mask.get("source", "NONE")), protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["mask"] as Dictionary)["source"] = value
 		, true)
-	))
-	_tab_page(tab_pages, "MASK").add_child(_inspector_option("Region", FxLookScript.MASK_REGIONS, str(mask.get("region", "FULL")), protected, func(value: String) -> void:
+	)
+	mask_source_row.set_meta("canonical_field", "mask.source")
+	_tab_page(tab_pages, "MASK").add_child(mask_source_row)
+	var mask_region_row := _inspector_option("Region", FxLookScript.MASK_REGIONS, str(mask.get("region", "FULL")), protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["mask"] as Dictionary)["region"] = value
 		, false)
-	))
+	)
+	mask_region_row.set_meta("canonical_field", "mask.region")
+	_tab_page(tab_pages, "MASK").add_child(mask_region_row)
 	_tab_page(tab_pages, "MASK").add_child(_inspector_option("Space", FxLookScript.MASK_SPACES, str(mask.get("space", "LAYER_SPACE")), protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
@@ -2447,6 +2454,7 @@ func _rebuild_inspector() -> void:
 		misc_label2.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 		mask_misc.add_child(misc_label2)
 		var misc_spin2 := SpinBox.new()
+		misc_spin2.set_meta("canonical_field", "mask." + str(spec[1]))
 		misc_spin2.min_value = float(spec[2])
 		misc_spin2.max_value = float(spec[3])
 		misc_spin2.step = float(spec[4])
@@ -2459,6 +2467,7 @@ func _rebuild_inspector() -> void:
 		, false))
 		mask_misc.add_child(misc_spin2)
 	var invert_check := CheckBox.new()
+	invert_check.set_meta("canonical_field", "mask.invert")
 	invert_check.text = "INVERT"
 	invert_check.button_pressed = bool(mask.get("invert", false))
 	invert_check.disabled = protected
