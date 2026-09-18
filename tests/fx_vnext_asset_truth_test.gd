@@ -87,7 +87,7 @@ func _truth() -> void:
 	_check(str((FxAssetsScript.dependency_status("mask.custom_mask", m, data_dir) as Dictionary).get("state", "")) == "NOT_REQUIRED", "truth mask full not-required")
 	var f: Dictionary = FxLookScript.new_layer("FX", "f")
 	(f["fx"] as Dictionary)["effect_mask_enabled"] = true
-	_check(str((FxAssetsScript.dependency_status("fx.treatment_mask_path", f, data_dir) as Dictionary).get("state", "")) == "MISSING", "truth treatment required")
+	_check(str((FxAssetsScript.dependency_status("treatment_mask_path", f, data_dir) as Dictionary).get("state", "")) == "MISSING", "truth treatment required")
 
 func _harvest() -> void:
 	var prod = FxProductionScript.new()
@@ -137,16 +137,17 @@ func _atomicity() -> void:
 	var prod = FxProductionScript.new()
 	prod.data_dir = data_dir
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(data_dir))
+	var aid := "ATOMIC_%d" % int(Time.get_unix_time_from_system())
 	var look: Dictionary = _wrap_look(_layer_with("CUSTOM_TEXTURE", _upath("ok.png")))
-	look["look_id"] = "ATOMIC"
+	look["look_id"] = aid
 	look["revision"] = 1
 	var a1: Dictionary = prod.apply({"look": look})
 	_check(bool(a1.get("ok", false)), "atomicity seed apply ok", str(a1.get("errors", [])))
 	if not bool(a1.get("ok", false)):
 		return
-	var look_bytes: PackedByteArray = FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(prod.look_path("ATOMIC")))
+	var look_bytes: PackedByteArray = FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(prod.look_path(aid)))
 	var asg_bytes: PackedByteArray = FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(prod.assignments_path()))
-	var persisted: Dictionary = prod.load_look("ATOMIC")["doc"]
+	var persisted: Dictionary = prod.load_look(aid)["doc"]
 	var href := ""
 	for l in (persisted.get("layers", []) as Array):
 		var p = ((l as Dictionary).get("displacement", {}) as Dictionary).get("custom_texture", null)
@@ -158,11 +159,11 @@ func _atomicity() -> void:
 	# Inject a later failure (revision rule): docs must stay byte-identical,
 	# referenced asset untouched.
 	var bad: Dictionary = _wrap_look(_layer_with("CUSTOM_TEXTURE", _upath("ok.png")))
-	bad["look_id"] = "ATOMIC"
+	bad["look_id"] = aid
 	bad["revision"] = 999
 	var a2: Dictionary = prod.apply({"look": bad})
 	_check(not bool(a2.get("ok", false)), "atomicity bad revision fails", str(a2.get("errors", [])))
-	_check(FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(prod.look_path("ATOMIC"))) == look_bytes, "atomicity look bytes stable")
+	_check(FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(prod.look_path(aid))) == look_bytes, "atomicity look bytes stable")
 	_check(FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(prod.assignments_path())) == asg_bytes, "atomicity assignments bytes stable")
 	_check(FileAccess.file_exists(href) and FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(href)) == asset_bytes, "atomicity referenced asset untouched")
 

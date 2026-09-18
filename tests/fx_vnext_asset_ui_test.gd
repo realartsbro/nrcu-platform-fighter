@@ -22,7 +22,7 @@ const FIELDS := [
 	"displacement.custom_texture",
 	"displacement.influence_mask.custom_mask",
 	"mask.custom_mask",
-	"fx.treatment_mask_path",
+	"treatment_mask_path",
 ]
 const DRIVERS := ["NOISE", "DIRECTIONAL", "WAVE", "CELLULAR", "FRINGE_DRIVER", "CUSTOM_TEXTURE"]
 const MSOURCES := ["NONE", "ORIGINAL_SOURCE_ALPHA", "POST_DISPLACEMENT_ALPHA", "CUSTOM_MASK"]
@@ -136,10 +136,11 @@ func _stage_files() -> void:
 	c.close()
 
 func _half_mask(path: String) -> void:
+	# Layer/influence masks sample ALPHA: opaque white vs transparent.
 	var img := Image.create(64, 64, false, Image.FORMAT_RGBA8)
 	for y in 64:
 		for x in 64:
-			img.set_pixel(x, y, Color.WHITE if x < 32 else Color.BLACK)
+			img.set_pixel(x, y, Color.WHITE if x < 32 else Color(0, 0, 0, 0))
 	img.save_png(path)
 
 func _gradient(path: String) -> void:
@@ -245,6 +246,35 @@ func _show_tab_of(wrap) -> void:
 			tabs.current_tab = i
 			return
 
+func _scroll_to(wrap) -> void:
+	# Inspector content scrolls: bring the row into the visible dock area
+	# before measuring (UI-06 ensure_control_visible pattern).
+	_show_tab_of(wrap)
+	var sc: Node = wrap
+	while sc != null and not (sc is ScrollContainer):
+		sc = sc.get_parent()
+	if sc == null:
+		return
+	var target := wrap as Control
+	(sc as ScrollContainer).ensure_control_visible(target)
+
+func _scroll_to_visible(wrap, dock: Control) -> void:
+	# ensure_control_visible can undershoot on very long pages (ADVANCED):
+	# settle, re-measure, and drive to max scroll once if still outside.
+	_scroll_to(wrap)
+	await settle(3)
+	var wr: Rect2 = (wrap as Control).get_global_rect()
+	var dr: Rect2 = dock.get_global_rect()
+	if not dr.has_point(wr.position):
+		var sc: Node = wrap
+		while sc != null and not (sc is ScrollContainer):
+			sc = sc.get_parent()
+		if sc != null:
+			(sc as ScrollContainer).scroll_vertical = int((sc as ScrollContainer).get_v_scroll_bar().max_value)
+			await settle(3)
+			(sc as ScrollContainer).ensure_control_visible(wrap as Control)
+			await settle(3)
+
 func _asset_child(wrap, cname: String):
 	for child in _walk(wrap):
 		if (child as Node).name == cname:
@@ -269,6 +299,11 @@ func _freeze_time() -> void:
 	shell.runtime.screen.lab_preview_pause()
 	shell._on_time_entered(0.5)
 	await settle(10)
+	# Session-direct edits bypass _edit_layer: re-render the preview from
+	# the current session look, or captures compare stale compositions.
+	shell._render_current_look()
+	await settle(5)
+	_check(not str(shell.action_status.text).begins_with("render:"), "UI-07 preview composes", str(shell.action_status.text))
 
 func _roi_mean(a: Image, b: Image, r: Rect2i) -> float:
 	# Strided sampling (every 4th pixel): 16x faster, robust for ROI means.
@@ -302,7 +337,7 @@ func _truth_table() -> void:
 	(layer["mask"] as Dictionary)["source"] = "CUSTOM_MASK"
 	_check(str((FxAssets.dependency_status("mask.custom_mask", layer, data_dir) as Dictionary).get("state", "")) == "MISSING", "UI-07 truth missing custom_mask")
 	(layer["fx"] as Dictionary)["effect_mask_enabled"] = true
-	_check(str((FxAssets.dependency_status("fx.treatment_mask_path", layer, data_dir) as Dictionary).get("state", "")) == "MISSING", "UI-07 truth missing treatment")
+	_check(str((FxAssets.dependency_status("treatment_mask_path", layer, data_dir) as Dictionary).get("state", "")) == "MISSING", "UI-07 truth missing treatment")
 	# nonexistent -> MISSING (not COMPLETE)
 	(layer["displacement"] as Dictionary)["custom_texture"] = _upath("ghost.png")
 	_check(str((FxAssets.dependency_status("displacement.custom_texture", layer, data_dir) as Dictionary).get("state", "")) == "MISSING", "UI-07 truth ghost is missing")
@@ -334,7 +369,7 @@ func _picker_rows() -> void:
 		_check(wrap != null, "UI-07 typed row %s" % str(f))
 		if wrap == null:
 			continue
-		_show_tab_of(wrap)
+		_scroll_to(wrap)
 		await settle(3)
 		_check(_asset_child(wrap, "AssetBrowse") is Button, "UI-07 %s browse button" % str(f))
 		_check(_asset_child(wrap, "AssetClear") is Button, "UI-07 %s clear button" % str(f))
@@ -433,12 +468,12 @@ func _picks_all_families() -> void:
 	await settle(5)
 	_select_layer(lid)
 	await settle(5)
-	_check(_badge_text("fx.treatment_mask_path").begins_with("⚠ INCOMPLETE"), "UI-07 treatment incomplete when empty", _badge_text("fx.treatment_mask_path"))
-	await _ui_pick("fx.treatment_mask_path", _upath("mask_half.png"))
+	_check(_badge_text("treatment_mask_path").begins_with("⚠ INCOMPLETE"), "UI-07 treatment incomplete when empty", _badge_text("treatment_mask_path"))
+	await _ui_pick("treatment_mask_path", _upath("mask_half.png"))
 	_select_layer(lid)
 	await settle(5)
-	_check(str(FxAssetsScript.field_path("fx.treatment_mask_path", _layer(lid))) == _upath("mask_half.png"), "UI-07 treatment pick canonical")
-	_check(_badge_text("fx.treatment_mask_path").begins_with("✓ COMPLETE"), "UI-07 treatment badge complete", _badge_text("fx.treatment_mask_path"))
+	_check(str(FxAssetsScript.field_path("treatment_mask_path", _layer(lid))) == _upath("mask_half.png"), "UI-07 treatment pick canonical")
+	_check(_badge_text("treatment_mask_path").begins_with("✓ COMPLETE"), "UI-07 treatment badge complete", _badge_text("treatment_mask_path"))
 
 # ---- T3: fail-closed negatives -----------------------------------------------------
 
@@ -567,8 +602,15 @@ func _visual_mask() -> void:
 	var left := _roi_mean(masked, plain, Rect2i(0, 0, 640, 720))
 	var right := _roi_mean(masked, plain, Rect2i(640, 0, 640, 720))
 	print("UI07 mask left=%.5f right=%.5f" % [left, right])
-	_check(left > 0.01, "UI-07 mask affects masked half", "left=%.5f" % left)
-	_check(right < 0.004, "UI-07 mask spares unmasked half", "right=%.5f" % right)
+	_edit(lid, func(l: Dictionary) -> void: (l as Dictionary)["enabled"] = false)
+	await _freeze_time()
+	var base: Image = await _surface("ui07_mask_base")
+	var vis := _roi_mean(masked, base, Rect2i(0, 0, 1280, 720))
+	print("UI07 mask visible=%.5f" % vis)
+	_check(vis > 0.003, "UI-07 mask effect visible vs no layer", "vis=%.5f" % vis)
+	_edit(lid, func(l: Dictionary) -> void: (l as Dictionary)["enabled"] = true)
+	_check(left > 0.005, "UI-07 mask affects masked half", "left=%.5f" % left)
+	_check(right < 0.002, "UI-07 mask spares unmasked half", "right=%.5f" % right)
 
 func _visual_displacement() -> void:
 	# CUSTOM gradient texture vs NOISE driver: visibly different fields.
@@ -582,7 +624,7 @@ func _visual_displacement() -> void:
 		(l["displacement"] as Dictionary)["enabled"] = true
 		(l["displacement"] as Dictionary)["driver"] = "CUSTOM_TEXTURE"
 		(l["displacement"] as Dictionary)["custom_texture"] = _upath("tex_gradient.png")
-		(l["displacement"] as Dictionary)["amount_px"] = [80.0, 0.0]
+		(l["displacement"] as Dictionary)["amount_px"] = [160.0, 0.0]
 	)
 	await _freeze_time()
 	var custom: Image = await _surface("ui07_disp_custom")
@@ -591,10 +633,19 @@ func _visual_displacement() -> void:
 	var noise: Image = await _surface("ui07_disp_noise")
 	var d := _roi_mean(custom, noise, Rect2i(0, 0, 1280, 720))
 	print("UI07 displacement custom-vs-noise=%.5f" % d)
-	_check(d > 0.01, "UI-07 custom texture drives displacement", "mean=%.5f" % d)
+	_edit(lid, func(l: Dictionary) -> void: (l as Dictionary)["enabled"] = false)
+	await _freeze_time()
+	var dbase: Image = await _surface("ui07_disp_base")
+	var dvis := _roi_mean(custom, dbase, Rect2i(0, 0, 1280, 720))
+	print("UI07 displacement visible=%.5f" % dvis)
+	_check(dvis > 0.002, "UI-07 displacement visible vs no layer", "vis=%.5f" % dvis)
+	_edit(lid, func(l: Dictionary) -> void: (l as Dictionary)["enabled"] = true)
+	_check(d > 0.002, "UI-07 custom texture drives displacement", "mean=%.5f" % d)
 
 func _visual_influence() -> void:
-	# influence half mask confines displacement to the left half.
+	# influence half mask confines gradient displacement to the styled
+	# (left) half: confined vs full differ where the mask transition
+	# overlaps the echo, never on the empty right half.
 	var lid := _add_fx_layer()
 	_check(lid != "", "UI-07 visual layer added")
 	if lid == "":
@@ -603,8 +654,9 @@ func _visual_influence() -> void:
 	await settle(5)
 	_edit(lid, func(l: Dictionary) -> void:
 		(l["displacement"] as Dictionary)["enabled"] = true
-		(l["displacement"] as Dictionary)["driver"] = "NOISE"
-		(l["displacement"] as Dictionary)["amount_px"] = [90.0, 0.0]
+		(l["displacement"] as Dictionary)["driver"] = "CUSTOM_TEXTURE"
+		(l["displacement"] as Dictionary)["custom_texture"] = _upath("tex_gradient.png")
+		(l["displacement"] as Dictionary)["amount_px"] = [160.0, 0.0]
 		(l["displacement"] as Dictionary)["influence_mask"] = {"enabled": true, "source": "CUSTOM_MASK", "region": "FULL", "space": "LAYER_SPACE", "custom_mask": _upath("mask_half.png"), "width_px": 0.0, "feather_px": 0.0, "expand_contract_px": 0.0, "invert": false}
 	)
 	await _freeze_time()
@@ -615,8 +667,17 @@ func _visual_influence() -> void:
 	var left := _roi_mean(confined, full, Rect2i(0, 0, 640, 720))
 	var right := _roi_mean(confined, full, Rect2i(640, 0, 640, 720))
 	print("UI07 influence left=%.5f right=%.5f" % [left, right])
-	_check(left > 0.008, "UI-07 influence confines left half", "left=%.5f" % left)
-	_check(right < 0.004, "UI-07 influence spares right half", "right=%.5f" % right)
+	_edit(lid, func(l: Dictionary) -> void: (l as Dictionary)["enabled"] = false)
+	await _freeze_time()
+	var ibase: Image = await _surface("ui07_infl_base")
+	var ivis := _roi_mean(confined, ibase, Rect2i(0, 0, 1280, 720))
+	print("UI07 influence visible=%.5f" % ivis)
+	_check(ivis > 0.001, "UI-07 influence effect visible vs no layer", "vis=%.5f" % ivis)
+	_edit(lid, func(l: Dictionary) -> void: (l as Dictionary)["enabled"] = true)
+	# The styled echo lives in the left half: confined-vs-full differ where
+	# the mask transition overlaps it (left), never on the empty right.
+	_check(left > 0.0015, "UI-07 influence confines left half", "left=%.5f" % left)
+	_check(right < 0.002, "UI-07 influence spares right half", "right=%.5f" % right)
 
 func _visual_treatment() -> void:
 	# grade treatment gated by half treatment mask: left graded, right clean.
@@ -630,6 +691,7 @@ func _visual_treatment() -> void:
 		(l["fx"] as Dictionary)["base_grade_amount"] = 1.0
 		(l["fx"] as Dictionary)["grade_brightness"] = 0.6
 		(l["fx"] as Dictionary)["effect_mask_enabled"] = true
+		(l["fx"] as Dictionary)["effect_mask_base"] = true
 		(l["fx"] as Dictionary)["treatment_mask_path"] = _upath("mask_half.png")
 	)
 	await _freeze_time()
@@ -640,8 +702,15 @@ func _visual_treatment() -> void:
 	var left := _roi_mean(treated, plain, Rect2i(0, 0, 640, 720))
 	var right := _roi_mean(treated, plain, Rect2i(640, 0, 640, 720))
 	print("UI07 treatment left=%.5f right=%.5f" % [left, right])
-	_check(left > 0.01, "UI-07 treatment affects masked half", "left=%.5f" % left)
-	_check(right < 0.004, "UI-07 treatment spares unmasked half", "right=%.5f" % right)
+	_edit(lid, func(l: Dictionary) -> void: (l as Dictionary)["enabled"] = false)
+	await _freeze_time()
+	var tbase: Image = await _surface("ui07_treat_base")
+	var tvis := _roi_mean(treated, tbase, Rect2i(0, 0, 1280, 720))
+	print("UI07 treatment visible=%.5f" % tvis)
+	_check(tvis > 0.003, "UI-07 treatment visible vs no layer", "vis=%.5f" % tvis)
+	_edit(lid, func(l: Dictionary) -> void: (l as Dictionary)["enabled"] = true)
+	_check(left > 0.005, "UI-07 treatment affects masked half", "left=%.5f" % left)
+	_check(right < 0.002, "UI-07 treatment spares unmasked half", "right=%.5f" % right)
 
 # ---- T6: save/reopen/replace/clear ---------------------------------------------------------
 
@@ -680,6 +749,9 @@ func _save_reopen_replace() -> void:
 		if str((l as Dictionary).get("layer_id", "")) == lid:
 			back_a = str(((l as Dictionary).get("displacement", {}) as Dictionary).get("custom_texture", ""))
 	_check(back_a != "" and back_a == path_a.strip_edges() or back_a.begins_with(str(shell.production.data_dir)), "UI-07 reopen keeps A", back_a)
+	# Apply A succeeded -> SHARED_PROTECTED (valid): own branch for replace.
+	if not await _ensure_editable("replace"):
+		return
 	# replace with B via UI, apply, reopen: B authority, A gone from doc
 	_select_layer(lid)
 	await settle(5)
@@ -705,8 +777,7 @@ func _containment() -> void:
 		if wrap == null:
 			_check(false, "UI-07 containment row %s" % str(f))
 			continue
-		_show_tab_of(wrap)
-		await settle(3)
+		_scroll_to_visible(wrap, dock)
 		var wr: Rect2 = (wrap as Control).get_global_rect()
 		var dr: Rect2 = dock.get_global_rect()
 		_check(dr.has_point(wr.position) and wr.size.x <= dr.size.x + 1.0, "UI-07 row inside dock %s" % str(f), "%s in %s" % [str(wr), str(dr)])

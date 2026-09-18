@@ -605,7 +605,11 @@ func _set_fx_uniforms(material: ShaderMaterial, fx, motion := {}, layer_id := ""
 				f[key] = v
 			continue
 		if v is String and not (v as String).strip_edges().is_valid_float():
-			continue
+			# UI-07/08: legitimate asset-path strings (treatment/edge mask)
+			# must survive sanitizing — the texture loader below resolves
+			# them. Anything else non-numeric still falls back to default.
+			if str(key) != "treatment_mask_path" and str(key) != "edge_mask_path":
+				continue
 		if (v is float or v is int) and not is_finite(float(v)):
 			continue
 		# NOTE: bools are legitimate fx values (pure_continuous, effect_mask_*)

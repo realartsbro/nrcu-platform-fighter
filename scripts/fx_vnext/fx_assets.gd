@@ -79,7 +79,7 @@ const DEP_FIELDS := {
 	"displacement.custom_texture": {"block": "displacement", "key": "custom_texture"},
 	"displacement.influence_mask.custom_mask": {"block": "influence", "key": "custom_mask"},
 	"mask.custom_mask": {"block": "mask", "key": "custom_mask"},
-	"fx.treatment_mask_path": {"block": "fx", "key": "treatment_mask_path"},
+	"treatment_mask_path": {"block": "fx", "key": "treatment_mask_path"},
 }
 
 static func is_field_required(field_id: String, layer: Dictionary) -> bool:
@@ -100,7 +100,7 @@ static func is_field_required(field_id: String, layer: Dictionary) -> bool:
 			var m_raw = layer.get("mask", {})
 			var m: Dictionary = m_raw if m_raw is Dictionary else {}
 			return bool(m.get("enabled", false)) and str(m.get("source", "")) == "CUSTOM_MASK"
-		"fx.treatment_mask_path":
+		"treatment_mask_path":
 			var fraw = layer.get("fx", {})
 			var fd: Dictionary = fraw if fraw is Dictionary else {}
 			return bool(fd.get("effect_mask_enabled", false))

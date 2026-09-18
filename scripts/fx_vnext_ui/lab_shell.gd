@@ -2632,7 +2632,6 @@ func _dep_asset_row(field_id: String, label_text: String, layer: Dictionary, lay
 	label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	label.custom_minimum_size.x = 70
 	row.add_child(label)
-	var current := str(raw_path) if raw_path != null else ""
 	var edit := LineEdit.new()
 	edit.name = "AssetPath"
 	edit.text = current
@@ -3090,14 +3089,14 @@ func _build_expert_fx(page: VBoxContainer, layer: Dictionary, layer_id: String, 
 			elif kind == "amount" or kind == "int":
 				page.add_child(_expert_spin_row(str(key), spec, fx, layer_id, protected))
 			elif kind == "asset":
-				var dep_row := _dep_asset_row("fx." + str(key), str(key), layer, layer_id, protected, func(text: String) -> void:
+				var dep_row := _dep_asset_row(str(key), str(key), layer, layer_id, protected, func(text: String) -> void:
 					_edit_layer(layer_id, func(doc):
 						var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 						(l["fx"] as Dictionary)[str(key)] = text.strip_edges() if text.strip_edges() != "" else null
 					, false)
 				)
 				page.add_child(dep_row)
-				_dep_note({"ADVANCED": page}, "ADVANCED", "fx." + str(key), layer)
+				_dep_note({"ADVANCED": page}, "ADVANCED", str(key), layer)
 		if not pending_checks.is_empty():
 			page.add_child(_expert_check_row(pending_checks, fx, layer_id, protected))
 			pending_checks.clear()
