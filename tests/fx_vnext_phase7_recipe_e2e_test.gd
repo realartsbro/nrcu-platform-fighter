@@ -11,6 +11,8 @@ const FxEvidenceScript := preload("res://scripts/fx_vnext/fx_evidence.gd")
 const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
 const FxRecipesScript := preload("res://scripts/fx_vnext/fx_recipes.gd")
 const FxResolverScript := preload("res://scripts/fx_vnext/fx_resolver.gd")
+const FxSideShapesScript := preload("res://scripts/fx_vnext/fx_side_shapes.gd")
+const FxScreenRuntimeScript := preload("res://scripts/fx_vnext/fx_screen_runtime.gd")
 const RuntimeScene := preload("res://scenes/nrcu_vs_runtime.tscn")
 
 const PRESENTATION_TIME := 1.25
@@ -35,6 +37,8 @@ func _init() -> void:
 	_wipe_dir(data_dir)
 	_wipe_dir(draft_dir)
 	DirAccess.make_dir_recursive_absolute(out_dir)
+	_check(FxSideShapesScript.write_selection(data_dir, {"left": "ORGANIC_LOBE", "right": "ORGANIC_LOBE"}), "isolated Phase 7 data selects ORGANIC_LOBE before mounting the Lab")
+	_prove_organic_mask_selection()
 
 	shell = _spawn_shell()
 	await settle(45)
@@ -81,6 +85,75 @@ func _spawn_shell() -> Control:
 	root.add_child(node)
 	return node
 
+func _prove_organic_mask_selection() -> void:
+	var resolved: Dictionary = FxSideShapesScript.resolve_all(data_dir)
+	var selection: Dictionary = resolved.get("selection", {})
+	_check(str(selection.get("left", "")) == "ORGANIC_LOBE" and str(selection.get("right", "")) == "ORGANIC_LOBE", "isolated side-shape selection is ORGANIC_LOBE for both sides", str(selection))
+	for side in ["left", "right"]:
+		var metadata: Dictionary = resolved.get(side, {})
+		var mask_path := str(metadata.get("mask", ""))
+		_check(str(metadata.get("source", "")) == "preset", "%s organic side resolves from a preset" % side, str(metadata))
+		_check(str(metadata.get("preset_id", "")) == "ORGANIC_LOBE", "%s resolves the stable ORGANIC_LOBE preset" % side, str(metadata))
+		_check(mask_path != "" and FileAccess.file_exists(mask_path), "%s organic preset resolves a project-local mask asset" % side, mask_path)
+		var geometry: Dictionary = _mask_geometry(mask_path)
+		_check(bool(geometry.get("ok", false)), "%s organic mask loads as an alpha texture" % side, str(geometry))
+		_check(bool(geometry.get("non_rectangular", false)), "%s organic mask has irregular/non-rectangular alpha geometry" % side, str(geometry))
+	_check(str((resolved["left"] as Dictionary).get("mask", "")) != str((resolved["right"] as Dictionary).get("mask", "")), "left and right ORGANIC_LOBE masks are distinct asymmetric assets")
+
+func _mask_geometry(mask_path: String) -> Dictionary:
+	var texture: Texture2D = FxScreenRuntimeScript.load_project_texture(mask_path)
+	if texture == null:
+		return {"ok": false, "reason": "texture could not be loaded", "mask": mask_path}
+	var image := texture.get_image()
+	if image == null or image.is_empty():
+		return {"ok": false, "reason": "texture image is empty", "mask": mask_path}
+	var width := image.get_width()
+	var height := image.get_height()
+	var sample_step := 4
+	var min_x := width
+	var min_y := height
+	var max_x := -1
+	var max_y := -1
+	var occupied_samples := 0
+	for y in range(0, height, sample_step):
+		for x in range(0, width, sample_step):
+			if image.get_pixel(x, y).a <= 0.08:
+				continue
+			occupied_samples += 1
+			min_x = mini(min_x, x)
+			min_y = mini(min_y, y)
+			max_x = maxi(max_x, x)
+			max_y = maxi(max_y, y)
+	if max_x < min_x or max_y < min_y:
+		return {"ok": false, "reason": "no visible alpha", "mask": mask_path}
+	var row_widths: Array = []
+	var row_step := maxi(1, height / 12)
+	for y in range(row_step / 2, height, row_step):
+		var row_min := width
+		var row_max := -1
+		for x in range(0, width, sample_step):
+			if image.get_pixel(x, y).a > 0.08:
+				row_min = mini(row_min, x)
+				row_max = maxi(row_max, x)
+		if row_max >= row_min:
+			row_widths.append(row_max - row_min + 1)
+	var width_range := 0
+	if not row_widths.is_empty():
+		width_range = int(row_widths.max()) - int(row_widths.min())
+	var bbox_area := float(maxi(1, (max_x - min_x + 1) * (max_y - min_y + 1)))
+	var sampled_area := float(occupied_samples * sample_step * sample_step)
+	var fill_ratio := sampled_area / bbox_area
+	return {
+		"ok": true,
+		"mask": mask_path,
+		"width": width,
+		"height": height,
+		"alpha_bbox": [min_x, min_y, max_x, max_y],
+		"row_width_range": width_range,
+		"fill_ratio": fill_ratio,
+		"non_rectangular": width_range >= maxi(16, width / 32) and fill_ratio < 0.98,
+	}
+
 func _prove_registry_and_ui_discoverability() -> void:
 	var ids: Array = FxRecipesScript.recipe_ids()
 	_check(ids == [FLAME_RECIPE, ORGANIC_RECIPE], "registry exposes exactly both stable Hero Recipe ids", str(ids))
@@ -92,6 +165,15 @@ func _prove_registry_and_ui_discoverability() -> void:
 	var organic_target := _target_for_role("side_field")
 	recipe_targets[ORGANIC_RECIPE] = organic_target
 	_check(organic_target != "", "registry exposes the organic side-field target", str(shell.runtime.registry.keys()))
+	var runtime_data_dir: String = shell.runtime.shape_data_dir()
+	var runtime_selection := FxSideShapesScript.load_selection(runtime_data_dir)
+	var runtime_resolved := FxSideShapesScript.resolve_all(runtime_data_dir)
+	print("[ORGANIC-DEBUG] lab_data_dir=%s expected_data_dir=%s selection=%s resolved=%s" % [runtime_data_dir, data_dir, str(runtime_selection), str(runtime_resolved)])
+	_check(runtime_data_dir == data_dir, "mounted Lab runtime reads the isolated side-shape data directory", runtime_data_dir)
+	_check(str(runtime_selection.get("left", "")) == "ORGANIC_LOBE" and str(runtime_selection.get("right", "")) == "ORGANIC_LOBE", "mount does not overwrite the ORGANIC_LOBE selection", str(runtime_selection))
+	for side in ["left", "right"]:
+		var shape_node: Node = shell.runtime.screen.get_node_or_null("Root/SideFields/FieldRight" if side == "right" else "Root/SideFields/FieldLeft")
+		print("[ORGANIC-DEBUG] side=%s node=%s visible=%s preset=%s source=%s mask=%s runtime_resolved=%s" % [side, str(shape_node), str(shape_node.visible) if shape_node != null else "missing", str(shape_node.get_meta("fx_side_shape_preset", "")) if shape_node != null else "missing", str(shape_node.get_meta("fx_side_shape_source", "")) if shape_node != null else "missing", str(shape_node.get_meta("fx_side_shape_mask", "")) if shape_node != null else "missing", str(runtime_resolved.get(side, {}))])
 	_check(str(shell.runtime.registry.context_for_key("primary_left").get("element_role", "")) == "primary", "primary target context is recipe-compatible")
 	_check(organic_target != "" and str(shell.runtime.registry.context_for_key(organic_target).get("element_role", "")) == "side_field", "side-field target context is recipe-compatible")
 
@@ -126,6 +208,8 @@ func _exercise_recipe(recipe_id: String, target_key: String) -> void:
 	_check(recipe_layer_ids.size() == expected_count and not recipe_layer_ids.has(""), "%s has all complete instantiated layer ids" % recipe_id, str(recipe_layer_ids))
 	for layer_id in recipe_layer_ids:
 		_check(layer_id.begins_with("recipe-"), "%s layer identity is recipe-instance based" % recipe_id, layer_id)
+	if recipe_id == ORGANIC_RECIPE:
+		await _prove_organic_recipe_source_alpha(target_key, _recipe_layers(instantiated_layers, before_count))
 
 	# All authoring changes below are driven through the actual shell controls.
 	# Use the first recipe FX layer because both Hero Recipes expose the same
@@ -396,6 +480,54 @@ func _recipe_layers(layers: Array, start: int) -> Array:
 	for i in range(start, layers.size()):
 		out.append(layers[i])
 	return out
+
+func _prove_organic_recipe_source_alpha(target_key: String, recipe_layers: Array) -> void:
+	var contour: Dictionary = {}
+	for raw_layer in recipe_layers:
+		var candidate: Dictionary = raw_layer
+		if str(candidate.get("layer_id", "")).find("organic-contour") >= 0:
+			contour = candidate
+			break
+	var contour_mask: Dictionary = contour.get("mask", {})
+	_check(not contour.is_empty(), "ORGANIC_SIDE_FIELD instantiates its contour layer")
+	_check(bool(contour_mask.get("enabled", false)) and str(contour_mask.get("source", "")) == "ORIGINAL_SOURCE_ALPHA" and str(contour_mask.get("space", "")) == "SOURCE_SPACE", "organic recipe contour reads ORIGINAL_SOURCE_ALPHA in SOURCE_SPACE", str(contour_mask))
+
+	var source_node = shell.runtime.registry.target_node(target_key)
+	var source_texture: Texture2D = source_node.texture if source_node is TextureRect else null
+	var side := "right" if target_key.contains("right") else "left"
+	var shape_node: Node = shell.runtime.screen.get_node_or_null("Root/SideFields/FieldRight" if side == "right" else "Root/SideFields/FieldLeft")
+	var source_mask_path := str(shape_node.get_meta("fx_side_shape_mask", "")) if shape_node != null else ""
+	_check(shape_node != null and str(shape_node.get_meta("fx_side_shape_preset", "")) == "ORGANIC_LOBE", "mounted organic target retains ORGANIC_LOBE metadata", str(shape_node.get_meta("fx_side_shape_preset", "")) if shape_node != null else "missing")
+	var expected_texture: Texture2D = FxScreenRuntimeScript.load_project_texture(source_mask_path)
+	_check(source_texture != null and source_mask_path != "" and _same_alpha_texture(source_texture, expected_texture), "organic target source texture is the resolved organic mask", "texture=%s metadata=%s" % [str(source_texture), source_mask_path])
+
+	shell._render_current_look()
+	await settle(8)
+	var contour_quad_found := false
+	for raw_entry in shell.renderer.stack_quads(target_key):
+		var entry: Dictionary = raw_entry
+		if str(entry.get("layer_id", "")).find("organic-contour") < 0:
+			continue
+		contour_quad_found = true
+		var quad = entry.get("node", null)
+		var material := quad.material as ShaderMaterial if quad is Control else null
+		var shader_source = material.get_shader_parameter("source_tex") if material != null else null
+		_check(material != null and is_equal_approx(float(material.get_shader_parameter("mask_source")), 1.0), "organic contour shader uses ORIGINAL_SOURCE_ALPHA", str(material.get_shader_parameter("mask_source")) if material != null else "missing")
+		_check(shader_source is Texture2D and _same_alpha_texture(shader_source as Texture2D, expected_texture), "organic contour shader samples that actual organic source texture", str(shader_source) if shader_source is Texture2D else "missing")
+	_check(contour_quad_found, "organic contour layer reaches the live renderer stack")
+
+func _same_alpha_texture(a: Texture2D, b: Texture2D) -> bool:
+	if a == null or b == null or a.get_width() != b.get_width() or a.get_height() != b.get_height():
+		return false
+	var image_a := a.get_image()
+	var image_b := b.get_image()
+	if image_a == null or image_b == null or image_a.is_empty() or image_b.is_empty():
+		return false
+	for y in range(0, image_a.get_height(), 16):
+		for x in range(0, image_a.get_width(), 16):
+			if absf(image_a.get_pixel(x, y).a - image_b.get_pixel(x, y).a) > 0.02:
+				return false
+	return true
 
 func _domain_header(domain: String):
 	for child in _walk(shell.inspector_content):

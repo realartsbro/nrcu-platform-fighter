@@ -9,8 +9,8 @@ extends RefCounted
 #
 # Optional project-local selection file: <data_dir>/side_shapes.json
 #   {
-#     "left":  "CURRENT_HOURGLASS" | "res://..." | "user://...",
-#     "right": "CURRENT_HOURGLASS" | "res://..." | "user://...",
+#     "left":  "CURRENT_HOURGLASS" | "ORGANIC_LOBE" | "res://..." | "user://...",
+#     "right": "CURRENT_HOURGLASS" | "ORGANIC_LOBE" | "res://..." | "user://...",
 #     "mirror": true            # right falls back to the left selection when unset
 #   }
 # Unknown, external or missing masks NEVER break the mount: they fall back to the
@@ -22,6 +22,10 @@ const PRESETS := {
 	"CURRENT_HOURGLASS": {
 		"left": "res://assets/vs/generated/side_field_left_mask.png",
 		"right": "res://assets/vs/generated/side_field_right_mask.png",
+	},
+	"ORGANIC_LOBE": {
+		"left": "res://assets/vs/generated/organic_lobe_left_mask.svg",
+		"right": "res://assets/vs/generated/organic_lobe_right_mask.svg",
 	},
 }
 
