@@ -48,6 +48,12 @@ func _stage_files() -> void:
 	var t := FileAccess.open(stage_dir.path_join("note.txt"), FileAccess.WRITE)
 	t.store_string("not a texture")
 	t.close()
+	var ftres := FileAccess.open(stage_dir.path_join("fake.tres"), FileAccess.WRITE)
+	ftres.store_string("not a resource")
+	ftres.close()
+	var rimg := Image.create(8, 8, false, Image.FORMAT_RGBA8)
+	rimg.fill(Color.RED)
+	ResourceSaver.save(ImageTexture.create_from_image(rimg), stage_dir.path_join("real.tres"))
 
 func _upath(n: String) -> String:
 	return ProjectSettings.globalize_path("user://fx_asset_stage/" + n)
@@ -72,6 +78,18 @@ func _truth() -> void:
 	layer = _layer_with("CUSTOM_TEXTURE", _upath("ok.png"))
 	var h: Dictionary = FxAssetsScript.dependency_status("displacement.custom_texture", layer, data_dir)
 	_check(str(h.get("state", "")) == "COMPLETE" and bool(h.get("needs_harvest", false)), "truth staged complete+harvest", str(h))
+	# dormant: mode off keeps paths without blocking
+	var dormant_ok := _layer_with("CUSTOM_TEXTURE", _upath("ok.png"))
+	(dormant_ok["displacement"] as Dictionary)["driver"] = "NOISE"
+	_check(str((FxAssetsScript.dependency_status("displacement.custom_texture", dormant_ok, data_dir) as Dictionary).get("state", "")) == "DORMANT", "truth dormant valid kept")
+	var dormant_bad := _layer_with("CUSTOM_TEXTURE", _upath("ghost.png"))
+	(dormant_bad["displacement"] as Dictionary)["driver"] = "NOISE"
+	_check(str((FxAssetsScript.dependency_status("displacement.custom_texture", dormant_bad, data_dir) as Dictionary).get("state", "")) == "DORMANT_WARNING", "truth dormant broken warning")
+	# real Texture2D .tres: COMPLETE; fake .tres: WRONG_TYPE or UNLOADABLE
+	var rt: Dictionary = FxAssetsScript.dependency_status("displacement.custom_texture", _layer_with("CUSTOM_TEXTURE", _upath("real.tres")), data_dir)
+	_check(str(rt.get("state", "")) == "COMPLETE", "truth real tres complete", str(rt))
+	var ft: Dictionary = FxAssetsScript.dependency_status("displacement.custom_texture", _layer_with("CUSTOM_TEXTURE", _upath("fake.tres")), data_dir)
+	_check(str(ft.get("state", "")) == "WRONG_TYPE" or str(ft.get("state", "")) == "UNLOADABLE", "truth fake tres rejected", str(ft))
 	# imported project texture: COMPLETE, never harvested
 	var ri: Dictionary = FxAssetsScript.dependency_status("displacement.custom_texture", _layer_with("CUSTOM_TEXTURE", "res://assets/elements/fighter_beauty_test.png"), data_dir)
 	_check(str(ri.get("state", "")) == "COMPLETE" and not bool(ri.get("needs_harvest", false)), "truth res-imported complete", str(ri))
@@ -105,6 +123,23 @@ func _harvest() -> void:
 	# missing stays a clean failure (fail-closed, no silent fallback)
 	var r3: Dictionary = FxAssetsScript.ensure_project_ref(_upath("ghost.png"), data_dir)
 	_check(not bool(r3.get("ok", false)), "harvest missing fails closed", str(r3))
+	# integrity A: same source twice -> identical ref, second reuses
+	var ra: Dictionary = FxAssetsScript.ensure_project_ref(_upath("ok.png"), data_dir)
+	var rb: Dictionary = FxAssetsScript.ensure_project_ref(_upath("ok.png"), data_dir)
+	_check(bool(rb.get("ok", false)) and str(rb.get("ref", "")) == str(ra.get("ref", "")) and bool(rb.get("reused", false)), "harvest reuses identical bytes", str(rb))
+	# integrity B: tampered pool file -> fail closed, never overwritten
+	if bool(ra.get("ok", false)):
+		var orig: PackedByteArray = FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(str(ra.get("ref", ""))))
+		var tamper := Image.create(16, 16, false, Image.FORMAT_RGBA8)
+		tamper.fill(Color.BLUE)
+		tamper.save_png(ProjectSettings.globalize_path(str(ra.get("ref", ""))))
+		var tampered: PackedByteArray = FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(str(ra.get("ref", ""))))
+		var rc: Dictionary = FxAssetsScript.ensure_project_ref(_upath("ok.png"), data_dir)
+		_check(not bool(rc.get("ok", false)) and str(rc.get("errors", [""])[0]).contains("integrity"), "harvest tamper fails closed", str(rc))
+		_check(FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(str(ra.get("ref", "")))) == tampered, "harvest tamper not overwritten")
+		var restore := FileAccess.open(ProjectSettings.globalize_path(str(ra.get("ref", ""))), FileAccess.WRITE)
+		restore.store_buffer(orig)
+		restore.close()
 
 func _validation() -> void:
 	# Pipeline truth (mirrors production.apply order): harvest FIRST, then

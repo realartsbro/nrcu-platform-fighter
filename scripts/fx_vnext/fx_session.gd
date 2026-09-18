@@ -49,6 +49,9 @@ func snapshot() -> void:
 	_redo_stack.clear()
 
 func undo() -> bool:
+	if not is_editable():
+		last_errors = ["shared production Look is protected — choose Edit Shared Look or Make Unique first"]
+		return false
 	if _undo_stack.is_empty():
 		return false
 	_redo_stack.append(look.duplicate(true))
@@ -57,6 +60,9 @@ func undo() -> bool:
 	return true
 
 func redo() -> bool:
+	if not is_editable():
+		last_errors = ["shared production Look is protected — choose Edit Shared Look or Make Unique first"]
+		return false
 	if _redo_stack.is_empty():
 		return false
 	_undo_stack.append(look.duplicate(true))

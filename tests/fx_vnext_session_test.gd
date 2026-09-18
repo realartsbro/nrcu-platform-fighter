@@ -92,6 +92,7 @@ func _init() -> void:
 	_check(session.badge_text().contains("SHARED"), "badge shows shared", session.badge_text())
 	var blocked: Dictionary = session.edit(func(doc): doc["layers"][0]["opacity"] = 0.1)
 	_check(not bool(blocked["ok"]), "edit blocked while protected")
+	_check(not session.undo() and not session.redo(), "history blocked while protected")
 
 	# ---- edit shared → draft → apply bumps revision -------------------------------
 	var es: Dictionary = session.edit_shared()

@@ -388,12 +388,18 @@ func apply(plan: Dictionary) -> Dictionary:
 	return {"ok": true, "errors": [], "look_revision": revision, "verified_look_id": verified_look_id}
 
 func _harvest_external_assets(look: Dictionary) -> Dictionary:
-	# Rewrites every external asset reference to its imported project-local copy.
+	# Rewrites every REQUIRED external asset reference to its imported
+	# project-local copy. Dormant (mode-inactive) paths are skipped
+	# entirely: a stale unused path must never block an apply, and
+	# reactivation re-harvests it (researcher 12-10 §2).
 	var import_errors: Array = []
 	for layer in look.get("layers", []):
 		if not (layer is Dictionary):
 			continue
 		for field in ["displacement", "mask"]:
+			var dep_id := "displacement.custom_texture" if field == "displacement" else "mask.custom_mask"
+			if not FxAssetsScript.is_field_required(dep_id, layer):
+				continue
 			var block = (layer as Dictionary).get(field, null)
 			if not (block is Dictionary):
 				continue
@@ -410,7 +416,7 @@ func _harvest_external_assets(look: Dictionary) -> Dictionary:
 		# production assets too — an unharvested external ref would leave
 		# Production non-self-contained.
 		var disp = (layer as Dictionary).get("displacement", null)
-		if disp is Dictionary:
+		if disp is Dictionary and FxAssetsScript.is_field_required("displacement.influence_mask.custom_mask", layer):
 			var infl = (disp as Dictionary).get("influence_mask", null)
 			if infl is Dictionary and (infl as Dictionary).get("custom_mask") != null and str((infl as Dictionary).get("custom_mask")).strip_edges() != "":
 				var iresult: Dictionary = FxAssetsScript.ensure_project_ref(str((infl as Dictionary)["custom_mask"]), data_dir)
@@ -419,7 +425,7 @@ func _harvest_external_assets(look: Dictionary) -> Dictionary:
 				else:
 					(infl as Dictionary)["custom_mask"] = str(iresult["ref"])
 		var fx = (layer as Dictionary).get("fx", null)
-		if fx is Dictionary:
+		if fx is Dictionary and FxAssetsScript.is_field_required("treatment_mask_path", layer):
 			for fx_key in ["treatment_mask_path"]:
 				var fx_ref = (fx as Dictionary).get(fx_key, null)
 				if fx_ref == null or str(fx_ref).strip_edges() == "":

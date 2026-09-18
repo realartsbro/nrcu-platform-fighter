@@ -16,16 +16,17 @@ static func assets_dir(data_dir: String) -> String:
 	return data_dir.path_join("assets")
 
 static func import_external(ref: String, data_dir: String) -> Dictionary:
-	# Copies the file with a content-hash prefix and returns the project ref.
+	# Copies the file under a FULL content-hash name and returns the project
+	# ref. Content-addressed + immutable: an existing target is reused only
+	# after its bytes re-hash to the expected digest; anything else fails
+	# closed (never overwrite), and a failed apply only ever orphans an
+	# unreferenced blob (researcher 12-10 §4/§6).
 	if not FileAccess.file_exists(ref):
 		return {"ok": false, "errors": ["external asset not found: " + ref]}
 	var bytes := FileAccess.get_file_as_bytes(ref)
 	if bytes.is_empty():
 		return {"ok": false, "errors": ["external asset unreadable: " + ref]}
-	var ctx := HashingContext.new()
-	ctx.start(HashingContext.HASH_SHA256)
-	ctx.update(bytes)
-	var digest := ctx.finish().hex_encode().substr(0, 12)
+	var digest := _sha256(bytes)
 	var base := ref.get_file()
 	var safe := ""
 	for i in range(base.length()):
@@ -37,15 +38,25 @@ static func import_external(ref: String, data_dir: String) -> Dictionary:
 	var rel := assets_dir(data_dir).path_join(digest + "_" + safe)
 	var abs_target := ProjectSettings.globalize_path(rel)
 	DirAccess.make_dir_recursive_absolute(abs_target.get_base_dir())
-	if not FileAccess.file_exists(rel):
-		var out := FileAccess.open(abs_target, FileAccess.WRITE)
-		if out == null:
-			return {"ok": false, "errors": ["cannot write project asset: " + rel]}
-		out.store_buffer(bytes)
-		out.close()
+	if FileAccess.file_exists(rel):
+		var have := FileAccess.get_file_as_bytes(rel)
+		if _sha256(have) != digest:
+			return {"ok": false, "errors": ["asset pool integrity failure (hash mismatch, not overwritten): " + rel]}
+		return {"ok": true, "ref": rel, "bytes": bytes.size(), "reused": true}
+	var out := FileAccess.open(abs_target, FileAccess.WRITE)
+	if out == null:
+		return {"ok": false, "errors": ["cannot write project asset: " + rel]}
+	out.store_buffer(bytes)
+	out.close()
 	if not FileAccess.file_exists(rel):
 		return {"ok": false, "errors": ["project asset missing after import: " + rel]}
 	return {"ok": true, "ref": rel, "bytes": bytes.size()}
+
+static func _sha256(bytes: PackedByteArray) -> String:
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	ctx.update(bytes)
+	return ctx.finish().hex_encode()
 
 static func ensure_project_ref(ref: String, data_dir: String) -> Dictionary:
 	# Verifies a project-local ref (and reports a clear diagnostic if missing).
@@ -143,11 +154,18 @@ static func load_texture(path: String):
 
 static func asset_health(path) -> Dictionary:
 	# EMPTY / MISSING / UNLOADABLE / WRONG_TYPE / COMPLETE (+needs_harvest).
+	# Order (researcher 12-10 §3): real Texture2D resources first (any
+	# extension, e.g. res://foo.tres), then raw raster files via Image decode.
 	if path == null or str(path).strip_edges() == "":
 		return {"state": "EMPTY", "detail": "no path set", "needs_harvest": false}
 	var text := str(path).strip_edges()
 	if DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(text)):
 		return {"state": "INVALID", "detail": "asset is a directory: " + text, "needs_harvest": false}
+	if ResourceLoader.exists(text, "Texture2D"):
+		var res = load(text)
+		if res is Texture2D:
+			return {"state": "COMPLETE", "detail": text, "needs_harvest": false}
+		return {"state": "UNLOADABLE", "detail": "registered Texture2D fails to load: " + text, "needs_harvest": false}
 	if text.contains("://") and not text.begins_with("res://") and not text.begins_with("user://"):
 		return {"state": "INVALID", "detail": "must be project-local: " + text, "needs_harvest": false}
 	if text.begins_with("/") or text.contains(":\\"):
@@ -177,16 +195,19 @@ static func is_image_path(text: String) -> bool:
 	return ext == "png" or ext == "jpg" or ext == "jpeg" or ext == "webp" or ext == "bmp" or ext == "exr"
 
 static func dependency_status(field_id: String, layer: Dictionary, data_dir := "") -> Dictionary:
-	# required + empty -> MISSING; required + bad path -> that health state;
-	# not required + empty -> NOT_REQUIRED; not required + set -> health
-	# (an invalid path is still INVALID, matching validation).
+	# ACTIVE required: valid -> COMPLETE, bad/missing -> blocking states.
+	# INACTIVE: empty -> NOT_REQUIRED; valid dormant path -> DORMANT kept
+	# (reactivation revalidates); broken dormant path -> DORMANT_WARNING,
+	# never a blocking dependency failure (researcher 12-10 §2).
 	var required := is_field_required(field_id, layer)
 	var path = field_path(field_id, layer)
 	if not required and (path == null or str(path).strip_edges() == ""):
 		return {"state": "NOT_REQUIRED", "detail": "mode needs no asset", "needs_harvest": false, "required": false}
 	var health := asset_health(path)
 	if not required:
-		return {"state": "COMPLETE" if str(health["state"]) == "COMPLETE" else str(health["state"]), "detail": str(health["detail"]), "needs_harvest": false, "required": false}
+		if str(health["state"]) == "COMPLETE":
+			return {"state": "DORMANT", "detail": "kept, not required by current mode", "needs_harvest": false, "required": false}
+		return {"state": "DORMANT_WARNING", "detail": "invalid while unused: " + str(health["detail"]), "needs_harvest": false, "required": false}
 	var out := {"state": str(health["state"]), "detail": str(health["detail"]), "required": true, "needs_harvest": false}
 	if str(out["state"]) == "EMPTY":
 		out["state"] = "MISSING"

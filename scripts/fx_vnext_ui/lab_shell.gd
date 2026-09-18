@@ -36,6 +36,7 @@ var time_syncing := false
 var _dragging := ""
 var _selecting := false
 var _focus_originals: Dictionary = {}
+var _ui_transactions: Dictionary = {}
 
 # authoring session (stream A/E integration)
 var production
@@ -142,6 +143,7 @@ var dock_box: VBoxContainer
 var status_title: Label
 var status_badge: Label
 var status_detail: Label
+var protected_banner: Label
 var layers_box: VBoxContainer
 var inspector_box: VBoxContainer
 var layers_split_handle: ColorRect
@@ -153,14 +155,20 @@ var selected_layer_id := ""
 var action_save: Button
 var action_apply: Button
 var action_styling: Button
+var action_unassign: Button
 var action_unique: Button
 var action_edit_shared: Button
 var action_why: Button
+var target_action_row: HBoxContainer
+var target_action_row2: HBoxContainer
+var target_action_row3: HBoxContainer
 var action_status: Label
 var why_label: Label
 var why_actions: VBoxContainer
 var why_open := false
 var library_rows: VBoxContainer
+var recipe_rows: VBoxContainer
+var inspector_cost_badge: Label
 var layers_cost_label: Label
 var study_mode := "OFF"
 var preset_authoring: Button
@@ -214,6 +222,7 @@ func _ready() -> void:
 	_apply_state()
 	_on_resized()
 	_apply_preview_focus()
+	_refresh_selection_ui()
 
 func _on_window_size_changed() -> void:
 	_update_pixel_space()
@@ -492,11 +501,18 @@ func _build_dock() -> void:
 	status_detail.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
 	status_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	status_box.add_child(status_detail)
+	protected_banner = Label.new()
+	protected_banner.text = ""
+	protected_banner.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	protected_banner.add_theme_color_override("font_color", UiTokens.ACCENT)
+	protected_banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	protected_banner.visible = false
+	status_box.add_child(protected_banner)
 
 	# ---- authoring actions (specs/06) ----
-	var action_row := HBoxContainer.new()
-	action_row.add_theme_constant_override("separation", 4)
-	status_box.add_child(action_row)
+	target_action_row = HBoxContainer.new()
+	target_action_row.add_theme_constant_override("separation", 4)
+	status_box.add_child(target_action_row)
 	action_save = _styled_button("SAVE DRAFT", Callable(self, "_action_save_draft"))
 	action_apply = _styled_button("Apply to Target", Callable(self, "_action_apply"))
 	action_styling = _styled_button("Active in Game: ON", Callable(self, "_action_toggle_styling"))
@@ -504,21 +520,21 @@ func _build_dock() -> void:
 	action_edit_shared = _styled_button("Edit Shared Look", Callable(self, "_action_edit_shared"))
 	action_why = _styled_button("WHY?", Callable(self, "_action_why"))
 	for button in [action_save, action_apply, action_styling, action_why]:
-		action_row.add_child(button)
-	var action_row2 := HBoxContainer.new()
-	action_row2.add_theme_constant_override("separation", 4)
-	status_box.add_child(action_row2)
+		target_action_row.add_child(button)
+	target_action_row2 = HBoxContainer.new()
+	target_action_row2.add_theme_constant_override("separation", 4)
+	status_box.add_child(target_action_row2)
 	for button in [action_unique, action_edit_shared]:
-		action_row2.add_child(button)
-	var action_row3 := HBoxContainer.new()
-	action_row3.add_theme_constant_override("separation", 4)
-	status_box.add_child(action_row3)
+		target_action_row2.add_child(button)
+	target_action_row3 = HBoxContainer.new()
+	target_action_row3.add_theme_constant_override("separation", 4)
+	status_box.add_child(target_action_row3)
 	undo_button = _styled_button("↶ UNDO", func() -> void: _action_undo())
 	redo_button = _styled_button("↷ REDO", func() -> void: _action_redo())
 	var revert_button := _styled_button("Revert Changes", func() -> void: _action_revert())
-	var unassign_button := _styled_button("UNASSIGN", func() -> void: _action_unassign())
-	for button in [undo_button, redo_button, revert_button, unassign_button]:
-		action_row3.add_child(button)
+	action_unassign = _styled_button("UNASSIGN", func() -> void: _action_unassign())
+	for button in [undo_button, redo_button, revert_button, action_unassign]:
+		target_action_row3.add_child(button)
 	action_status = Label.new()
 	action_status.text = ""
 	action_status.add_theme_font_size_override("font_size", UiTokens.T_HELP)
@@ -598,11 +614,30 @@ func _build_dock() -> void:
 	inspector_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	inspector_inner.add_child(inspector_content)
 
-	# ---- Look Library ----
-	_section_header(inspector_inner, "LOOK LIBRARY")
+	# ---- Production inventory (persisted Looks) -------------------------------
+	_section_header(inspector_inner, "PRODUCTION LOOK INVENTORY")
 	library_rows = VBoxContainer.new()
 	library_rows.add_theme_constant_override("separation", 2)
 	inspector_inner.add_child(library_rows)
+	# Recipes are authoring templates, not persisted Production Looks. Keep the
+	# two inventories visibly separate so a recipe can never masquerade as a
+	# selectable/assignable Production asset.
+	_section_header(inspector_inner, "RECIPE LIBRARY · AUTHORING TEMPLATES")
+	recipe_rows = VBoxContainer.new()
+	recipe_rows.add_theme_constant_override("separation", 2)
+	for template in FxTemplatesScript.TEMPLATES:
+		var recipe_row := HBoxContainer.new()
+		var recipe_label := Label.new()
+		recipe_label.text = str(template) + "  · RECIPE"
+		recipe_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		recipe_label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+		recipe_label.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
+		recipe_row.add_child(recipe_label)
+		var recipe_add := _styled_button("ADD", func() -> void: _action_add_layer(str(template)))
+		recipe_add.tooltip_text = "Instantiate this recipe into the current draft; it is not a Production Look."
+		recipe_row.add_child(recipe_add)
+		recipe_rows.add_child(recipe_row)
+	inspector_inner.add_child(recipe_rows)
 
 func _section_header(parent: Node, text: String) -> void:
 	var label := Label.new()
@@ -698,7 +733,7 @@ func _time_at_x(x: float, width: float) -> float:
 
 func _x_at_time(t: float, width: float) -> float:
 	var usable := maxf(width - RULER_PAD * 2.0, 1.0)
-	return RULER_PAD + (t / TIMELINE_LEN) * usable
+	return RULER_PAD + (clampf(t, 0.0, TIMELINE_LEN) / TIMELINE_LEN) * usable
 
 func _ruler_input(event: InputEvent, ruler: Control) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
@@ -764,7 +799,7 @@ func _draw_timeline(ruler: Control) -> void:
 			ruler.draw_string(font, Vector2(x + 3.0, label_y), str(name), HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, UiTokens.ACCENT)
 		_timeline_label_rects.append({"name": str(name), "x": x + 3.0, "y": label_y - 11.0, "w": est, "h": 12.0})
 	# playhead
-	var t_now: float = float(runtime.elapsed()) if runtime != null else 0.0
+	var t_now: float = clampf(float(runtime.elapsed()), 0.0, TIMELINE_LEN) if runtime != null else 0.0
 	var x_now := _x_at_time(t_now, w)
 	ruler.draw_line(Vector2(x_now, 6.0), Vector2(x_now, h - 6.0), UiTokens.CREAM, 2.0)
 
@@ -794,15 +829,39 @@ func _apply_browser_mode() -> void:
 	if browser_panel == null:
 		return
 	var auto_narrow := size.x < AUTO_RAIL_WIDTH
-	var collapsed: bool = bool(ws.data.get("browser_collapsed", false)) or auto_narrow
+	var intent := _browser_intent()
+	# AUTO is the only mode allowed to follow the width heuristic. A direct
+	# user open is authoritative even below the narrow breakpoint; a direct
+	# user close remains closed after widening.
+	var collapsed := intent == WorkspaceStateScript.INTENT_USER_CLOSED or (intent == WorkspaceStateScript.INTENT_AUTO and auto_narrow)
 	browser.visible = not collapsed
 	browser_rail.visible = collapsed
 	browser_panel.custom_minimum_size.x = 34.0 if collapsed else float(ws.data.get("browser_w", 280.0))
 
+func _browser_intent() -> String:
+	var intent := str(ws.data.get("browser_intent", ""))
+	if intent == WorkspaceStateScript.INTENT_AUTO and bool(ws.data.get("browser_collapsed", false)):
+		# Compatibility for old tests/workspace writers that still set the
+		# legacy boolean directly.
+		return WorkspaceStateScript.INTENT_USER_CLOSED
+	if intent in [WorkspaceStateScript.INTENT_AUTO, WorkspaceStateScript.INTENT_USER_OPEN, WorkspaceStateScript.INTENT_USER_CLOSED]:
+		return intent
+	return WorkspaceStateScript.INTENT_USER_CLOSED if bool(ws.data.get("browser_collapsed", false)) else WorkspaceStateScript.INTENT_AUTO
+
 func _timeline_effective_collapsed() -> bool:
-	var expanded: bool = bool(ws.data.get("timeline_expanded", false))
+	var intent := _timeline_intent()
 	var auto_collapsed := size.y < AUTO_TIMELINE_COLLAPSE_HEIGHT
-	return (not expanded) or auto_collapsed
+	return intent != WorkspaceStateScript.INTENT_USER_OPEN and (intent == WorkspaceStateScript.INTENT_USER_CLOSED or auto_collapsed or intent == WorkspaceStateScript.INTENT_AUTO)
+
+func _timeline_intent() -> String:
+	var intent := str(ws.data.get("timeline_intent", ""))
+	if intent == WorkspaceStateScript.INTENT_AUTO and bool(ws.data.get("timeline_expanded", false)):
+		# Compatibility for old tests/workspace writers that still set the
+		# legacy expanded boolean directly.
+		return WorkspaceStateScript.INTENT_USER_OPEN
+	if intent in [WorkspaceStateScript.INTENT_AUTO, WorkspaceStateScript.INTENT_USER_OPEN, WorkspaceStateScript.INTENT_USER_CLOSED]:
+		return intent
+	return WorkspaceStateScript.INTENT_USER_OPEN if bool(ws.data.get("timeline_expanded", false)) else WorkspaceStateScript.INTENT_AUTO
 
 func _apply_timeline() -> void:
 	if timeline_panel == null:
@@ -969,7 +1028,9 @@ func _update_play_button() -> void:
 	play_button.text = "▶ PLAY" if paused else "⏸ PAUSE"
 
 func _toggle_browser() -> void:
-	ws.data["browser_collapsed"] = not bool(ws.data.get("browser_collapsed", false))
+	var open_now := bool(browser.visible)
+	ws.data["browser_intent"] = WorkspaceStateScript.INTENT_USER_CLOSED if open_now else WorkspaceStateScript.INTENT_USER_OPEN
+	ws.data["browser_collapsed"] = open_now
 	_apply_browser_mode()
 	ws.save_state()
 
@@ -979,7 +1040,9 @@ func _toggle_dock() -> void:
 	ws.save_state()
 
 func _toggle_timeline_expanded() -> void:
-	ws.data["timeline_expanded"] = not bool(ws.data.get("timeline_expanded", false))
+	var expanded_now := not _timeline_effective_collapsed()
+	ws.data["timeline_intent"] = WorkspaceStateScript.INTENT_USER_CLOSED if expanded_now else WorkspaceStateScript.INTENT_USER_OPEN
+	ws.data["timeline_expanded"] = not expanded_now
 	_apply_timeline()
 	ws.save_state()
 
@@ -1081,6 +1144,8 @@ func _update_selection_outline() -> void:
 	selection_outline.visible = true
 
 func _set_preview_focus(mode: String) -> void:
+	if mode not in ["NORMAL", "DIM OTHERS", "SOLO"]:
+		mode = "NORMAL"
 	ws.data["preview_focus"] = mode
 	_apply_focus_buttons()
 	_apply_preview_focus()
@@ -1158,6 +1223,9 @@ func _refresh_selection_ui() -> void:
 		status_badge.text = "○ UNASSIGNED"
 		status_badge.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
 		status_detail.text = "-"
+		if protected_banner != null:
+			protected_banner.visible = false
+			protected_banner.text = ""
 		selection_outline.visible = false
 		if why_label != null:
 			why_label.visible = false
@@ -1172,9 +1240,16 @@ func _refresh_selection_ui() -> void:
 	if _session_ready():
 		status_badge.text = session.badge_text()
 		status_detail.text = session.status_detail() + "\n" + _spatial_readout(selected_key)
+		if protected_banner != null:
+			var is_protected := str(session.mode) == "SHARED_PROTECTED"
+			protected_banner.visible = is_protected
+			protected_banner.text = "PROTECTED SHARED LOOK — EDIT SHARED or MAKE UNIQUE to change values." if is_protected else ""
 	else:
 		status_badge.text = _status_badge_for(selected_key)
 		status_detail.text = _spatial_readout(selected_key)
+		if protected_banner != null:
+			protected_banner.visible = false
+			protected_banner.text = ""
 	status_badge.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
 	if why_label != null:
 		why_label.visible = why_open
@@ -1312,7 +1387,7 @@ func _render_current_look() -> void:
 	# deterministic still (and layer motion follows the same time).
 	var parked := 0.0
 	if runtime.has_method("elapsed"):
-		parked = maxf(float(runtime.elapsed()), 0.0)
+		parked = clampf(float(runtime.elapsed()), 0.0, TIMELINE_LEN)
 	runtime.seek(parked)
 	renderer.set_time(parked)
 	_plan_status = built["detail"]
@@ -1373,12 +1448,20 @@ func _schedule_stash() -> void:
 func _edit_layer(_layer_id: String, mutator: Callable, rebuild := true, live := false) -> void:
 	if not _session_ready():
 		return
+	if not session.is_editable():
+		action_status.text = "✗ Protected shared Look — EDIT SHARED or MAKE UNIQUE first"
+		return
+	var current_layer: Dictionary = FxLookScript.find_layer(session.look, _layer_id)
+	if bool(current_layer.get("locked", false)):
+		action_status.text = "✗ Layer locked — unlock it before editing"
+		return
 	if not live:
 		session.snapshot()
 	var result: Dictionary = session.edit(mutator)
 	if bool(result.get("ok", false)):
 		_schedule_stash()
 		_render_current_look()
+		_refresh_inspector_cost()
 		if status_badge != null:
 			status_badge.text = session.badge_text()
 		var warnings: Array = result.get("warnings", [])
@@ -1390,6 +1473,41 @@ func _edit_layer(_layer_id: String, mutator: Callable, rebuild := true, live := 
 		_rebuild_layers_panel()
 		_rebuild_inspector()
 		_refresh_library()
+
+func _begin_ui_transaction(key: String) -> void:
+	if not _session_ready() or _ui_transactions.has(key):
+		return
+	session.snapshot()
+	_ui_transactions[key] = true
+
+func _end_ui_transaction(key: String) -> void:
+	_ui_transactions.erase(key)
+
+func _refresh_inspector_cost() -> void:
+	if inspector_cost_badge == null or not _session_ready():
+		return
+	var layer := FxLookScript.find_layer(session.look, selected_layer_id)
+	if layer.is_empty():
+		inspector_cost_badge.text = ""
+		return
+	var cost: Dictionary = FxCostScript.layer_cost(layer)
+	inspector_cost_badge.text = "LIVE COST %.1f · %s" % [float(cost.get("cost", 0.0)), ", ".join(cost.get("factors", []))]
+
+func _wire_slider_transaction(row: Control, key: String, protected: bool) -> void:
+	if protected or row == null or row.get_child_count() == 0:
+		return
+	var slider: HSlider = row.get_child(row.get_child_count() - 1) as HSlider
+	if slider == null:
+		return
+	slider.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+			if (event as InputEventMouseButton).pressed:
+				_begin_ui_transaction(key)
+			else:
+				_end_ui_transaction(key)
+	)
+	slider.focus_entered.connect(func() -> void: _begin_ui_transaction(key))
+	slider.focus_exited.connect(func() -> void: _end_ui_transaction(key))
 
 func _action_add_layer(template: String) -> void:
 	if not _session_ready():
@@ -1514,7 +1632,7 @@ func _action_delete_look(look_id: String) -> void:
 	if production == null:
 		return
 	var use: Dictionary = production.usage(look_id)
-	if int(use.get("count", 0)) == 0:
+	if int(use.get("total_count", use.get("count", 0))) == 0:
 		_apply_retire(look_id, "unassign", "")
 		return
 	_open_delete_chooser(look_id, use)
@@ -1831,12 +1949,24 @@ func _action_enable_binding(binding_id: String) -> void:
 func _sync_actions() -> void:
 	if action_apply == null:
 		return
-	var has := _session_ready()
+	var has: bool = _session_ready() and selected_key != ""
+	# No-target is a real authoring state, not a disabled target editor. Hide
+	# target-mutating rows entirely so the workspace cannot imply an action
+	# exists before a target is selected.
+	if target_action_row != null:
+		target_action_row.visible = has
+	if target_action_row3 != null:
+		target_action_row3.visible = has
 	action_save.disabled = not has
 	action_apply.disabled = not has or str(session.mode) == "SHARED_PROTECTED"
 	action_styling.disabled = not has
 	action_why.disabled = not has
+	var scope: String = session.assignment_scope_text() if has else ""
 	action_styling.text = ("Active in Game: " + ("ON" if session.styling_enabled else "OFF")) if has else "Active in Game"
+	action_styling.tooltip_text = "Styling scope: " + scope if has else ""
+	if action_unassign != null:
+		action_unassign.text = "UNASSIGN"
+		action_unassign.tooltip_text = "Unassign scope: " + scope if has else ""
 	action_apply.text = "Update Target Style" if (has and str(session.base.get("kind", "")) == "production") else "Apply to Target"
 	# RS-07: the commit scope is part of the action label, not hidden.
 	if has:
@@ -1844,9 +1974,12 @@ func _sync_actions() -> void:
 		action_apply.tooltip_text = "Commits to assignment scope: " + session.assignment_scope_text()
 	action_unique.visible = has and str(session.mode) == "SHARED_PROTECTED"
 	action_edit_shared.visible = has and str(session.mode) == "SHARED_PROTECTED"
+	if target_action_row2 != null:
+		target_action_row2.visible = has and str(session.mode) == "SHARED_PROTECTED"
 	if undo_button != null:
-		undo_button.disabled = not has
-		redo_button.disabled = not has
+		var editable: bool = has and session.is_editable()
+		undo_button.disabled = not editable
+		redo_button.disabled = not editable
 
 func _rebuild_layers_panel() -> void:
 	if layers_rows == null:
@@ -1919,10 +2052,21 @@ func _layer_row(layer: Dictionary) -> Control:
 	lock.text = "🔒" if bool(layer.get("locked", false)) else "·"
 	lock.tooltip_text = "Edit lock"
 	lock.add_theme_font_size_override("font_size", UiTokens.T_HELP)
-	lock.pressed.connect(func() -> void: _edit_layer(layer_id, func(doc):
-		var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
-		l["locked"] = not bool(l.get("locked", false))
-	))
+	lock.pressed.connect(func() -> void:
+		if not _session_ready() or not session.is_editable():
+			return
+		session.snapshot()
+		var lock_result: Dictionary = session.edit(func(doc):
+			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
+			l["locked"] = not bool(l.get("locked", false))
+		)
+		if bool(lock_result.get("ok", false)):
+			_schedule_stash()
+			_rebuild_layers_panel()
+			_rebuild_inspector()
+		else:
+			action_status.text = "✗ " + str(lock_result.get("errors", []))
+	)
 	row.add_child(lock)
 	var pick := Button.new()
 	pick.flat = true
@@ -2064,6 +2208,7 @@ func _drop_layer_on_plane(drag_id: String, plane: String) -> void:
 func _rebuild_inspector() -> void:
 	if inspector_content == null:
 		return
+	var focus_field := _focused_canonical_field()
 	for child in inspector_content.get_children():
 		inspector_content.remove_child(child)
 		child.queue_free()
@@ -2072,7 +2217,9 @@ func _rebuild_inspector() -> void:
 		inspector_empty.visible = layer.is_empty()
 	if layer.is_empty():
 		return
-	var protected: bool = not session.is_editable()
+	# One lock invariant for every authoring control: shared protection and the
+	# selected layer lock both make the inspector read-only.
+	var protected: bool = not session.is_editable() or bool(layer.get("locked", false))
 	var layer_id := str(layer.get("layer_id", ""))
 	var type := str(layer.get("type", ""))
 	var is_source := type == "SOURCE"
@@ -2114,6 +2261,8 @@ func _rebuild_inspector() -> void:
 	if protected:
 		var note := Label.new()
 		note.text = "Protected shared Look — EDIT SHARED or MAKE UNIQUE to change values."
+		note.custom_minimum_size.x = 0.0
+		note.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 		note.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 		note.add_theme_color_override("font_color", UiTokens.DISABLED)
 		note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -2124,6 +2273,7 @@ func _rebuild_inspector() -> void:
 		_edit_layer(layer_id, func(doc):
 			(FxLookScript.find_layer(doc, layer_id))["opacity"] = value
 		, false, true)
+	, "layer:%s:opacity" % layer_id
 	)
 	_tab_page(tab_pages, tab_identity).add_child(opacity_slider)
 	var blend := _inspector_option("Blend", FxLookScript.BLEND_MODES, str(layer.get("blend_mode", "NORMAL")), protected, func(value: String) -> void:
@@ -2499,6 +2649,7 @@ func _rebuild_inspector() -> void:
 					var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 					(l["fx"] as Dictionary)[key] = value
 				, false, true)
+			, "fx:%s:%s" % [layer_id, key]
 			))
 		# UI-01: intent macro groups — additive UX over the same canonical fx
 		# fields (macros never replace the direct expert controls in ADVANCED).
@@ -2534,13 +2685,51 @@ func _rebuild_inspector() -> void:
 		_build_palette_page(tab_pages, layer, layer_id, protected)
 		_build_motion_page(tab_pages, layer, layer_id, protected)
 	var layer_cost: Dictionary = FxCostScript.layer_cost(layer)
-	var cost_note := Label.new()
-	cost_note.text = "Cost %.1f · %s" % [float(layer_cost["cost"]), ", ".join(layer_cost["factors"])]
-	cost_note.add_theme_font_size_override("font_size", UiTokens.T_HELP)
-	cost_note.add_theme_color_override("font_color", UiTokens.DISABLED)
-	cost_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_tab_page(tab_pages, tab_identity).add_child(cost_note)
+	inspector_cost_badge = Label.new()
+	inspector_cost_badge.text = "LIVE COST %.1f · %s" % [float(layer_cost["cost"]), ", ".join(layer_cost["factors"])]
+	inspector_cost_badge.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	inspector_cost_badge.add_theme_color_override("font_color", UiTokens.DISABLED)
+	inspector_cost_badge.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_tab_page(tab_pages, tab_identity).add_child(inspector_cost_badge)
 	_build_advanced_page(tab_pages, layer, layer_id, type, protected)
+	_restore_canonical_focus(focus_field)
+
+func _focused_canonical_field() -> String:
+	var owner := get_viewport().gui_get_focus_owner()
+	while owner != null and owner != inspector_content:
+		if owner.has_meta("canonical_field"):
+			return str(owner.get_meta("canonical_field"))
+		owner = owner.get_parent()
+	return ""
+
+func _restore_canonical_focus(field: String) -> void:
+	if field == "":
+		return
+	var found := _find_canonical_control(inspector_content, field)
+	if found != null:
+		(found as Control).grab_focus()
+
+func _find_canonical_control(node: Node, field: String) -> Control:
+	if node.has_meta("canonical_field") and str(node.get_meta("canonical_field")) == field:
+		if node is Control and (node as Control).focus_mode != Control.FOCUS_NONE:
+			return node as Control
+		var focusable := _first_focusable(node)
+		if focusable != null:
+			return focusable
+	for child in node.get_children():
+		var nested := _find_canonical_control(child, field)
+		if nested != null:
+			return nested
+	return null
+
+func _first_focusable(node: Node) -> Control:
+	for child in node.get_children():
+		if child is Control and (child as Control).focus_mode != Control.FOCUS_NONE:
+			return child as Control
+		var nested := _first_focusable(child)
+		if nested != null:
+			return nested
+	return null
 
 # UI-01: macro-group header + canonical-fx slider bound through _edit_layer
 # (live preview). Macros are additive UX; ADVANCED keeps direct controls.
@@ -2562,6 +2751,7 @@ func _fx_slider(label_text: String, fx_key: String, fx: Dictionary, layer_id: St
 			if regen_palette:
 				_regenerate_palette(doc, layer_id)
 		, false, true)
+	, "fx:%s:%s" % [layer_id, fx_key]
 	)
 	row.set_meta("canonical_field", fx_key)
 	return row
@@ -2602,7 +2792,7 @@ func _ensure_asset_dialog() -> void:
 	asset_dialog = FileDialog.new()
 	asset_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 	asset_dialog.access = FileDialog.ACCESS_FILESYSTEM
-	asset_dialog.filters = PackedStringArray(["*.png ; PNG images", "*.jpg,*.jpeg ; JPEG images", "*.webp ; WebP images", "*.bmp ; BMP images", "*.exr ; EXR images"])
+	asset_dialog.filters = PackedStringArray(["*.png ; PNG images", "*.jpg,*.jpeg ; JPEG images", "*.webp ; WebP images", "*.bmp ; BMP images", "*.exr ; EXR images", "*.tres,*.res ; Godot resources (Texture2D)"])
 	asset_dialog.file_selected.connect(_on_asset_picked)
 	add_child(asset_dialog)
 
@@ -2676,18 +2866,21 @@ func _dep_asset_row(field_id: String, label_text: String, layer: Dictionary, lay
 				if bool(st.get("needs_harvest", false)):
 					badge.text = "✓ COMPLETE · harvest on apply"
 					badge.add_theme_color_override("font_color", UiTokens.CREAM)
-				elif bool(st.get("required", true)):
+				else:
 					badge.text = "✓ COMPLETE"
 					badge.add_theme_color_override("font_color", UiTokens.TEAM_A)
-				else:
-					badge.text = "✓ set · not required by mode"
-					badge.add_theme_color_override("font_color", UiTokens.DISABLED)
 			"MISSING":
 				badge.text = "⚠ INCOMPLETE — " + str(st.get("detail", "required asset missing"))
 				badge.add_theme_color_override("font_color", UiTokens.ERROR)
 			"NOT_REQUIRED":
 				badge.text = "○ not required by current mode"
 				badge.add_theme_color_override("font_color", UiTokens.DISABLED)
+			"DORMANT":
+				badge.text = "○ dormant — kept, not required by mode"
+				badge.add_theme_color_override("font_color", UiTokens.DISABLED)
+			"DORMANT_WARNING":
+				badge.text = "○ dormant — invalid while unused"
+				badge.add_theme_color_override("font_color", UiTokens.CREAM)
 			_:
 				badge.text = "✖ INVALID — " + str(st.get("detail", state))
 				badge.add_theme_color_override("font_color", UiTokens.ERROR)
@@ -2747,7 +2940,7 @@ func _fx_option(label_text: String, fx_key: String, fx: Dictionary, layer_id: St
 	optrow.set_meta("canonical_field", fx_key)
 	return optrow
 
-func _inspector_slider(label_text: String, min_value: float, max_value: float, step: float, value: float, disabled: bool, on_change: Callable) -> Control:
+func _inspector_slider(label_text: String, min_value: float, max_value: float, step: float, value: float, disabled: bool, on_change: Callable, transaction_key := "") -> Control:
 	var row := HBoxContainer.new()
 	var label := Label.new()
 	label.text = label_text
@@ -2761,8 +2954,14 @@ func _inspector_slider(label_text: String, min_value: float, max_value: float, s
 	slider.value = value
 	slider.editable = not disabled
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	slider.value_changed.connect(on_change)
+	slider.value_changed.connect(func(next_value: float) -> void:
+		if str(transaction_key) != "":
+			_begin_ui_transaction(str(transaction_key))
+		on_change.call(next_value)
+	)
 	row.add_child(slider)
+	if str(transaction_key) != "":
+		_wire_slider_transaction(row, str(transaction_key), disabled)
 	return row
 
 func _build_palette_page(tab_pages: Dictionary, layer: Dictionary, layer_id: String, protected: bool) -> void:
@@ -2967,15 +3166,28 @@ func _motion_row(label_text: String, control: Control, active: bool) -> HBoxCont
 
 func _motion_spin(layer_id: String, domain: String, key: String, min_value: float, max_value: float, step: float, value: float, protected: bool) -> SpinBox:
 	var spin := SpinBox.new()
+	var tx_key := "motion:%s:%s:%s" % [layer_id, domain, key]
 	spin.min_value = min_value
 	spin.max_value = max_value
 	spin.step = step
 	spin.value = clampf(value, min_value, max_value)
 	spin.custom_minimum_size.x = 76
 	spin.editable = not protected
-	spin.value_changed.connect(func(new_value: float) -> void: _edit_layer(layer_id, func(doc):
-		_motion_track(doc, layer_id, domain)[key] = new_value
-	, false, true))
+	spin.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+			if (event as InputEventMouseButton).pressed:
+				_begin_ui_transaction(tx_key)
+			else:
+				_end_ui_transaction(tx_key)
+	)
+	spin.focus_entered.connect(func() -> void: _begin_ui_transaction(tx_key))
+	spin.focus_exited.connect(func() -> void: _end_ui_transaction(tx_key))
+	spin.value_changed.connect(func(new_value: float) -> void:
+		_begin_ui_transaction(tx_key)
+		_edit_layer(layer_id, func(doc):
+			_motion_track(doc, layer_id, domain)[key] = new_value
+		, false, true)
+	)
 	return spin
 
 func _motion_curve_option(layer_id: String, domain: String, key: String, current: String, curves: Array, protected: bool) -> OptionButton:
@@ -3242,12 +3454,15 @@ func _process(_delta: float) -> void:
 			disp.position = (available - Vector2(1280, 720) * disp.scale) * 0.5
 	_update_selection_outline()
 	_update_play_button()
-	var t: float = runtime.elapsed()
+	var presentation_t: float = maxf(runtime.elapsed(), 0.0)
+	var authoring_t: float = clampf(presentation_t, 0.0, TIMELINE_LEN)
 	if not time_syncing:
 		time_syncing = true
-		time_spin.set_value_no_signal(clampf(t, 0.0, TIMELINE_LEN))
+		time_spin.set_value_no_signal(authoring_t)
 		time_syncing = false
-	timeline_time_label.text = "T %.3f" % t
+	# One visible clock: the authorable transport domain. Presentation may
+	# remain in HOLD/EXIT beyond it, but no second raw clock is shown as T 24.x.
+	timeline_time_label.text = "T %.3f / %.3f" % [authoring_t, TIMELINE_LEN]
 	if timeline_ruler.visible:
 		timeline_ruler.queue_redraw()
 	if renderer != null:
@@ -3284,11 +3499,13 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	elif key.ctrl_pressed and (key.keycode == KEY_ENTER or key.keycode == KEY_KP_ENTER):
 		_action_apply()
 		accept_event()
-	elif key.ctrl_pressed and key.keycode == KEY_Z:
-		_action_undo()
-		accept_event()
+	# Ctrl+Shift+Z must win over the plain Ctrl+Z branch; otherwise the
+	# modifier is silently ignored and the user's redo gesture undoes again.
 	elif key.ctrl_pressed and (key.keycode == KEY_Y or (key.keycode == KEY_Z and key.shift_pressed)):
 		_action_redo()
+		accept_event()
+	elif key.ctrl_pressed and key.keycode == KEY_Z:
+		_action_undo()
 		accept_event()
 
 func _notification(what: int) -> void:

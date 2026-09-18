@@ -28,6 +28,25 @@ const DRIVERS := ["NOISE", "DIRECTIONAL", "WAVE", "CELLULAR", "FRINGE_DRIVER", "
 const MSOURCES := ["NONE", "ORIGINAL_SOURCE_ALPHA", "POST_DISPLACEMENT_ALPHA", "CUSTOM_MASK"]
 
 func _init() -> void:
+	# P0 harness safety (researcher 12-10): this suite wipes its stores.
+	# Without explicit sandbox overrides it would destroy the real default
+	# production store. Fail fast BEFORE spawning anything.
+	var missing_sandbox := OS.get_environment("NRCU_FX_DATA_DIR").strip_edges() == "" or OS.get_environment("NRCU_FX_DRAFT_DIR").strip_edges() == ""
+	if missing_sandbox:
+		var expected_refusal := OS.get_environment("NRCU_UI07_EXPECT_SANDBOX_REFUSAL") == "1"
+		_check(expected_refusal, "UI-07 refuses destructive run without sandbox override", "set NRCU_FX_DATA_DIR + NRCU_FX_DRAFT_DIR")
+		print("[FX-ASSET-UI] done · checks=%d failures=%d" % [checks.size(), failures])
+		quit(0 if expected_refusal else 1)
+		return
+	# Belt and suspenders: never wipe the shipped default stores even if an
+	# override typo points at them.
+	var _dd := OS.get_environment("NRCU_FX_DATA_DIR").strip_edges()
+	var _gd := OS.get_environment("NRCU_FX_DRAFT_DIR").strip_edges()
+	if _dd == "res://nrcu_fx_data" or _gd == "user://nrcu_fx_vnext_drafts":
+		_check(false, "UI-07 refuses destructive run against default stores", _dd + " / " + _gd)
+		print("[FX-ASSET-UI] done · checks=%d failures=%d" % [checks.size(), failures])
+		quit(1)
+		return
 	out_dir = ProjectSettings.globalize_path("res://evidence/vnext_build/asset_ui")
 	DirAccess.make_dir_recursive_absolute(out_dir)
 	_stage_files()
@@ -53,6 +72,8 @@ func _init() -> void:
 	if want.call("negatives"):
 		print("UI07 PHASE negatives n=%d" % checks.size())
 		await _negatives()
+		print("UI07 PHASE dormant n=%d" % checks.size())
+		await _dormant()
 	if want.call("harvest"):
 		print("UI07 PHASE harvest n=%d" % checks.size())
 		await _harvest_flow()
@@ -218,6 +239,17 @@ func _edit(lid: String, mut: Callable) -> void:
 
 func _asset_wrap(field_id: String):
 	return _tagged_node(field_id)
+
+func _sess_assets() -> String:
+	var parts: Array = []
+	for l in (shell.session.look.get("layers", []) as Array):
+		var d: Dictionary = (l as Dictionary).get("displacement", {})
+		var m: Dictionary = (l as Dictionary).get("mask", {})
+		var f: Dictionary = (l as Dictionary).get("fx", {})
+		var iraw = d.get("influence_mask", {})
+		var im: Dictionary = iraw if iraw is Dictionary else {}
+		parts.append("%s:drv=%s,ct=%s,me=%s,ms=%s,cm=%s,ie=%s,is=%s,ic=%s,ee=%s,tp=%s" % [str((l as Dictionary).get("layer_id", "?")), str(d.get("driver", "?")), str(d.get("custom_texture", "?")), str(m.get("enabled", "?")), str(m.get("source", "?")), str(m.get("custom_mask", "?")), str(im.get("enabled", "?")), str(im.get("source", "?")), str(im.get("custom_mask", "?")), str(f.get("effect_mask_enabled", "?")), str(f.get("treatment_mask_path", "?"))])
+	return " | ".join(parts)
 
 func _ensure_editable(phase: String) -> bool:
 	# Legal transition only: protected VALID state -> own editable branch.
@@ -510,13 +542,143 @@ func _negatives() -> void:
 	var r4: Dictionary = shell.session.apply()
 	_check(not bool(r4.get("ok", false)) and str(r4.get("stage", "")) == "validate-look", "UI-07 wrong-type rejects at validate", str(r4))
 	# Leave the session appliable for later phases: back to procedural.
+	await _scrub_layer(lid)
+
+# ---- T3b: dormant paths never block ----------------------------------------------
+
+func _dormant() -> void:
+	# Per family: active + broken path -> reject; same path dormant ->
+	# apply succeeds + DORMANT_WARNING badge; reactivate -> reject again.
+	await _dormant_displacement()
+	await _dormant_mask()
+	await _dormant_influence()
+	await _dormant_treatment()
+
+func _scrub_layer(lid: String) -> void:
+	# No invalid or required-missing state may leak into the next phase:
+	# back to fully procedural, paths cleared. Fully null-guarded: a stored
+	# null is not covered by Dictionary.get defaults.
 	_edit(lid, func(l: Dictionary) -> void:
-		(l["displacement"] as Dictionary)["driver"] = "NOISE"
-		(l["displacement"] as Dictionary)["custom_texture"] = null
+		var dd = l.get("displacement", null)
+		if dd is Dictionary:
+			(dd as Dictionary)["driver"] = "NOISE"
+			(dd as Dictionary)["custom_texture"] = null
+			var iraw = (dd as Dictionary).get("influence_mask", null)
+			if iraw is Dictionary:
+				(iraw as Dictionary)["enabled"] = false
+				(iraw as Dictionary)["custom_mask"] = null
+		var mm = l.get("mask", null)
+		if mm is Dictionary:
+			(mm as Dictionary)["enabled"] = false
+			(mm as Dictionary)["custom_mask"] = null
+		var ff = l.get("fx", null)
+		if ff is Dictionary:
+			(ff as Dictionary)["effect_mask_enabled"] = false
+			(ff as Dictionary)["treatment_mask_path"] = null
 	)
 	await settle(3)
 
-# ---- T4/T6: harvest + portability ----------------------------------------------------
+func _dormant_displacement() -> void:
+	var lid := _add_fx_layer()
+	_check(lid != "", "UI-07 dormant disp layer")
+	if lid == "":
+		return
+	_select_layer(lid)
+	await settle(5)
+	_check(_opt_by_value("displacement.driver", DRIVERS, "CUSTOM_TEXTURE"), "UI-07 dormant disp active")
+	_edit(lid, func(l: Dictionary) -> void: (l["displacement"] as Dictionary)["custom_texture"] = _upath("ghost.png"))
+	await settle(3)
+	_check(not bool(shell.session.apply().get("ok", false)), "UI-07 dormant disp active rejects")
+	_check(_opt_by_value("displacement.driver", DRIVERS, "NOISE"), "UI-07 dormant disp off via UI")
+	await settle(5)
+	_select_layer(lid)
+	await settle(5)
+	_check(_badge_text("displacement.custom_texture").begins_with("○ dormant"), "UI-07 dormant disp badge", _badge_text("displacement.custom_texture"))
+	var rd: Dictionary = shell.session.apply()
+	_check(bool(rd.get("ok", false)), "UI-07 dormant disp applies", str(rd.get("errors", [])))
+	if not await _ensure_editable("dormant-disp"):
+		return
+	_check(_opt_by_value("displacement.driver", DRIVERS, "CUSTOM_TEXTURE"), "UI-07 dormant disp reactivated")
+	await settle(3)
+	_check(not bool(shell.session.apply().get("ok", false)), "UI-07 dormant disp reactivated rejects")
+	await _scrub_layer(lid)
+
+func _dormant_mask() -> void:
+	var lid := _add_fx_layer()
+	_check(lid != "", "UI-07 dormant mask layer")
+	if lid == "":
+		return
+	_select_layer(lid)
+	await settle(5)
+	_check(_chk("mask.enabled", true), "UI-07 dormant mask on")
+	_check(_opt_by_value("mask.source", MSOURCES, "CUSTOM_MASK"), "UI-07 dormant mask custom")
+	_edit(lid, func(l: Dictionary) -> void: (l["mask"] as Dictionary)["custom_mask"] = _upath("ghost.png"))
+	await settle(3)
+	_check(not bool(shell.session.apply().get("ok", false)), "UI-07 dormant mask active rejects")
+	_check(_chk("mask.enabled", false), "UI-07 dormant mask off via UI")
+	await settle(5)
+	_select_layer(lid)
+	await settle(5)
+	_check(_badge_text("mask.custom_mask").begins_with("○ dormant"), "UI-07 dormant mask badge", _badge_text("mask.custom_mask"))
+	var rd: Dictionary = shell.session.apply()
+	_check(bool(rd.get("ok", false)), "UI-07 dormant mask applies", str(rd.get("errors", [])))
+	if not await _ensure_editable("dormant-mask"):
+		return
+	_check(_chk("mask.enabled", true), "UI-07 dormant mask reactivated")
+	await settle(3)
+	_check(not bool(shell.session.apply().get("ok", false)), "UI-07 dormant mask reactivated rejects")
+	await _scrub_layer(lid)
+
+func _dormant_influence() -> void:
+	var lid := _add_fx_layer()
+	_check(lid != "", "UI-07 dormant infl layer")
+	if lid == "":
+		return
+	_select_layer(lid)
+	await settle(5)
+	_check(_chk("displacement.influence.enabled", true), "UI-07 dormant infl on")
+	_check(_opt_by_value("displacement.influence.source", MSOURCES, "CUSTOM_MASK"), "UI-07 dormant infl custom")
+	_edit(lid, func(l: Dictionary) -> void: ((l["displacement"] as Dictionary).get("influence_mask", {}) as Dictionary)["custom_mask"] = _upath("ghost.png"))
+	await settle(3)
+	_check(not bool(shell.session.apply().get("ok", false)), "UI-07 dormant infl active rejects")
+	_check(_chk("displacement.influence.enabled", false), "UI-07 dormant infl off via UI")
+	await settle(5)
+	_select_layer(lid)
+	await settle(5)
+	_check(_badge_text("displacement.influence_mask.custom_mask").begins_with("○ dormant"), "UI-07 dormant infl badge", _badge_text("displacement.influence_mask.custom_mask"))
+	var rd: Dictionary = shell.session.apply()
+	_check(bool(rd.get("ok", false)), "UI-07 dormant infl applies", str(rd.get("errors", [])))
+	if not await _ensure_editable("dormant-infl"):
+		return
+	_check(_chk("displacement.influence.enabled", true), "UI-07 dormant infl reactivated")
+	await settle(3)
+	_check(not bool(shell.session.apply().get("ok", false)), "UI-07 dormant infl reactivated rejects")
+	await _scrub_layer(lid)
+
+func _dormant_treatment() -> void:
+	var lid := _add_fx_layer()
+	_check(lid != "", "UI-07 dormant treat layer")
+	if lid == "":
+		return
+	_select_layer(lid)
+	await settle(5)
+	_check(_chk("effect_mask_enabled", true), "UI-07 dormant treat on")
+	_edit(lid, func(l: Dictionary) -> void: (l["fx"] as Dictionary)["treatment_mask_path"] = _upath("ghost.png"))
+	await settle(3)
+	_check(not bool(shell.session.apply().get("ok", false)), "UI-07 dormant treat active rejects")
+	_check(_chk("effect_mask_enabled", false), "UI-07 dormant treat off via UI")
+	await settle(5)
+	_select_layer(lid)
+	await settle(5)
+	_check(_badge_text("treatment_mask_path").begins_with("○ dormant"), "UI-07 dormant treat badge", _badge_text("treatment_mask_path"))
+	var rd: Dictionary = shell.session.apply()
+	_check(bool(rd.get("ok", false)), "UI-07 dormant treat applies", str(rd.get("errors", [])))
+	if not await _ensure_editable("dormant-treat"):
+		return
+	_check(_chk("effect_mask_enabled", true), "UI-07 dormant treat reactivated")
+	await settle(3)
+	_check(not bool(shell.session.apply().get("ok", false)), "UI-07 dormant treat reactivated rejects")
+	await _scrub_layer(lid)
 
 func _harvest_flow() -> void:
 	var lid := _add_fx_layer()

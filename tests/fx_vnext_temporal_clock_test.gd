@@ -72,6 +72,10 @@ func _tm05_exit_seekable() -> void:
 	await settle(2)
 	_check(str(screen.state()) == "exit", "TM-05 late seek reconstructs EXIT", str(screen.state()))
 	_check(bool(screen.match_ready_signalled()), "TM-05 EXIT seek keeps match-ready", str(screen.match_ready_signalled()))
+	screen.lab_preview_seek(24.0)
+	await settle(3)
+	_check(absf(float(shell.time_spin.value) - float(shell.TIMELINE_LEN)) < 0.01, "TM-07 authoring clock clamps beyond presentation hold", "spin=%.3f" % float(shell.time_spin.value))
+	_check(str(shell.timeline_time_label.text).begins_with("T 2.400 / 2.400"), "TM-07 timeline has one bounded visible clock", shell.timeline_time_label.text)
 
 func _tm06_seek_keeps_play_choice() -> void:
 	var screen = shell.runtime.screen

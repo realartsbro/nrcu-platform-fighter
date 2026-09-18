@@ -114,7 +114,7 @@ func _assert_whole_window(size: Vector2i) -> void:
 	var engine := root.get_final_transform().get_scale()
 	var sc: Vector2 = (shell as Control).scale
 	var net := Vector2(sc.x * engine.x, sc.y * engine.y)
-	_check(absf(net.x - 1.0) < 0.03 and absf(net.y - 1.0) < 0.03, "UI-Resp %s net scale is native" % [tag, str(net)])
+	_check(absf(net.x - 1.0) < 0.03 and absf(net.y - 1.0) < 0.03, "UI-Resp %s net scale is native (%s)" % [tag, str(net)])
 	# Geometry below compares PHYSICAL pixels: canvas rects times the
 	# engine scale (comparing canvas units to window units directly once
 	# faked 34px of toolbar overflow and hid real click heights).

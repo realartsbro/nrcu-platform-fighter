@@ -559,8 +559,8 @@ static func _validate_fx(fx, layer_id: String) -> Array:
 			errors.append("fx.treatment_mask_path: required when effect_mask_enabled (layer %s)" % layer_id)
 		else:
 			errors.append_array(_validate_asset_path(f["treatment_mask_path"], "fx.treatment_mask_path", layer_id))
-	elif str(f.get("treatment_mask_path", "")).strip_edges() != "":
-		errors.append_array(_validate_asset_path(f["treatment_mask_path"], "fx.treatment_mask_path", layer_id))
+	# Dormant treatment path (effect disabled): kept as-is, never validated
+	# here — reactivation revalidates (researcher 12-10 §2).
 	# MK-02: the custom edge source is not wired to any live shader path
 	# (renderer drives procedural modes 0/1/2 only) — persisting a custom
 	# edge asset would pretend a semantic that never renders.
@@ -651,7 +651,7 @@ static func _validate_displacement(displacement, layer_id: String) -> Array:
 	for key in ["speed", "phase", "angle_deg"]:
 		if not _finite_number(d.get(key, null)):
 			errors.append("displacement.%s: non-finite (layer %s)" % [key, layer_id])
-	if d.get("custom_texture") != null:
+	if d.get("custom_texture") != null and str(d.get("driver", "")) == "CUSTOM_TEXTURE":
 		errors.append_array(_validate_asset_path(d["custom_texture"], "displacement.custom_texture", layer_id))
 	# UI-07/08: CUSTOM_TEXTURE without a texture would silently render the
 	# procedural field — fail closed like MK-03/treatment-mask.
@@ -680,7 +680,7 @@ static func _validate_mask(mask, layer_id: String) -> Array:
 			errors.append("mask.%s: non-finite (layer %s)" % [key, layer_id])
 		elif float(m[key]) < 0.0 and key != "expand_contract_px":
 			errors.append("mask.%s: must be >= 0 (layer %s)" % [key, layer_id])
-	if m.get("custom_mask") != null:
+	if m.get("custom_mask") != null and bool(m.get("enabled", false)) and str(m.get("source", "")) == "CUSTOM_MASK":
 		errors.append_array(_validate_asset_path(m["custom_mask"], "mask.custom_mask", layer_id))
 	# MK-03: an enabled CUSTOM_MASK without an asset must fail closed here —
 	# the shader/runtime must never silently fall back to full-mask behavior.

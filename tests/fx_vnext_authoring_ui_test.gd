@@ -37,6 +37,7 @@ func _init() -> void:
 	await _displace_phase_time_editable(fx_id)
 	await _custom_texture_incomplete_cycle(fx_id)
 	await _expert_typed_edit(fx_id)
+	await _slider_drag_is_one_transaction(fx_id)
 	_inventory_reachability_rose()
 	print("[FX-AUTHORING-UI] done · checks=%d failures=%d" % [checks.size(), failures])
 	quit(1 if failures > 0 else 0)
@@ -345,6 +346,35 @@ func _custom_texture_incomplete_cycle(fx_id: String) -> void:
 	await settle(5)
 	_check(str(_disp().get("custom_texture", "")) == "res://assets/vs/generated/accent_left_mask.png", "UI-01 asset path persists in session")
 	_check(not _has_incomplete(), "UI-01 INCOMPLETE clears after asset set")
+
+func _slider_drag_is_one_transaction(fx_id: String) -> void:
+	var slider := _find_slider("Brightness")
+	_check(slider != null, "UI-13 slider transaction probe reachable")
+	if slider == null:
+		return
+	shell._refresh_inspector_cost()
+	_check(shell.inspector_cost_badge != null and shell.inspector_cost_badge.text.begins_with("LIVE COST"), "UI-17 live cost badge is visible")
+	slider.grab_focus()
+	shell._rebuild_inspector()
+	await settle(2)
+	_check(shell._focused_canonical_field() == "grade_brightness", "UI-16 inspector remount restores canonical focus", shell._focused_canonical_field())
+	_check(shell.recipe_rows != null and shell.recipe_rows.get_child_count() == 6, "UI-18 recipe library is separate from Production inventory")
+	# The remount intentionally replaces the old node; continue with the new
+	# canonical control rather than touching a freed reference.
+	slider = _find_slider("Brightness")
+	# A drag emits many value_changed events but must create one history entry.
+	shell._ui_transactions.clear()
+	shell.session._undo_stack.clear()
+	var before: float = float(_fx().get("grade_brightness", 0.0))
+	var n0: int = shell.session._undo_stack.size()
+	for value in [0.15, 0.30, 0.45, 0.60]:
+		slider.value = value
+		await settle(1)
+	shell._end_ui_transaction("fx:%s:%s" % [fx_id, "grade_brightness"])
+	_check(shell.session._undo_stack.size() == n0 + 1, "UI-13 slider drag is one undo transaction", "before=%d after=%d" % [n0, shell.session._undo_stack.size()])
+	shell._action_undo()
+	await settle(4)
+	_check(absf(float(_fx().get("grade_brightness", 0.0)) - before) < 0.001, "UI-13 one undo restores pre-drag value", "before=%.3f after=%.3f" % [before, float(_fx().get("grade_brightness", 0.0))])
 
 func _expert_typed_edit(fx_id: String) -> void:
 	var spin := _find_spin("signal_gain")

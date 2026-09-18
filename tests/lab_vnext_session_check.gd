@@ -92,7 +92,7 @@ func _init() -> void:
 	await settle(8)
 	var look = shell.production.load_look("ICE_MAGE_ECHO_LEFT")
 	_check(int((look.get("doc", {}) as Dictionary).get("revision", 0)) == 2, "update bumped revision to 2", "rev=%d" % int((look.get("doc", {}) as Dictionary).get("revision", 0)))
-	_check(shell.action_apply.text == "Update Target Style", "action label follows update state", shell.action_apply.text)
+	_check(shell.action_apply.text.begins_with("Update Target Style"), "action label follows update state", shell.action_apply.text)
 	await capture("session_04_updated")
 
 	# ---- audit additions: templates, planes, reorder, undo, study, presets ---------
@@ -125,6 +125,23 @@ func _init() -> void:
 	shell._action_redo()
 	await settle(4)
 	_check(str((shell.session.look["layers"][1] as Dictionary)["layer_id"]) == halo_id, "redo reapplies order")
+	# UI-12: Ctrl+Shift+Z must be tested before the plain Ctrl+Z branch.
+	shell._move_layer(halo_id, 1)
+	await settle(4)
+	shell._action_undo()
+	await settle(4)
+	var redo_key := InputEventKey.new()
+	redo_key.pressed = true
+	redo_key.ctrl_pressed = true
+	redo_key.shift_pressed = true
+	redo_key.keycode = KEY_Z
+	shell._unhandled_key_input(redo_key)
+	await settle(4)
+	var halo_index := -1
+	for i in range((shell.session.look["layers"] as Array).size()):
+		if str((shell.session.look["layers"][i] as Dictionary).get("layer_id", "")) == halo_id:
+			halo_index = i
+	_check(halo_index == 2 and str(shell.action_status.text).contains("Redo"), "Ctrl+Shift+Z dispatches redo, not undo", "index=%d status=%s" % [halo_index, shell.action_status.text])
 	# R3 red-team: the layer MENU move actions (MOVE UP/DOWN -> _move_layer) must
 	# reorder WITHOUT touching any layer_id (stable identity across reorder).
 	var ids_before: Array = []
@@ -135,7 +152,7 @@ func _init() -> void:
 	for i in range((shell.session.look["layers"] as Array).size()):
 		if str((shell.session.look["layers"][i] as Dictionary)["layer_id"]) == halo_id:
 			idx_before = i
-	shell._move_layer(halo_id, 1)
+	shell._move_layer(halo_id, -1)
 	await settle(4)
 	var ids_after: Array = []
 	for l in (shell.session.look["layers"] as Array):
@@ -147,7 +164,7 @@ func _init() -> void:
 			idx_after = i
 	_check(ids_before == ids_after, "layer GUI move keeps the id set identical (no id regeneration)", "before=%s after=%s" % [str(ids_before), str(ids_after)])
 	_check(idx_after != idx_before and idx_after >= 0, "layer GUI move actually reordered the moved layer", "idx %d -> %d" % [idx_before, idx_after])
-	shell._move_layer(halo_id, -1)
+	shell._move_layer(halo_id, 1)
 	await settle(4)
 	# source cannot be deleted / moved
 	var source_id2 := str((shell.session.look["layers"][0] as Dictionary)["layer_id"])
