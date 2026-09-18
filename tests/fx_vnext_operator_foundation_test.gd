@@ -7,11 +7,113 @@ const FxOperatorsScript := preload("res://scripts/fx_vnext/fx_operators.gd")
 const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
 const FxCostScript := preload("res://scripts/fx_vnext/fx_cost.gd")
 
+const EXPECTED_SUPPLEMENTAL_OPERATOR_IDS := [
+	"manga_impact",
+	"speedlines_field",
+	"pattern_transition",
+	"vacuum_burst",
+	"perimeter_flux",
+	"noise_erosion_border",
+	"contour_pulse",
+	"silhouette_extrude",
+	"print_misregistration",
+	"halftone_reveal",
+	"dither_inversion",
+	"slice_tear",
+	"hit_flash",
+	"mesh_smear",
+	"multi_impact_field",
+	"slash_arc",
+	"world_outline_depth",
+	"world_outline_depth_normal",
+]
+
+const EXPECTED_OPERATOR_IDS := [
+	"source_copy",
+	"transform",
+	"displacement",
+	"mask",
+	"base_treatment",
+	"grade",
+	"source_pixelation",
+	"mono_stamp",
+	"dither",
+	"palette",
+	"edge",
+	"fringe",
+	"rgb",
+	"flow",
+	"motion_envelope",
+	"manga_impact",
+	"speedlines_field",
+	"pattern_transition",
+	"vacuum_burst",
+	"perimeter_flux",
+	"noise_erosion_border",
+	"contour_pulse",
+	"silhouette_extrude",
+	"print_misregistration",
+	"halftone_reveal",
+	"dither_inversion",
+	"slice_tear",
+	"hit_flash",
+	"mesh_smear",
+	"multi_impact_field",
+	"slash_arc",
+	"world_outline_depth",
+	"world_outline_depth_normal",
+	"final_composite",
+	"deferred_3d",
+]
+
+const EXPECTED_SCOPE_BY_ID := {
+	"manga_impact": "FINAL_COMPOSITE",
+	"speedlines_field": "FINAL_COMPOSITE",
+	"pattern_transition": "FINAL_COMPOSITE",
+	"vacuum_burst": "FINAL_COMPOSITE",
+	"perimeter_flux": "LOCAL",
+	"noise_erosion_border": "LOCAL",
+	"contour_pulse": "LOCAL",
+	"silhouette_extrude": "LOCAL",
+	"print_misregistration": "FINAL_COMPOSITE",
+	"halftone_reveal": "LOCAL",
+	"dither_inversion": "FINAL_COMPOSITE",
+	"slice_tear": "FINAL_COMPOSITE",
+	"hit_flash": "DEFERRED_3D",
+	"mesh_smear": "DEFERRED_3D",
+	"multi_impact_field": "DEFERRED_3D",
+	"slash_arc": "DEFERRED_3D",
+	"world_outline_depth": "DEFERRED_3D",
+	"world_outline_depth_normal": "DEFERRED_3D",
+}
+
+const EXPECTED_STATUS_BY_ID := {
+	"manga_impact": "UNSUPPORTED",
+	"speedlines_field": "UNSUPPORTED",
+	"pattern_transition": "UNSUPPORTED",
+	"vacuum_burst": "UNSUPPORTED",
+	"perimeter_flux": "UNSUPPORTED",
+	"noise_erosion_border": "UNSUPPORTED",
+	"contour_pulse": "UNSUPPORTED",
+	"silhouette_extrude": "UNSUPPORTED",
+	"print_misregistration": "UNSUPPORTED",
+	"halftone_reveal": "UNSUPPORTED",
+	"dither_inversion": "UNSUPPORTED",
+	"slice_tear": "UNSUPPORTED",
+	"hit_flash": "DEFERRED",
+	"mesh_smear": "DEFERRED",
+	"multi_impact_field": "DEFERRED",
+	"slash_arc": "DEFERRED",
+	"world_outline_depth": "DEFERRED",
+	"world_outline_depth_normal": "DEFERRED",
+}
+
 var checks := 0
 var failures := 0
 
 func _init() -> void:
 	_registry_is_complete_and_typed()
+	_supplemental_scope_status_contract()
 	_raw_time_paths_use_supplied_clock()
 	_lanes_are_explicit_and_fail_closed()
 	_neutral_contract_is_truthful()
@@ -22,6 +124,12 @@ func _init() -> void:
 func _registry_is_complete_and_typed() -> void:
 	var ids: Array = FxOperatorsScript.operator_ids()
 	var registry: Dictionary = FxOperatorsScript.registry()
+	_check(ids == EXPECTED_OPERATOR_IDS, "operator registry has exact stable completeness", "expected=%s actual=%s" % [str(EXPECTED_OPERATOR_IDS), str(ids)])
+	var sorted_ids: Array = registry.keys()
+	sorted_ids.sort()
+	var sorted_expected: Array = EXPECTED_OPERATOR_IDS.duplicate()
+	sorted_expected.sort()
+	_check(sorted_ids == sorted_expected, "registry keys exactly match stable operator ids", "expected=%s actual=%s" % [str(sorted_expected), str(sorted_ids)])
 	_check(not ids.is_empty(), "operator registry declares named operators")
 	_check(registry.size() == ids.size(), "operator registry has one entry per named id", str(registry.size()))
 	var registry_result: Dictionary = FxOperatorsScript.validate_registry()
@@ -46,6 +154,27 @@ func _registry_is_complete_and_typed() -> void:
 		_check(not (entry.get("semantic_notes", "") as String).strip_edges().is_empty(), "%s has semantic notes" % str(operator_id))
 		for flag in ["neutral_proven", "authoring_reachable", "persistence_proven", "runtime_observable"]:
 			_check(entry.get(flag) is bool, "%s %s is boolean" % [str(operator_id), flag])
+
+func _supplemental_scope_status_contract() -> void:
+	var registry: Dictionary = FxOperatorsScript.registry()
+	for operator_id in EXPECTED_SUPPLEMENTAL_OPERATOR_IDS:
+		var entry: Dictionary = registry.get(operator_id, {})
+		_check(entry.has("operator_id"), "%s is explicitly registered" % operator_id)
+		_check(str(entry.get("scope", "")) == str(EXPECTED_SCOPE_BY_ID[operator_id]), "%s has normative scope" % operator_id, str(entry.get("scope", "")))
+		_check(str(entry.get("status", "")) == str(EXPECTED_STATUS_BY_ID[operator_id]), "%s has truthful status" % operator_id, str(entry.get("status", "")))
+		_check(not (str(entry.get("test_evidence_reference", ""))).strip_edges().is_empty(), "%s has evidence reference" % operator_id)
+		_check(not (str(entry.get("semantic_notes", ""))).strip_edges().is_empty(), "%s has semantic notes" % operator_id)
+	var final_entry: Dictionary = registry.get("final_composite", {})
+	_check(str(final_entry.get("scope", "")) == "FINAL_COMPOSITE", "final_composite has dedicated final scope")
+	_check(str(final_entry.get("status", "")) == "SUPPORTED", "final_composite is supported separately")
+	for operator_id in ["perimeter_flux", "noise_erosion_border"]:
+		var frame_entry: Dictionary = registry.get(operator_id, {})
+		var notes := str(frame_entry.get("semantic_notes", "")).to_lower()
+		for forbidden_claim in ["contour-aware", "source-alpha contour", "follows the source silhouette", "organic source-contour", "normal-field"]:
+			_check(notes.find(forbidden_claim) < 0, "%s does not overclaim %s" % [operator_id, forbidden_claim])
+	for operator_id in ["hit_flash", "mesh_smear", "multi_impact_field", "slash_arc", "world_outline_depth", "world_outline_depth_normal"]:
+		var deferred_entry: Dictionary = registry.get(operator_id, {})
+		_check(str(deferred_entry.get("semantic_notes", "")).find("DEFERRED_3D_FORWARD_PLUS") >= 0, "%s records the 3D deferral reason" % operator_id)
 
 func _raw_time_paths_use_supplied_clock() -> void:
 	var regex := RegEx.new()
@@ -101,7 +230,7 @@ func _neutral_contract_is_truthful() -> void:
 	for operator_id in FxOperatorsScript.operator_ids():
 		var entry: Dictionary = registry[str(operator_id)]
 		if str(entry.get("scope", "")) == "LOCAL":
-			_check(str(entry.get("status", "")) == "ADAPTER_ONLY", "%s is not overstated as a standalone operator" % str(operator_id))
+			_check(str(entry.get("status", "")) in ["ADAPTER_ONLY", "UNSUPPORTED"], "%s has truthful local status" % str(operator_id))
 		if str(entry.get("status", "")) in ["UNSUPPORTED", "DEFERRED"]:
 			_check(not bool(entry.get("runtime_observable", true)), "%s does not claim runtime proof" % str(operator_id))
 

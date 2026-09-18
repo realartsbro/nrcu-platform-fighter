@@ -33,6 +33,24 @@ const NAMED_OPERATOR_IDS := [
 	"rgb",
 	"flow",
 	"motion_envelope",
+	"manga_impact",
+	"speedlines_field",
+	"pattern_transition",
+	"vacuum_burst",
+	"perimeter_flux",
+	"noise_erosion_border",
+	"contour_pulse",
+	"silhouette_extrude",
+	"print_misregistration",
+	"halftone_reveal",
+	"dither_inversion",
+	"slice_tear",
+	"hit_flash",
+	"mesh_smear",
+	"multi_impact_field",
+	"slash_arc",
+	"world_outline_depth",
+	"world_outline_depth_normal",
 	"final_composite",
 	"deferred_3d",
 ]
@@ -105,14 +123,18 @@ static func validate_registry() -> Dictionary:
 					errors.append("invalid time-source support: %s" % str(operator_id))
 		if str(row.get("status", "")) not in STATUSES:
 			errors.append("invalid status: %s" % str(operator_id))
-		if str(row.get("scope", "")) == "LOCAL" and str(row.get("status", "")) != "ADAPTER_ONLY":
-			errors.append("local operator must be classified ADAPTER_ONLY: %s" % str(operator_id))
+		if str(row.get("scope", "")) == "LOCAL" and str(row.get("status", "")) not in ["ADAPTER_ONLY", "UNSUPPORTED"]:
+			errors.append("local operator has an invalid status: %s" % str(operator_id))
 		if str(row.get("scope", "")) == "FINAL_COMPOSITE":
-			var expected_final_status := "SUPPORTED" if final_composite_supported() else "UNSUPPORTED"
+			var expected_final_status := "SUPPORTED" if operator_id == "final_composite" and final_composite_supported() else "UNSUPPORTED"
 			if str(row.get("status", "")) != expected_final_status:
 				errors.append("final-composite operator status is not truthful: %s" % str(operator_id))
 		if str(row.get("scope", "")) == "DEFERRED_3D" and str(row.get("status", "")) != "DEFERRED":
 			errors.append("3D operator must be classified DEFERRED: %s" % str(operator_id))
+		if str(row.get("status", "")) == "SUPPORTED" and operator_id != "final_composite":
+			errors.append("only final_composite may be SUPPORTED: %s" % str(operator_id))
+		if str(row.get("status", "")) in ["UNSUPPORTED", "DEFERRED"] and bool(row.get("runtime_observable", false)):
+			errors.append("unsupported/deferred operator claims runtime proof: %s" % str(operator_id))
 		if str(row.get("cost_class", "")) not in COST_CLASSES:
 			errors.append("invalid cost class: %s" % str(operator_id))
 		for flag in ["neutral_proven", "authoring_reachable", "persistence_proven", "runtime_observable"]:
@@ -273,6 +295,24 @@ static func _build_registry() -> Dictionary:
 		_row("rgb", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", "tests/fx_vnext_capability_parity_test.gd", "RGB separation is applied on a target-local sampled quad."),
 		_row("flow", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", "tests/fx_vnext_capability_parity_test.gd", "Flow/driver motion is local and clocked by supplied uniforms."),
 		_row("motion_envelope", "LOCAL", ["PRESENTATION_TIME"], true, true, true, true, "LOW", "tests/fx_vnext_temporal_model_test.gd#TM-03", "Motion envelopes modulate local adapter amounts; event authority remains presentation-owned."),
+		_row("manga_impact", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Global final-frame manga impact candidate; no dedicated implementation or runtime evidence exists in this repository.", "UNSUPPORTED"),
+		_row("speedlines_field", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Global final-frame speedlines field candidate; no dedicated implementation or runtime evidence exists in this repository.", "UNSUPPORTED"),
+		_row("pattern_transition", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Global frame transition candidate; no dedicated implementation or runtime evidence exists in this repository.", "UNSUPPORTED"),
+		_row("vacuum_burst", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Global final-frame vacuum burst candidate; no dedicated implementation or runtime evidence exists in this repository.", "UNSUPPORTED"),
+		_row("perimeter_flux", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Frame/UV/circle-distance graphic candidate on a local input; it is not a source-silhouette perimeter solution.", "UNSUPPORTED"),
+		_row("noise_erosion_border", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Frame/UV/circle-distance erosion-border candidate on a local input; resolved silhouette semantics are not proven.", "UNSUPPORTED"),
+		_row("contour_pulse", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Local source-alpha contour pulse candidate; no implemented contour-aware pass or evidence exists here.", "UNSUPPORTED"),
+		_row("silhouette_extrude", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Local source-alpha silhouette extrusion candidate; no implemented contour-aware pass or evidence exists here.", "UNSUPPORTED"),
+		_row("print_misregistration", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Global final-frame print misregistration candidate; no dedicated implementation or runtime evidence exists in this repository.", "UNSUPPORTED"),
+		_row("halftone_reveal", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Local resolved-input halftone reveal candidate; no dedicated implementation or runtime evidence exists in this repository.", "UNSUPPORTED"),
+		_row("dither_inversion", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Global final-frame dither inversion candidate; no dedicated implementation or runtime evidence exists in this repository.", "UNSUPPORTED"),
+		_row("slice_tear", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Global final-frame slice tear candidate; no dedicated implementation or runtime evidence exists in this repository.", "UNSUPPORTED"),
+		_row("hit_flash", "DEFERRED_3D", ["PRESENTATION_TIME"], true, false, false, false, "DEFERRED", "tests/fx_vnext_operator_foundation_test.gd#deferred_3d", "DEFERRED_3D_FORWARD_PLUS family: no 3D/Forward+ implementation, fake 2D port, or production-ready claim.", "DEFERRED"),
+		_row("mesh_smear", "DEFERRED_3D", ["PRESENTATION_TIME"], true, false, false, false, "DEFERRED", "tests/fx_vnext_operator_foundation_test.gd#deferred_3d", "DEFERRED_3D_FORWARD_PLUS family: no 3D/Forward+ implementation, fake 2D port, or production-ready claim.", "DEFERRED"),
+		_row("multi_impact_field", "DEFERRED_3D", ["PRESENTATION_TIME"], true, false, false, false, "DEFERRED", "tests/fx_vnext_operator_foundation_test.gd#deferred_3d", "DEFERRED_3D_FORWARD_PLUS family: no 3D/Forward+ implementation, fake 2D port, or production-ready claim.", "DEFERRED"),
+		_row("slash_arc", "DEFERRED_3D", ["PRESENTATION_TIME"], true, false, false, false, "DEFERRED", "tests/fx_vnext_operator_foundation_test.gd#deferred_3d", "DEFERRED_3D_FORWARD_PLUS family: no 3D/Forward+ implementation, fake 2D port, or production-ready claim.", "DEFERRED"),
+		_row("world_outline_depth", "DEFERRED_3D", ["PRESENTATION_TIME"], true, false, false, false, "DEFERRED", "tests/fx_vnext_operator_foundation_test.gd#deferred_3d", "DEFERRED_3D_FORWARD_PLUS family: no 3D/Forward+ implementation, fake 2D port, or production-ready claim.", "DEFERRED"),
+		_row("world_outline_depth_normal", "DEFERRED_3D", ["PRESENTATION_TIME"], true, false, false, false, "DEFERRED", "tests/fx_vnext_operator_foundation_test.gd#deferred_3d", "DEFERRED_3D_FORWARD_PLUS family: no 3D/Forward+ implementation, fake 2D port, or production-ready claim.", "DEFERRED"),
 		_row("final_composite", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, final_composite_supported(), final_composite_supported(), final_composite_supported(), "LOW", "tests/fx_vnext_final_composite_test.gd#runtime", "Dedicated BackBufferCopy + full-canvas shader pass; neutral by default and clocked by supplied presentation/free-run uniforms."),
 		_row("deferred_3d", "DEFERRED_3D", ["PRESENTATION_TIME"], true, false, false, false, "DEFERRED", "tests/fx_vnext_operator_foundation_test.gd#registry", "No 3D/depth-aware operator path exists in this renderer; deferred rather than implied."),
 	]
@@ -281,7 +321,10 @@ static func _build_registry() -> Dictionary:
 		out[str(row["operator_id"])] = row
 	return out
 
-static func _row(operator_id: String, scope: String, time_sources: Array, neutral_proven: bool, authoring_reachable: bool, persistence_proven: bool, runtime_observable: bool, cost_class: String, evidence: String, notes: String) -> Dictionary:
+static func _row(operator_id: String, scope: String, time_sources: Array, neutral_proven: bool, authoring_reachable: bool, persistence_proven: bool, runtime_observable: bool, cost_class: String, evidence: String, notes: String, status_override := "") -> Dictionary:
+	var status := status_override
+	if status == "":
+		status = "SUPPORTED" if scope == "FINAL_COMPOSITE" and authoring_reachable else ("ADAPTER_ONLY" if authoring_reachable else ("UNSUPPORTED" if scope == "FINAL_COMPOSITE" else "DEFERRED"))
 	return {
 		"operator_id": operator_id,
 		"scope": scope,
@@ -296,7 +339,7 @@ static func _row(operator_id: String, scope: String, time_sources: Array, neutra
 		"cost_class": cost_class,
 		"test_evidence_reference": evidence,
 		"semantic_notes": notes,
-		"status": "SUPPORTED" if scope == "FINAL_COMPOSITE" and authoring_reachable else ("ADAPTER_ONLY" if authoring_reachable else ("UNSUPPORTED" if scope == "FINAL_COMPOSITE" else "DEFERRED")),
+		"status": status,
 	}
 
 static func _neutral_transform(transform: Dictionary) -> bool:
