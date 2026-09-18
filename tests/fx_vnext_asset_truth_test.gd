@@ -20,6 +20,7 @@ func _init() -> void:
 	_truth()
 	_harvest()
 	_validation()
+	_atomicity()
 	print("[FX-ASSET-TRUTH] done · checks=%d failures=%d" % [checks.size(), failures])
 	quit(1 if failures > 0 else 0)
 
@@ -71,6 +72,12 @@ func _truth() -> void:
 	layer = _layer_with("CUSTOM_TEXTURE", _upath("ok.png"))
 	var h: Dictionary = FxAssetsScript.dependency_status("displacement.custom_texture", layer, data_dir)
 	_check(str(h.get("state", "")) == "COMPLETE" and bool(h.get("needs_harvest", false)), "truth staged complete+harvest", str(h))
+	# imported project texture: COMPLETE, never harvested
+	var ri: Dictionary = FxAssetsScript.dependency_status("displacement.custom_texture", _layer_with("CUSTOM_TEXTURE", "res://assets/elements/fighter_beauty_test.png"), data_dir)
+	_check(str(ri.get("state", "")) == "COMPLETE" and not bool(ri.get("needs_harvest", false)), "truth res-imported complete", str(ri))
+	# directory: INVALID (never a texture)
+	var rd: Dictionary = FxAssetsScript.dependency_status("displacement.custom_texture", _layer_with("CUSTOM_TEXTURE", "user://fx_asset_stage"), data_dir)
+	_check(str(rd.get("state", "")) == "INVALID", "truth directory invalid", str(rd))
 	# mask + influence + treatment requirement mapping
 	var m: Dictionary = FxLookScript.new_layer("FX", "m")
 	(m["mask"] as Dictionary)["enabled"] = true
@@ -100,19 +107,64 @@ func _harvest() -> void:
 	_check(not bool(r3.get("ok", false)), "harvest missing fails closed", str(r3))
 
 func _validation() -> void:
-	# required + empty / ghost / corrupt / wrong-type must all fail validate
-	var l1 := _layer_with("CUSTOM_TEXTURE", null)
-	_check(not bool(FxLookScript.validate(_wrap_look(l1)).get("ok", false)), "validate rejects empty required")
-	var l2 := _layer_with("CUSTOM_TEXTURE", _upath("ghost.png"))
-	_check(not bool(FxLookScript.validate(_wrap_look(l2)).get("ok", false)), "validate rejects ghost")
-	var l3 := _layer_with("CUSTOM_TEXTURE", _upath("corrupt.png"))
-	_check(not bool(FxLookScript.validate(_wrap_look(l3)).get("ok", false)), "validate rejects corrupt")
-	var l4 := _layer_with("CUSTOM_TEXTURE", _upath("note.txt"))
-	_check(not bool(FxLookScript.validate(_wrap_look(l4)).get("ok", false)), "validate rejects wrong-type")
-	# harvested project-local ref validates
+	# Pipeline truth (mirrors production.apply order): harvest FIRST, then
+	# validate the harvested doc. Absolute authoring paths never reach
+	# validation unharvested; missing files fail at the assets stage.
+	var g: Dictionary = FxAssetsScript.ensure_project_ref(_upath("ghost.png"), data_dir)
+	_check(not bool(g.get("ok", false)), "pipeline ghost fails at harvest", str(g))
+	var c: Dictionary = FxAssetsScript.ensure_project_ref(_upath("corrupt.png"), data_dir)
+	_check(bool(c.get("ok", false)), "pipeline corrupt harvests bytes", str(c.get("errors", [])))
+	if bool(c.get("ok", false)):
+		var lc := _layer_with("CUSTOM_TEXTURE", str(c.get("ref", "")))
+		_check(not bool(FxLookScript.validate(_wrap_look(lc)).get("ok", false)), "pipeline corrupt fails validate", str(FxLookScript.validate(_wrap_look(lc)).get("errors", [])))
+	var w: Dictionary = FxAssetsScript.ensure_project_ref(_upath("note.txt"), data_dir)
+	_check(bool(w.get("ok", false)), "pipeline wrong-type harvests bytes", str(w.get("errors", [])))
+	if bool(w.get("ok", false)):
+		var lw := _layer_with("CUSTOM_TEXTURE", str(w.get("ref", "")))
+		_check(not bool(FxLookScript.validate(_wrap_look(lw)).get("ok", false)), "pipeline wrong-type fails validate", str(FxLookScript.validate(_wrap_look(lw)).get("errors", [])))
 	var r: Dictionary = FxAssetsScript.ensure_project_ref(_upath("ok.png"), data_dir)
 	var l5 := _layer_with("CUSTOM_TEXTURE", str(r.get("ref", "")))
-	_check(bool(FxLookScript.validate(_wrap_look(l5)).get("ok", false)), "validate accepts harvested ref", str(FxLookScript.validate(_wrap_look(l5)).get("errors", [])))
+	_check(bool(FxLookScript.validate(_wrap_look(l5)).get("ok", false)), "pipeline harvested ref validates", str(FxLookScript.validate(_wrap_look(l5)).get("errors", [])))
+	# required + empty still fails even without harvest
+	var l1 := _layer_with("CUSTOM_TEXTURE", null)
+	_check(not bool(FxLookScript.validate(_wrap_look(l1)).get("ok", false)), "validate rejects empty required")
+
+func _atomicity() -> void:
+	# Harvest atomicity (researcher 11-16 §6): harvested pool files are
+	# content-addressed + immutable; a FAILED apply must leave persisted
+	# Production docs/assignments byte-identical and must never modify an
+	# already-referenced asset. An unreferenced orphan blob is tolerated.
+	var prod = FxProductionScript.new()
+	prod.data_dir = data_dir
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(data_dir))
+	var look: Dictionary = _wrap_look(_layer_with("CUSTOM_TEXTURE", _upath("ok.png")))
+	look["look_id"] = "ATOMIC"
+	look["revision"] = 1
+	var a1: Dictionary = prod.apply({"look": look})
+	_check(bool(a1.get("ok", false)), "atomicity seed apply ok", str(a1.get("errors", [])))
+	if not bool(a1.get("ok", false)):
+		return
+	var look_bytes: PackedByteArray = FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(prod.look_path("ATOMIC")))
+	var asg_bytes: PackedByteArray = FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(prod.assignments_path()))
+	var persisted: Dictionary = prod.load_look("ATOMIC")["doc"]
+	var href := ""
+	for l in (persisted.get("layers", []) as Array):
+		var p = ((l as Dictionary).get("displacement", {}) as Dictionary).get("custom_texture", null)
+		if p != null:
+			href = str(p)
+	# Production-ref invariant (§4): no user:// authoring source survives.
+	_check(href != "" and not href.begins_with("user://fx_asset_stage") and href.begins_with(data_dir), "atomicity persisted ref project-local", href)
+	var asset_bytes: PackedByteArray = FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(href))
+	# Inject a later failure (revision rule): docs must stay byte-identical,
+	# referenced asset untouched.
+	var bad: Dictionary = _wrap_look(_layer_with("CUSTOM_TEXTURE", _upath("ok.png")))
+	bad["look_id"] = "ATOMIC"
+	bad["revision"] = 999
+	var a2: Dictionary = prod.apply({"look": bad})
+	_check(not bool(a2.get("ok", false)), "atomicity bad revision fails", str(a2.get("errors", [])))
+	_check(FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(prod.look_path("ATOMIC"))) == look_bytes, "atomicity look bytes stable")
+	_check(FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(prod.assignments_path())) == asg_bytes, "atomicity assignments bytes stable")
+	_check(FileAccess.file_exists(href) and FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(href)) == asset_bytes, "atomicity referenced asset untouched")
 
 func _wrap_look(layer: Dictionary) -> Dictionary:
 	var look: Dictionary = FxLookScript.new_look("TRUTH", "truth")

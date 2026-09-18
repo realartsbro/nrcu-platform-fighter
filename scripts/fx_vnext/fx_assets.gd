@@ -146,6 +146,8 @@ static func asset_health(path) -> Dictionary:
 	if path == null or str(path).strip_edges() == "":
 		return {"state": "EMPTY", "detail": "no path set", "needs_harvest": false}
 	var text := str(path).strip_edges()
+	if DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(text)):
+		return {"state": "INVALID", "detail": "asset is a directory: " + text, "needs_harvest": false}
 	if text.contains("://") and not text.begins_with("res://") and not text.begins_with("user://"):
 		return {"state": "INVALID", "detail": "must be project-local: " + text, "needs_harvest": false}
 	if text.begins_with("/") or text.contains(":\\"):

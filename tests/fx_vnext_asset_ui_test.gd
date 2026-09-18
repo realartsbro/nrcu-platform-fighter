@@ -38,21 +38,32 @@ func _init() -> void:
 	await settle(20)
 	_check(shell._session_ready(), "UI-07 session ready on echo_left")
 	shell.runtime.screen.lab_preview_pause()
+	# Phase isolation (researcher 11-16): NRCU_UI07_ONLY bounds the run to a
+	# comma-separated phase subset; every subset boots its own fresh
+	# store/shell/look, so no invalid or protected state leaks across groups.
+	var only := OS.get_environment("NRCU_UI07_ONLY")
+	var run_all := only.strip_edges() == ""
+	var want := func(name: String) -> bool: return run_all or ("," + only + ",").contains("," + name + ",")
 	_truth_table()
-	print("UI07 PHASE pickers n=%d" % checks.size())
-	await _picker_rows()
-	print("UI07 PHASE families n=%d" % checks.size())
-	await _picks_all_families()
-	print("UI07 PHASE negatives n=%d" % checks.size())
-	await _negatives()
-	print("UI07 PHASE harvest n=%d" % checks.size())
-	await _harvest_flow()
-	print("UI07 PHASE visuals n=%d" % checks.size())
-	await _visual_proofs()
-	print("UI07 PHASE save-reopen n=%d" % checks.size())
-	await _save_reopen_replace()
-	print("UI07 PHASE containment n=%d" % checks.size())
-	await _containment()
+	if want.call("pickers"):
+		print("UI07 PHASE pickers n=%d" % checks.size())
+		await _picker_rows()
+		print("UI07 PHASE families n=%d" % checks.size())
+		await _picks_all_families()
+	if want.call("negatives"):
+		print("UI07 PHASE negatives n=%d" % checks.size())
+		await _negatives()
+	if want.call("harvest"):
+		print("UI07 PHASE harvest n=%d" % checks.size())
+		await _harvest_flow()
+	if want.call("visuals"):
+		print("UI07 PHASE visuals n=%d" % checks.size())
+		await _visual_proofs()
+	if want.call("reopen"):
+		print("UI07 PHASE save-reopen n=%d" % checks.size())
+		await _save_reopen_replace()
+		print("UI07 PHASE containment n=%d" % checks.size())
+		await _containment()
 	print("[FX-ASSET-UI] done · checks=%d failures=%d" % [checks.size(), failures])
 	quit(1 if failures > 0 else 0)
 
@@ -207,14 +218,18 @@ func _edit(lid: String, mut: Callable) -> void:
 func _asset_wrap(field_id: String):
 	return _tagged_node(field_id)
 
-func _ensure_editable(phase: String) -> void:
-	# A successful apply may leave the session SHARED_PROTECTED (correct
-	# product behavior); later phases need their own editable branch.
+func _ensure_editable(phase: String) -> bool:
+	# Legal transition only: protected VALID state -> own editable branch.
+	# make_unique on an INVALID look must fail — fail the phase fast, never
+	# heal-and-continue (researcher 11-16).
 	if shell.session.is_editable():
-		return
+		return true
 	var r: Dictionary = shell.session.make_unique()
 	_check(bool(r.get("ok", false)), "UI-07 %s make-unique for editability" % phase, str(r.get("errors", [])))
+	if not bool(r.get("ok", false)):
+		return false
 	await settle(5)
+	return true
 
 func _show_tab_of(wrap) -> void:
 	# Hidden TabContainer pages never get layout (size 0): switch to the
@@ -333,8 +348,6 @@ func _picker_rows() -> void:
 	_check(_badge_text("displacement.custom_texture").begins_with("⚠ INCOMPLETE"), "UI-07 custom tex incomplete when empty", _badge_text("displacement.custom_texture"))
 	var wrap = _asset_wrap("displacement.custom_texture")
 	var browse: Button = _asset_child(wrap, "AssetBrowse")
-	var pathbox: LineEdit = _asset_child(wrap, "AssetPath")
-	print("UI07DBG browse=%s edit=%s badge=%s canon=%s" % [str(browse.text), str(pathbox.text), _badge_text("displacement.custom_texture"), str(FxAssetsScript.field_path("displacement.custom_texture", _layer(lid)))])
 	_check(str(browse.text) == "BROWSE", "UI-07 browse label when empty", str(browse.text))
 	var undo0: int = (shell.session._undo_stack as Array).size()
 	browse.pressed.emit()
@@ -524,7 +537,8 @@ func _harvest_flow() -> void:
 # ---- T5: visual proofs per family ------------------------------------------------------
 
 func _visual_proofs() -> void:
-	await _ensure_editable("visuals")
+	if not await _ensure_editable("visuals"):
+		return
 	await _visual_mask()
 	await _visual_displacement()
 	await _visual_influence()
@@ -533,7 +547,9 @@ func _visual_proofs() -> void:
 func _visual_mask() -> void:
 	# fringe + CUSTOM half mask: left fringed, right clean.
 	var lid := _add_fx_layer()
-	print("UI07DBG visual_mask lid=%s" % lid)
+	_check(lid != "", "UI-07 visual layer added")
+	if lid == "":
+		return
 	_select_layer(lid)
 	await settle(5)
 	_edit(lid, func(l: Dictionary) -> void:
@@ -557,6 +573,9 @@ func _visual_mask() -> void:
 func _visual_displacement() -> void:
 	# CUSTOM gradient texture vs NOISE driver: visibly different fields.
 	var lid := _add_fx_layer()
+	_check(lid != "", "UI-07 visual layer added")
+	if lid == "":
+		return
 	_select_layer(lid)
 	await settle(5)
 	_edit(lid, func(l: Dictionary) -> void:
@@ -577,6 +596,9 @@ func _visual_displacement() -> void:
 func _visual_influence() -> void:
 	# influence half mask confines displacement to the left half.
 	var lid := _add_fx_layer()
+	_check(lid != "", "UI-07 visual layer added")
+	if lid == "":
+		return
 	_select_layer(lid)
 	await settle(5)
 	_edit(lid, func(l: Dictionary) -> void:
@@ -599,6 +621,9 @@ func _visual_influence() -> void:
 func _visual_treatment() -> void:
 	# grade treatment gated by half treatment mask: left graded, right clean.
 	var lid := _add_fx_layer()
+	_check(lid != "", "UI-07 visual layer added")
+	if lid == "":
+		return
 	_select_layer(lid)
 	await settle(5)
 	_edit(lid, func(l: Dictionary) -> void:
@@ -621,9 +646,12 @@ func _visual_treatment() -> void:
 # ---- T6: save/reopen/replace/clear ---------------------------------------------------------
 
 func _save_reopen_replace() -> void:
-	await _ensure_editable("save-reopen")
+	if not await _ensure_editable("save-reopen"):
+		return
 	var lid := _add_fx_layer()
-	print("UI07DBG sr lid=%s driver-tag=%s" % [lid, str(_tagged_node("displacement.driver") != null)])
+	_check(lid != "", "UI-07 visual layer added")
+	if lid == "":
+		return
 	_select_layer(lid)
 	await settle(5)
 	_check(_opt_by_value("displacement.driver", DRIVERS, "CUSTOM_TEXTURE"), "UI-07 sr driver custom")
