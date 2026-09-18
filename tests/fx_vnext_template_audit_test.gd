@@ -8,6 +8,7 @@ extends SceneTree
 const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
 const FxResolverScript := preload("res://scripts/fx_vnext/fx_resolver.gd")
 const FxTemplatesScript := preload("res://scripts/fx_vnext/fx_templates.gd")
+const VsRuntimeScript := preload("res://scripts/fx_vnext/vs_runtime.gd")
 
 var shell: Control
 var checks: Array = []
@@ -417,10 +418,9 @@ func _save_reopen_parity() -> void:
 	_check(pre.get_size() == Vector2i(1280, 720), "UI-06 presentation surface is 1280x720", str(pre.get_size()))
 	var applied: Dictionary = shell.session.apply()
 	_check(bool(applied.get("ok", false)), "UI-06 session applies to production", str(applied.get("errors", [])))
-	# Apply may persist under a fresh id (unique_look_id): reload THAT doc,
-	# never the stale seed id.
-	if str(applied.get("verified_look_id", "")) != "":
-		look_id = str(applied.get("verified_look_id"))
+	# The canonical apply result carries look_id (final persisted id):
+	# reload THAT doc, never a stale seed id.
+	look_id = str(applied.get("look_id", look_id))
 	var loaded: Dictionary = shell.production.load_look(look_id)
 	_check(bool(loaded.get("ok", false)), "UI-06 look reloads from disk")
 	if not bool(loaded.get("ok", false)):
@@ -462,6 +462,37 @@ func _save_reopen_parity() -> void:
 	var post: Image = await _capture_surface("ui06_post")
 	_check(post.get_size() == pre.get_size(), "UI-06 reopen surface stable", "%s vs %s" % [str(pre.get_size()), str(post.get_size())])
 	_check(_mean_abs_diff(pre, post) < 0.0005, "UI-06 fresh reopen renders identically", "mean=%.6f" % _mean_abs_diff(pre, post))
+	await _production_authority_parity(pre)
+
+func _production_authority_parity(pre: Image) -> void:
+	# Option A: a fresh REFERENCE production consumer resolves assignments
+	# and loads the persisted PRODUCTION look only — no drafts anywhere.
+	# Same target, same presentation time, direct surface capture.
+	var ref: Control = VsRuntimeScript.new()
+	# The reference container stretches its SubViewport to its own size, so
+	# the ref Control needs a real size (zero-size parent shrinks subvp).
+	ref.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	ref.size = Vector2(1280, 720)
+	root.add_child(ref)
+	await settle(30)
+	var summary: Dictionary = ref.reload_production()
+	_check(bool(summary.get("ok", false)), "UI-06 reference consumer loads production", str(summary.get("errors", [])))
+	var hit := false
+	for pid in (summary.get("plan_ids", []) as Array):
+		if str(pid).begins_with("echo_left:" + look_id + ":"):
+			hit = true
+	_check(hit, "UI-06 reference renders reopened production look", str(summary.get("plan_ids", [])))
+	ref.runtime.screen.lab_preview_pause()
+	ref.seek(0.5)
+	await settle(10)
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	var ref_img: Image = ref.runtime.subvp.get_texture().get_image()
+	ref_img.save_png(out_dir.path_join("ui06_production.png"))
+	_check(ref_img.get_size() == pre.get_size(), "UI-06 production surface stable", "%s vs %s" % [str(pre.get_size()), str(ref_img.get_size())])
+	_check(_mean_abs_diff(pre, ref_img) < 0.0005, "UI-06 production authority renders identically", "mean=%.6f" % _mean_abs_diff(pre, ref_img))
+	ref.queue_free()
+	await settle(5)
 
 func _canon(v):
 	# Canonical form with sorted dict keys (JSON key order is unstable
