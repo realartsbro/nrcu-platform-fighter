@@ -20,6 +20,7 @@ const FxLayerRendererScript := preload("res://scripts/fx_vnext/fx_layer_renderer
 const FxAssetsScript := preload("res://scripts/fx_vnext/fx_assets.gd")
 const FxCostScript := preload("res://scripts/fx_vnext/fx_cost.gd")
 const FxTemplatesScript := preload("res://scripts/fx_vnext/fx_templates.gd")
+const FxRecipesScript := preload("res://scripts/fx_vnext/fx_recipes.gd")
 const FxLayerRowScript := preload("res://scripts/fx_vnext_ui/fx_layer_row.gd")
 const FxPlaneSectionScript := preload("res://scripts/fx_vnext_ui/fx_plane_section.gd")
 
@@ -670,16 +671,18 @@ func _build_dock() -> void:
 	_section_header(inspector_inner, "RECIPE LIBRARY · AUTHORING TEMPLATES")
 	recipe_rows = VBoxContainer.new()
 	recipe_rows.add_theme_constant_override("separation", 2)
-	for template in FxTemplatesScript.TEMPLATES:
+	for recipe in FxRecipesScript.list():
+		var recipe_data: Dictionary = recipe
+		var recipe_id := str(recipe_data.get("stable_id", ""))
 		var recipe_row := HBoxContainer.new()
 		var recipe_label := Label.new()
-		recipe_label.text = str(template) + "  · RECIPE"
+		recipe_label.text = "%s  · HERO RECIPE\n%s" % [str(recipe_data.get("name", recipe_id)), str(recipe_data.get("intent", recipe_data.get("description", "")))]
 		recipe_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		recipe_label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 		recipe_label.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
 		recipe_row.add_child(recipe_label)
-		var recipe_add := _styled_button("ADD", func() -> void: _action_add_layer(str(template)))
-		recipe_add.tooltip_text = "Instantiate this recipe into the current draft; it is not a Production Look."
+		var recipe_add := _styled_button("ADD", func() -> void: _action_add_recipe(recipe_id))
+		recipe_add.tooltip_text = "Instantiate %s into the current draft; it is not a Production Look. Advanced fields remain available." % recipe_id
 		recipe_add_buttons.append(recipe_add)
 		recipe_row.add_child(recipe_add)
 		recipe_rows.add_child(recipe_row)
@@ -1728,6 +1731,47 @@ func _action_add_layer(template: String) -> void:
 	if bool(result.get("ok", false)):
 		selected_layer_id = str(new_layer.get("layer_id", ""))
 		action_status.text = "✓ Added " + template
+		_schedule_stash()
+		_render_current_look()
+		_rebuild_layers_panel()
+		_rebuild_inspector()
+	else:
+		action_status.text = "✗ " + str(result.get("errors", []))
+
+func _recipe_instance_key(recipe_id: String) -> String:
+	# Repeated clicks remain collision-free without introducing randomness. The
+	# ordinal is derived from the current target's existing recipe layer ids,
+	# while the registry derives every actual id from this complete key.
+	var prefix := "recipe-%s-" % recipe_id.to_lower()
+	var matching_layers := 0
+	if _session_ready():
+		for raw_layer in session.look.get("layers", []):
+			if str((raw_layer as Dictionary).get("layer_id", "")).begins_with(prefix):
+				matching_layers += 1
+	var layer_count := maxi(1, (FxRecipesScript.get_recipe(recipe_id).get("layers", []) as Array).size())
+	var ordinal := int(matching_layers / layer_count)
+
+	return "%s:%s:%d" % [selected_key, recipe_id, ordinal]
+
+func _action_add_recipe(recipe_id: String) -> void:
+	if not _session_ready():
+		return
+	if not session.is_editable():
+		action_status.text = "✗ Protected shared Look — EDIT SHARED or MAKE UNIQUE first"
+		return
+	var recipe_result: Dictionary = FxRecipesScript.instantiate(recipe_id, _recipe_instance_key(recipe_id))
+	if not bool(recipe_result.get("ok", false)):
+		action_status.text = "✗ " + str(recipe_result.get("errors", []))
+		return
+	# Exactly one snapshot surrounds the entire recipe stack. The recipe action
+	# does not inspect or mutate Assignment Scope; it is an authoring edit only.
+	session.snapshot()
+	var recipe_layers: Array = recipe_result.get("layers", [])
+	var result: Dictionary = session.edit(func(doc): doc["layers"].append_array(recipe_layers))
+	if bool(result.get("ok", false)):
+		selected_layer_id = str((recipe_layers[0] as Dictionary).get("layer_id", "")) if not recipe_layers.is_empty() else selected_layer_id
+		var recipe: Dictionary = FxRecipesScript.get_recipe(recipe_id)
+		action_status.text = "✓ Added Hero Recipe · " + str(recipe.get("name", recipe_id))
 		_schedule_stash()
 		_render_current_look()
 		_rebuild_layers_panel()

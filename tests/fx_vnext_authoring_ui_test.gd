@@ -385,7 +385,7 @@ func _slider_drag_is_one_transaction(fx_id: String) -> void:
 	shell._rebuild_inspector()
 	await settle(2)
 	_check(shell._focused_canonical_field() == "grade_brightness", "UI-16 inspector remount restores canonical focus", shell._focused_canonical_field())
-	_check(shell.recipe_rows != null and shell.recipe_rows.get_child_count() == 6, "UI-18 recipe library is separate from Production inventory")
+	_check(shell.recipe_rows != null and shell.recipe_rows.get_child_count() == 2, "UI-18 Hero Recipe library is separate from Production inventory")
 	# The remount intentionally replaces the old node; continue with the new
 	# canonical control rather than touching a freed reference.
 	slider = _find_slider("Brightness")
