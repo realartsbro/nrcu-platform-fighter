@@ -146,6 +146,23 @@ func _init() -> void:
 	_check(shell.breadcrumb_label.text == "ICE MAGE › ECHO › LEFT", "breadcrumb reflects selection", shell.breadcrumb_label.text)
 	_check("presentation" in shell.status_detail.text, "status shows spatial readout", shell.status_detail.text)
 	_check(shell.selection_outline.visible, "selection outline visible")
+	# UI-15: focus is a presentation-only modulation with deterministic restore.
+	var focus_other_key := ""
+	for candidate in shell.runtime.registry.slot_nodes.keys():
+		if str(candidate) != "echo_left":
+			focus_other_key = str(candidate)
+			break
+	var focus_other: CanvasItem = shell.runtime.registry.slot_nodes[focus_other_key]
+	var focus_base_alpha := focus_other.modulate.a
+	shell._set_preview_focus("DIM OTHERS")
+	await settle(4)
+	_check(focus_other.modulate.a < focus_base_alpha * 0.5, "DIM OTHERS modulates non-selected targets")
+	shell._set_preview_focus("SOLO")
+	await settle(4)
+	_check(focus_other.modulate.a < 0.01, "SOLO hides non-selected targets")
+	shell._set_preview_focus("NORMAL")
+	await settle(4)
+	_check(absf(focus_other.modulate.a - focus_base_alpha) < 0.02, "NORMAL restores focus modulation")
 	# UI-11: remount clears authority, not just the browser highlight.
 	shell._remount_current()
 	await settle(12)
