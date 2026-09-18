@@ -98,6 +98,7 @@ func _init() -> void:
 	# ---- audit additions: templates, planes, reorder, undo, study, presets ---------
 	var FxLookScriptLocal = load("res://scripts/fx_vnext/fx_look.gd")
 	var FxTargetsLocal = load("res://scripts/fx_vnext/fx_targets.gd")
+	var FxResolverScriptLocal = load("res://scripts/fx_vnext/fx_resolver.gd")
 	shell._action_add_layer("Source Copy")
 	await settle(6)
 	var layers_n: Array = shell.session.look["layers"]
@@ -195,6 +196,16 @@ func _init() -> void:
 	shell._refresh_selection_ui()
 	await settle(4)
 	_check(str(shell.layers_cost_label.text).contains("cost"), "cost indicator rendered", shell.layers_cost_label.text)
+	# UI-18/UI-12: shared production state exposes a persistent protected banner
+	# and gates history actions, including after a selection refresh.
+	var shared_asg: Dictionary = shell.production.load_assignments()["doc"]
+	FxResolverScriptLocal.upsert_binding(shared_asg, {"fighter_id": "ice_mage", "element_role": "echo", "visual_side": "right"}, "ICE_MAGE_ECHO_LEFT", "shared banner proof")
+	_check(bool(shell.production.apply({"assignments": shared_asg})["ok"]), "shared banner proof binding applies")
+	shell._select_key("echo_left", false)
+	await settle(8)
+	_check(str(shell.session.mode) == "SHARED_PROTECTED", "shared target reopens protected", str(shell.session.mode))
+	_check(shell.protected_banner.visible and shell.protected_banner.text.contains("PROTECTED SHARED LOOK"), "protected banner remains visible", shell.protected_banner.text)
+	_check(shell.undo_button.disabled and shell.redo_button.disabled, "protected history actions disabled")
 	await capture("session_05_layer_ops")
 
 	var f := FileAccess.open(out_dir.path_join("summary_session_check.json"), FileAccess.WRITE)
