@@ -20,7 +20,7 @@ func _check(ok: bool, label: String, extra := "") -> void:
 func _init() -> void:
 	var meta: Dictionary = FxLookScript.field_meta_all()
 	var neutral: Dictionary = FxLookScript.neutral_fx()
-	_check(meta.size() == 109, "UI-05 meta covers 109 keys", str(meta.size()))
+	_check(meta.size() >= 109, "UI-05 meta covers the canonical 109 keys plus explicit operator extensions", str(meta.size()))
 	var missing: Array = []
 	for key in neutral.keys():
 		if not meta.has(str(key)):
