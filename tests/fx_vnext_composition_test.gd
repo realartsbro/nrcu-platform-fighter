@@ -33,6 +33,9 @@ func _init() -> void:
 	runtime.mount("1v1", "debug", "ice_mage", "doge_man")
 	await settle(60)
 	runtime.seek(1.5)
+	# Freeze the visible preview at the comparison time; composition checks must
+	# not race the screen's EXIT/fade while shaders are settling on OpenGL.
+	runtime.screen.lab_preview_pause()
 	await settle(8)
 	renderer = FxLayerRendererScript.new(runtime.screen, runtime.registry)
 	renderer.set_time(1.5)

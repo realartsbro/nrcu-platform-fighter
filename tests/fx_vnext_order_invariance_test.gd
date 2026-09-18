@@ -42,6 +42,9 @@ func _init() -> void:
 		var mounted: bool = runtime.mount(fmt, "debug", "ice_mage", "doge_man")
 		await settle(60)
 		runtime.seek(1.5)
+		# Freeze each visible preview so permutation readback is not racing the
+		# screen lifecycle's EXIT/fade on OpenGL.
+		runtime.screen.lab_preview_pause()
 		await settle(8)
 		_check(mounted and runtime.screen != null, "mount " + fmt, "")
 		if runtime.screen == null:

@@ -91,9 +91,10 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 	# ONE pass for the whole visible composition (Round-2 Finding 1). plan is a
 	# list of {key, look}; the GLOBAL order is canonical regardless of the order
 	# of entries in the plan or the order of apply calls:
-	#   canonical base -> ALL composition-background layers (canonical target
-	#   order, layer order within a target) -> per-target local planes in
-	#   canonical target order -> ALL composition-foreground layers -> cover/UI.
+	#   canonical base -> target-local planes in canonical target order -> ALL
+	#   composition-background layers -> ALL composition-foreground layers ->
+	#   cover/UI. Composition planes remain target-texture scoped; their global
+	#   groups are resolved deterministically regardless of plan order.
 	var errors: Array = []
 	# RT-02: build EVERYTHING before touching the live tree. clear_all() used
 	# to run first, so one invalid target committed a partial mixed frame.
@@ -141,16 +142,12 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 		final_entry = final_build["entry"]
 	clear_all()
 
-	# ---- pass 1: all composition-background layers (deterministic order) --------
-	var background_anchor := _background_anchor_index(root)
+	# ---- pass 1: target-local planes in canonical target order --------------------
+	# Composition planes are attached after the target-local surfaces below. A
+	# composition background is still scoped by the target texture (rather than
+	# being a full-frame colour), so placing it after its source surface is what
+	# makes its authored treatment observable in the target rect on OpenGL.
 	var bg_index := 0
-	for stack in stacks:
-		for quad_entry in stack["entry"].get("quads", []):
-			if str(quad_entry.get("plane", "")) != "COMPOSITION_BACKGROUND":
-				continue
-			_place_quad_at(root, background_anchor + bg_index, quad_entry["node"])
-			bg_index += 1
-			_pin_if_blend(stack["entry"], quad_entry)
 
 	# ---- pass 2: per-target local planes in canonical target order ---------------
 	for stack in stacks:
@@ -168,7 +165,19 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 			overlay_count = int(placement.get("overlay_count", overlay_count))
 			_pin_if_blend(entry, quad_entry)
 
-	# ---- pass 3: all composition-foreground layers (deterministic order) ---------
+	# ---- pass 3: all composition-background layers (deterministic order) --------
+	# The anchor is resolved after target-local placement so the background group
+	# sits above every local target surface but remains below the foreground group.
+	var background_anchor := _foreground_anchor_index(root)
+	for stack in stacks:
+		for quad_entry in stack["entry"].get("quads", []):
+			if str(quad_entry.get("plane", "")) != "COMPOSITION_BACKGROUND":
+				continue
+			_place_quad_at(root, background_anchor + bg_index, quad_entry["node"])
+			bg_index += 1
+			_pin_if_blend(stack["entry"], quad_entry)
+
+	# ---- pass 4: all composition-foreground layers (deterministic order) ---------
 	var foreground_anchor := _foreground_anchor_index(root)
 	var fg_index := 0
 	for stack in stacks:
@@ -179,7 +188,7 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 			fg_index += 1
 			_pin_if_blend(stack["entry"], quad_entry)
 
-	# ---- pass 4: one explicit full-canvas final pass before impact/cover ---------
+	# ---- pass 5: one explicit full-canvas final pass before impact/cover ---------
 	if not final_entry.is_empty():
 		if not _attach_final_entry(root, final_entry):
 			_cleanup_final_entry(final_entry)
