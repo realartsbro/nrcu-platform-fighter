@@ -53,6 +53,9 @@ var delete_look_id := ""
 var review_panel: PanelContainer
 var review_look_id := ""
 var review_ack_field: LineEdit
+var delete_overlay: Control
+var review_overlay: Control
+var modal_cancel_button: Button
 var layer_clipboard: Dictionary = {}
 var debug_view := "COMPOSITE"
 var debug_badge: Label
@@ -171,6 +174,7 @@ var inspector_box: VBoxContainer
 var layers_split_handle: ColorRect
 var layers_rows: VBoxContainer
 var layers_empty: Label
+var add_menu: MenuButton
 var add_layer_menu: MenuButton
 var add_effect_menu: MenuButton
 var recipe_add_buttons: Array = []
@@ -393,8 +397,9 @@ func _build_toolbar(parent: Node) -> void:
 	inspector_toggle = _toolbar_button("◨ INSPECTOR", _toggle_dock)
 	timeline_toggle = _toolbar_button("▤ TIMELINE", _toggle_timeline_expanded)
 	reset_workspace_button = _toolbar_button("RESET WORKSPACE", _reset_workspace)
-	preset_authoring = _toolbar_button("AUTHORING", func() -> void: _apply_workspace_preset("AUTHORING"))
-	preset_preview = _toolbar_button("WORKSPACE", func() -> void: _apply_workspace_preset("PREVIEW"))
+	reset_workspace_button.visible = false
+	preset_authoring = _toolbar_button("LAYOUT: AUTHORING", func() -> void: _apply_workspace_preset("AUTHORING"))
+	preset_preview = _toolbar_button("LAYOUT: FOCUS", func() -> void: _apply_workspace_preset("PREVIEW"))
 
 	remount_button = _toolbar_button("⟲ REMOUNT", _remount_current)
 	review_button = _toolbar_button("⚠ REVIEW", _open_migration_review_queue)
@@ -675,25 +680,29 @@ func _build_dock() -> void:
 	layers_cost_label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	layers_cost_label.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
 	layers_header.add_child(layers_cost_label)
-	add_layer_menu = MenuButton.new()
-	add_layer_menu.text = "+ ADD LAYER"
-	FxLabUiTokensScript.apply_hit_target(add_layer_menu)
-	add_layer_menu.custom_minimum_size.x = 84
-	add_layer_menu.add_theme_font_size_override("font_size", 11)
-	for template in FxTemplatesScript.TEMPLATES:
-		add_layer_menu.get_popup().add_item(template)
-	add_layer_menu.get_popup().id_pressed.connect(func(index: int) -> void: _action_add_layer(FxTemplatesScript.TEMPLATES[index]))
-	layers_header.add_child(add_layer_menu)
-	add_effect_menu = MenuButton.new()
-	add_effect_menu.text = "+ ADD EFFECT"
-	FxLabUiTokensScript.apply_hit_target(add_effect_menu)
-	add_effect_menu.custom_minimum_size.x = 88
-	add_effect_menu.add_theme_font_size_override("font_size", 11)
+	add_menu = MenuButton.new()
+	add_menu.name = "AddMenu"
+	add_menu.text = "+ ADD"
+	add_menu.tooltip_text = "Add a layer or effect to the current draft"
+	FxLabUiTokensScript.apply_hit_target(add_menu)
+	add_menu.custom_minimum_size.x = 84
+	var add_popup: PopupMenu = add_menu.get_popup()
+	add_popup.add_item("LAYERS", 1)
+	add_popup.set_item_disabled(0, true)
+	for index in FxTemplatesScript.TEMPLATES.size():
+		add_popup.add_item(str(FxTemplatesScript.TEMPLATES[index]), 100 + index)
+	add_popup.add_separator()
+	add_popup.add_item("EFFECTS", 2)
+	add_popup.set_item_disabled(add_popup.item_count - 1, true)
 	var effect_templates: Array = ["Outer Halo", "Edge Treatment", "RGB Tear", "Dither Treatment", "Custom FX Layer"]
-	for template in effect_templates:
-		add_effect_menu.get_popup().add_item(template)
-	add_effect_menu.get_popup().id_pressed.connect(func(index: int) -> void: _action_add_layer(effect_templates[index]))
-	layers_header.add_child(add_effect_menu)
+	for index in effect_templates.size():
+		add_popup.add_item(str(effect_templates[index]), 200 + index)
+	add_popup.id_pressed.connect(_on_add_menu_pressed)
+	layers_header.add_child(add_menu)
+	# Kept as null compatibility aliases: there is intentionally one visible
+	# categorized add action, never two competing buttons.
+	add_layer_menu = null
+	add_effect_menu = null
 	layers_empty = _section_empty(layers_box, "No design yet.\nSelect a target — the layer stack opens here.")
 	layers_rows = VBoxContainer.new()
 	layers_rows.add_theme_constant_override("separation", 2)
@@ -746,7 +755,7 @@ func _build_dock() -> void:
 		recipe_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		recipe_row.custom_minimum_size.y = 40
 		var recipe_label := Label.new()
-		recipe_label.text = "%s · HERO RECIPE" % str(recipe_data.get("name", recipe_id))
+		recipe_label.text = str(recipe_data.get("name", recipe_id))
 		recipe_label.tooltip_text = str(recipe_data.get("intent", recipe_data.get("description", "")))
 		recipe_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		recipe_label.size_flags_stretch_ratio = 1.0
@@ -1045,6 +1054,8 @@ func _on_resized() -> void:
 	_apply_timeline()
 	_toolbar_overflow()
 	_apply_layers_split()
+	_layout_modal_panel(delete_panel)
+	_layout_modal_panel(review_panel)
 
 func _apply_state() -> void:
 	var dock_hidden := _is_dock_hidden()
@@ -1127,12 +1138,14 @@ func _toolbar_overflow() -> void:
 	var pool: Array = [
 		[remount_button, "⟲ REMOUNT", _remount_current],
 		[review_button, "⚠ REVIEW", _open_migration_review_queue],
-		[reset_workspace_button, "RESET WORKSPACE", _reset_workspace],
-		[preset_authoring, "AUTHORING", func() -> void: _apply_workspace_preset("AUTHORING")],
-		[preset_preview, "WORKSPACE", func() -> void: _apply_workspace_preset("PREVIEW")],
+		[preset_authoring, "LAYOUT: AUTHORING", func() -> void: _apply_workspace_preset("AUTHORING")],
+		[preset_preview, "LAYOUT: FOCUS", func() -> void: _apply_workspace_preset("PREVIEW")],
 	]
 	var popup := overflow_button.get_popup()
 	popup.clear()
+	# Reset is rare maintenance and is always available only through overflow.
+	popup.add_item("RESET WORKSPACE", 1)
+	popup.add_separator()
 	var hidden: Array = []
 	for entry in pool:
 		var btn: Button = entry[0]
@@ -1148,27 +1161,30 @@ func _toolbar_overflow() -> void:
 		btn.visible = false
 		hidden.append(entry)
 	for i in range(hidden.size()):
-		popup.add_item(str((hidden[i] as Array)[1]), i + 1)
-	overflow_button.visible = not hidden.is_empty()
+		popup.add_item(str((hidden[i] as Array)[1]), 100 + i)
+	overflow_button.visible = true
 	if not popup.id_pressed.is_connected(_on_toolbar_overflow_chosen):
 		popup.id_pressed.connect(_on_toolbar_overflow_chosen)
 
 func _on_toolbar_overflow_chosen(id: int) -> void:
+	if id == 1:
+		_reset_workspace()
+		return
 	# Rebuild the current hidden set (same priority order as overflow).
 	var pool: Array = [
 		[remount_button, "⟲ REMOUNT", _remount_current],
 		[review_button, "⚠ REVIEW", _open_migration_review_queue],
-		[reset_workspace_button, "RESET WORKSPACE", _reset_workspace],
-		[preset_authoring, "AUTHORING", func() -> void: _apply_workspace_preset("AUTHORING")],
-		[preset_preview, "WORKSPACE", func() -> void: _apply_workspace_preset("PREVIEW")],
+		[preset_authoring, "LAYOUT: AUTHORING", func() -> void: _apply_workspace_preset("AUTHORING")],
+		[preset_preview, "LAYOUT: FOCUS", func() -> void: _apply_workspace_preset("PREVIEW")],
 	]
 	var hidden: Array = []
 	for entry in pool:
 		var btn: Button = entry[0]
 		if btn != null and not (btn as Button).visible:
 			hidden.append(entry)
-	if id >= 1 and id <= hidden.size():
-		((hidden[id - 1] as Array)[2] as Callable).call()
+	var hidden_index := id - 100
+	if hidden_index >= 0 and hidden_index < hidden.size():
+		((hidden[hidden_index] as Array)[2] as Callable).call()
 
 func _is_dock_hidden() -> bool:
 	return bool(ws.data.get("dock_hidden", false))
@@ -1789,7 +1805,9 @@ func _refresh_cost_nodes(node: Node) -> void:
 		var layer_id := str(node.get_meta("cost_layer_id"))
 		var layer := FxLookScript.find_layer(session.look, layer_id)
 		if not layer.is_empty():
-			(node as Label).text = "c%.1f" % float(FxCostScript.layer_cost(layer).get("cost", 0.0))
+			var layer_cost: Dictionary = FxCostScript.layer_cost(layer)
+			(node as Label).text = "COST"
+			(node as Label).tooltip_text = "Estimated render cost: %.1f\n%s" % [float(layer_cost.get("cost", 0.0)), "\n".join(layer_cost.get("factors", []))]
 	for child in node.get_children():
 		_refresh_cost_nodes(child)
 
@@ -1840,6 +1858,16 @@ func _action_add_layer(template: String) -> void:
 		_rebuild_inspector()
 	else:
 		action_status.text = "✗ " + str(result.get("errors", []))
+
+func _on_add_menu_pressed(id: int) -> void:
+	# The visible + ADD menu is categorized, but every leaf reaches the same
+	# canonical session mutation used by the legacy layer/effect actions.
+	if id >= 100 and id < 100 + FxTemplatesScript.TEMPLATES.size():
+		_action_add_layer(str(FxTemplatesScript.TEMPLATES[id - 100]))
+		return
+	var effects: Array = ["Outer Halo", "Edge Treatment", "RGB Tear", "Dither Treatment", "Custom FX Layer"]
+	if id >= 200 and id < 200 + effects.size():
+		_action_add_layer(str(effects[id - 200]))
 
 func _recipe_instance_key(recipe_id: String) -> String:
 	# Repeated clicks remain collision-free without introducing randomness. The
@@ -1954,8 +1982,15 @@ func _refresh_library() -> void:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 4)
 		var label := Label.new()
-		label.text = "Production Look · rev%d · used by %d target%s" % [int(entry["revision"]), int(entry["usage"]), "" if int(entry["usage"]) == 1 else "s"]
-		label.tooltip_text = "Production Look assignment status · revision %d" % int(entry["revision"])
+		var look_id := str(entry.get("look_id", ""))
+		var look_name := look_id
+		var loaded: Dictionary = production.load_look(look_id)
+		if bool(loaded.get("ok", false)):
+			look_name = str((loaded.get("doc", {}) as Dictionary).get("name", look_id))
+		label.text = "%s · ID: %s · rev%d · used by %d target%s" % [look_name, look_id, int(entry["revision"]), int(entry["usage"]), "" if int(entry["usage"]) == 1 else "s"]
+		label.tooltip_text = "Production Look: %s\nStable ID: %s\nRevision: %d\nUsage: %d target(s)" % [look_name, look_id, int(entry["revision"]), int(entry["usage"])]
+		label.set_meta("look_id", look_id)
+		label.set_meta("look_name", look_name)
 		label.clip_text = true
 		label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
@@ -1997,9 +2032,9 @@ func _action_delete_look(look_id: String) -> void:
 func _open_delete_chooser(look_id: String, use: Dictionary) -> void:
 	_close_delete_chooser()
 	delete_look_id = look_id
+	delete_overlay = _new_modal_overlay()
 	delete_panel = PanelContainer.new()
-	delete_panel.custom_minimum_size = Vector2(560, 60)
-	delete_panel.position = Vector2(maxf(20.0, size.x * 0.5 - 280.0), maxf(20.0, size.y * 0.5 - 120.0))
+	_setup_modal_panel(delete_panel, Vector2(560, 320))
 	add_child(delete_panel)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 6)
@@ -2048,10 +2083,46 @@ func _open_delete_chooser(look_id: String, use: Dictionary) -> void:
 	var unassign := _styled_button("Unassign affected targets", func() -> void: _apply_retire(look_id, "unassign", ""))
 	actions.add_child(unassign)
 	var cancel := _styled_button("Cancel", _close_delete_chooser)
+	modal_cancel_button = cancel
 	actions.add_child(cancel)
+	cancel.grab_focus.call_deferred()
+
+func _new_modal_overlay() -> Control:
+	var overlay := ColorRect.new()
+	overlay.name = "ModalBackdrop"
+	overlay.color = Color(0.02, 0.03, 0.05, 0.78)
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 100
+	add_child(overlay)
+	return overlay
+
+func _setup_modal_panel(panel: PanelContainer, desired: Vector2) -> void:
+	panel.z_index = 101
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	panel.custom_minimum_size = desired
+	FxLabUiTokensScript.apply_tool_style(panel)
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	_layout_modal_panel(panel)
+
+func _layout_modal_panel(panel: PanelContainer) -> void:
+	if panel == null or not is_instance_valid(panel):
+		return
+	var desired := panel.custom_minimum_size
+	var width := minf(desired.x, maxf(320.0, size.x - 40.0))
+	var height := minf(desired.y, maxf(200.0, size.y - 40.0))
+	panel.offset_left = -width * 0.5
+	panel.offset_right = width * 0.5
+	panel.offset_top = -height * 0.5
+	panel.offset_bottom = height * 0.5
+	panel.size = Vector2(width, height)
 
 func _close_delete_chooser() -> void:
 	delete_look_id = ""
+	modal_cancel_button = null
+	if delete_overlay != null and is_instance_valid(delete_overlay):
+		delete_overlay.queue_free()
+	delete_overlay = null
 	if delete_panel != null and is_instance_valid(delete_panel):
 		delete_panel.queue_free()
 	delete_panel = null
@@ -2139,9 +2210,9 @@ func _open_migration_review_queue() -> void:
 
 func _open_migration_review_panel(look_id: String, notes: Array) -> void:
 	_close_migration_review_panel()
+	review_overlay = _new_modal_overlay()
 	review_panel = PanelContainer.new()
-	review_panel.custom_minimum_size = Vector2(560, 60)
-	review_panel.position = Vector2(maxf(20.0, size.x * 0.5 - 280.0), maxf(20.0, size.y * 0.5 - 160.0))
+	_setup_modal_panel(review_panel, Vector2(560, 360))
 	add_child(review_panel)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 6)
@@ -2169,14 +2240,30 @@ func _open_migration_review_panel(look_id: String, notes: Array) -> void:
 	box.add_child(actions)
 	actions.add_child(_styled_button("Save repair from editor", func() -> void: migration_review_repair_current()))
 	actions.add_child(_styled_button("Approve", func() -> void: migration_review_approve(review_ack_field.text if review_ack_field != null else "")))
-	actions.add_child(_styled_button("Close", _close_migration_review_panel))
+	var cancel := _styled_button("Cancel", _close_migration_review_panel)
+	modal_cancel_button = cancel
+	actions.add_child(cancel)
+	review_ack_field.grab_focus.call_deferred()
 
 func _close_migration_review_panel() -> void:
 	review_look_id = ""
 	review_ack_field = null
+	modal_cancel_button = null
+	if review_overlay != null and is_instance_valid(review_overlay):
+		review_overlay.queue_free()
+	review_overlay = null
 	if review_panel != null and is_instance_valid(review_panel):
 		review_panel.queue_free()
 	review_panel = null
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey and (event as InputEventKey).pressed and (event as InputEventKey).keycode == KEY_ESCAPE:
+		if delete_panel != null:
+			_close_delete_chooser()
+			get_viewport().set_input_as_handled()
+		elif review_panel != null:
+			_close_migration_review_panel()
+			get_viewport().set_input_as_handled()
 
 func _action_save_draft() -> void:
 	if not _session_ready():
@@ -2339,10 +2426,8 @@ func _sync_actions() -> void:
 		protected_actions_host.visible = has
 	if protected_actions_spacer != null:
 		protected_actions_spacer.visible = has and str(session.mode) != "SHARED_PROTECTED"
-	if add_layer_menu != null:
-		add_layer_menu.visible = has
-	if add_effect_menu != null:
-		add_effect_menu.visible = has
+	if add_menu != null:
+		add_menu.visible = has
 	for recipe_button in recipe_add_buttons:
 		(recipe_button as Button).disabled = not has or not session.is_editable()
 	if recipe_rows != null:
@@ -2413,10 +2498,11 @@ func _layer_row(layer: Dictionary) -> Control:
 	row.add_theme_constant_override("separation", 2)
 	row.mouse_filter = Control.MOUSE_FILTER_PASS
 	var eye := Button.new()
-	eye.custom_minimum_size = Vector2(FxLabUiTokensScript.HIT_WIDTH, FxLabUiTokensScript.HIT_HEIGHT)
+	eye.name = "VisibilityButton"
+	eye.custom_minimum_size = Vector2(64, FxLabUiTokensScript.HIT_HEIGHT)
 	FxLabUiTokensScript.apply_hit_target(eye)
-	eye.text = "●" if bool(layer.get("enabled", true)) else "○"
-	eye.tooltip_text = "Visibility"
+	eye.text = "VISIBLE" if bool(layer.get("enabled", true)) else "HIDDEN"
+	eye.tooltip_text = "Visibility: click to %s this layer" % ("hide" if bool(layer.get("enabled", true)) else "show")
 	eye.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	eye.pressed.connect(func() -> void: _edit_layer(layer_id, func(doc):
 		var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
@@ -2424,9 +2510,11 @@ func _layer_row(layer: Dictionary) -> Control:
 	))
 	row.add_child(eye)
 	var lock := Button.new()
+	lock.name = "LockButton"
+	lock.custom_minimum_size.x = 72
 	FxLabUiTokensScript.apply_hit_target(lock)
-	lock.text = "🔒" if bool(layer.get("locked", false)) else "·"
-	lock.tooltip_text = "Edit lock"
+	lock.text = "LOCKED" if bool(layer.get("locked", false)) else "UNLOCKED"
+	lock.tooltip_text = "Edit lock: %s" % ("editing blocked" if bool(layer.get("locked", false)) else "editing allowed")
 	lock.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	lock.pressed.connect(func() -> void:
 		if not _session_ready() or not session.is_editable():
@@ -2445,10 +2533,13 @@ func _layer_row(layer: Dictionary) -> Control:
 	)
 	row.add_child(lock)
 	var pick := Button.new()
+	pick.name = "LayerName"
 	FxLabUiTokensScript.apply_hit_target(pick)
 	pick.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	pick.text = "⋮⋮ " + str(layer.get("name", "Layer"))
-	pick.tooltip_text = "Drag onto another row or a plane section"
+	pick.text = str(layer.get("name", "Layer"))
+	pick.tooltip_text = "Select layer: %s" % str(layer.get("name", "Layer"))
+	pick.clip_text = true
+	pick.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	pick.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	pick.add_theme_color_override("font_color", UiTokens.ACCENT if layer_id == selected_layer_id else UiTokens.CREAM)
 	pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2461,23 +2552,24 @@ func _layer_row(layer: Dictionary) -> Control:
 		_rebuild_inspector()
 	)
 	row.add_child(pick)
+	var drag := Button.new()
+	drag.name = "DragButton"
+	drag.text = "↕ DRAG"
+	drag.tooltip_text = "Drag this layer onto another row or plane section"
+	drag.custom_minimum_size.x = 50
+	drag.flat = true
+	FxLabUiTokensScript.apply_hit_target(drag)
+	drag.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	row.add_child(drag)
 	var layer_cost: Dictionary = FxCostScript.layer_cost(layer)
-	var cost_label := Label.new()
-	cost_label.set_meta("cost_layer_id", layer_id)
-	cost_label.text = "c%.1f" % float(layer_cost["cost"])
-	cost_label.tooltip_text = "\n".join(layer_cost["factors"])
-	cost_label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
-	cost_label.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
-	row.add_child(cost_label)
-	var opacity := Label.new()
-	opacity.text = "%d%%" % roundi(float(layer.get("opacity", 1.0)) * 100.0)
-	opacity.add_theme_font_size_override("font_size", UiTokens.T_HELP)
-	opacity.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
-	row.add_child(opacity)
+	pick.tooltip_text = "Select layer: %s\nRender cost: %.1f\n%s\nOpacity: %d%%" % [str(layer.get("name", "Layer")), float(layer_cost["cost"]), "\n".join(layer_cost["factors"]), roundi(float(layer.get("opacity", 1.0)) * 100.0)]
 	var menu := MenuButton.new()
+	menu.name = "ContextMenu"
 	FxLabUiTokensScript.apply_hit_target(menu)
-	menu.text = "⋯"
+	menu.text = "CONTEXT"
 	menu.flat = true
+	menu.custom_minimum_size.x = 66
+	menu.tooltip_text = "Layer context actions"
 	menu.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	menu.get_popup().add_item("Duplicate Layer", 1)
 	menu.get_popup().add_item("Move Up", 2)
@@ -2609,7 +2701,7 @@ func _rebuild_inspector() -> void:
 	var is_fx := type == "FX"
 	# Round-2 Finding 8: grouped, novice-readable inspector tabs. Raw enum
 	# tokens are reserved for the ADVANCED tab.
-	var tab_names: Array = ["LOOK", "MOTION", "MASK", "PALETTE", "ADVANCED"] if is_fx else ["SOURCE", "TRANSFORM", "DISPLACE", "MASK"]
+	var tab_names: Array = ["LOOK", "MOTION", "MASK", "PALETTE", "ADVANCED", "DIAGNOSTICS"] if is_fx else ["SOURCE", "TRANSFORM", "DISPLACE", "MASK"]
 	var tabs := TabContainer.new()
 	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -3617,19 +3709,20 @@ func _motion_track(doc: Dictionary, layer_id: String, domain: String) -> Diction
 	return tracks[domain]
 
 func _build_advanced_page(tab_pages: Dictionary, layer: Dictionary, layer_id: String, type: String, protected: bool) -> void:
-	# SOURCE is intentionally artist-simple. Diagnostics/raw fields only exist
-	# on an explicit FX ADVANCED page; never route SOURCE through fallback.
+	# SOURCE is intentionally artist-simple. FX creative expert fields and
+	# developer diagnostics/raw values have separate explicit planes.
 	if type == "SOURCE":
 		return
-	var page: VBoxContainer = _tab_page(tab_pages, "ADVANCED")
-	if page == null:
+	var expert_page: VBoxContainer = _tab_page(tab_pages, "ADVANCED")
+	var diagnostics_page: VBoxContainer = _tab_page(tab_pages, "DIAGNOSTICS")
+	if expert_page == null or diagnostics_page == null:
 		return
 	var debug_header := Label.new()
 	debug_header.text = "DIAGNOSTICS · DEBUG VIEW (preview only)"
 	debug_header.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	debug_header.add_theme_color_override("font_color", UiTokens.ACCENT)
-	page.add_child(debug_header)
-	page.add_child(_inspector_option("View", ["COMPOSITE", "BASE", "EFFECT", "EDGE", "COVERAGE", "MASK", "DRIVER"], debug_view, false, func(value: String) -> void:
+	diagnostics_page.add_child(debug_header)
+	diagnostics_page.add_child(_inspector_option("View", ["COMPOSITE", "BASE", "EFFECT", "EDGE", "COVERAGE", "MASK", "DRIVER"], debug_view, false, func(value: String) -> void:
 		debug_view = value
 		if renderer != null:
 			renderer.set_debug_view(value)
@@ -3639,16 +3732,16 @@ func _build_advanced_page(tab_pages: Dictionary, layer: Dictionary, layer_id: St
 	raw_header.text = "RAW FIELDS"
 	raw_header.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	raw_header.add_theme_color_override("font_color", UiTokens.ACCENT)
-	page.add_child(raw_header)
+	diagnostics_page.add_child(raw_header)
 	for pair in [["layer_id", str(layer.get("layer_id", ""))], ["type", type], ["input", str(layer.get("input", ""))], ["plane", str(layer.get("plane", ""))], ["blend_mode", str(layer.get("blend_mode", ""))], ["enabled", str(layer.get("enabled", true))], ["locked", str(layer.get("locked", false))]]:
 		var raw := Label.new()
 		raw.text = "%s: %s" % [str(pair[0]), str(pair[1])]
 		raw.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 		raw.add_theme_color_override("font_color", UiTokens.DISABLED)
 		raw.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		page.add_child(raw)
+		diagnostics_page.add_child(raw)
 	if type == "FX":
-		_build_expert_fx(page, layer, layer_id, protected)
+		_build_expert_fx(expert_page, layer, layer_id, protected)
 
 # UI-01 (slice) / UI-05: expert direct canonical controls, fully driven by
 # field metadata (no parallel ranges/enums here). Groups mirror macro domains

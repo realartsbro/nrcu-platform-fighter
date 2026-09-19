@@ -14,6 +14,10 @@ const TEXT_DIM := Color("aeb7c4")
 const TEXT_MUTED := Color("7e8998")
 const ACCENT := Color("e3aa62")
 const DANGER := Color("e17878")
+const BODY_SIZE := 14
+const TITLE_SIZE := 16
+const META_SIZE := 13
+const HELP_SIZE := 12
 const HIT_HEIGHT := 32
 const HIT_WIDTH := 32
 const POPUP_MAX_WIDTH := 360
@@ -33,11 +37,11 @@ static func _box(fill: Color, border: Color, radius := 4, border_width := 1) -> 
 
 static func make_theme() -> Theme:
 	var theme := Theme.new()
-	theme.default_font_size = 13
-	theme.set_font_size("font_size", "Button", 13)
-	theme.set_font_size("font_size", "Label", 13)
-	theme.set_font_size("font_size", "OptionButton", 13)
-	theme.set_font_size("font_size", "MenuButton", 13)
+	theme.default_font_size = BODY_SIZE
+	theme.set_font_size("font_size", "Button", META_SIZE)
+	theme.set_font_size("font_size", "Label", BODY_SIZE)
+	theme.set_font_size("font_size", "OptionButton", META_SIZE)
+	theme.set_font_size("font_size", "MenuButton", META_SIZE)
 	theme.set_color("font_color", "Button", TEXT)
 	theme.set_color("font_hover_color", "Button", TEXT)
 	theme.set_color("font_pressed_color", "Button", TEXT)
@@ -71,7 +75,9 @@ static func make_theme() -> Theme:
 	theme.set_color("font_color", "PopupMenu", TEXT)
 	theme.set_color("font_hover_color", "PopupMenu", TEXT)
 	theme.set_color("font_disabled_color", "PopupMenu", TEXT_MUTED)
-	theme.set_font_size("font_size", "PopupMenu", 13)
+	theme.set_font_size("font_size", "PopupMenu", META_SIZE)
+	theme.set_font_size("font_size", "TooltipLabel", HELP_SIZE)
+	theme.set_stylebox("panel", "TooltipPanel", _box(SURFACE, BORDER_FOCUS, 4))
 	return theme
 
 static func apply_hit_target(control: Control) -> void:
@@ -79,7 +85,7 @@ static func apply_hit_target(control: Control) -> void:
 		return
 	control.custom_minimum_size.y = maxf(control.custom_minimum_size.y, HIT_HEIGHT)
 	if control is Button:
-		(control as Button).add_theme_font_size_override("font_size", 13)
+		(control as Button).add_theme_font_size_override("font_size", META_SIZE)
 
 static func apply_tool_style(control: Control) -> void:
 	if control == null:

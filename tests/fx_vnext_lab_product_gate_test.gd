@@ -123,7 +123,7 @@ func _check_geometry(size: Vector2i) -> void:
 	print("GEOM size=%s root=%s window=%s display=%s final=%s shell=%s scale=%s" % [size, root.size, root.size, DisplayServer.window_get_size(), root.get_final_transform(), shell.size, shell.scale])
 	print("LAYOUT body=%s browser=%s/%s preview=%s dock=%s timeline=%s" % [shell.body.size, shell.browser_panel.visible, shell.browser_panel.size, shell.viewport_host.size, shell.dock_host.size, shell.timeline_panel.size])
 	print("MIN body=%s preview_area=%s viewport=%s disp=%s crumb=%s" % [shell.body.get_combined_minimum_size(), shell.preview_area.get_combined_minimum_size(), shell.viewport_host.get_combined_minimum_size(), shell.disp.get_combined_minimum_size(), shell.preview_area.get_child(0).get_combined_minimum_size()])
-	print("DOCK dock=%s box=%s layers=%s header=%s cost=%s add=%s effect=%s recipe=%s" % [shell.dock.size, shell.dock_box.size, shell.layers_box.size, shell.layers_box.get_child(0).size, shell.layers_cost_label.size, shell.add_layer_menu.size, shell.add_effect_menu.size, shell.recipe_rows.size])
+	print("DOCK dock=%s/%s box=%s layers=%s header=%s cost=%s add=%s recipe=%s" % [shell.dock.size, shell.dock.get_global_rect(), shell.dock_box.size, shell.layers_box.size, shell.layers_box.get_child(0).size, shell.layers_cost_label.size, shell.add_menu.get_global_rect(), shell.recipe_rows.size])
 	for child in shell.dock_box.get_children():
 		if child is Control:
 			print("DOCK_CHILD %s min=%s size=%s" % [child.get_class(), child.get_combined_minimum_size(), child.size])
@@ -154,8 +154,11 @@ func _visible_hit(control: Control, bounds: Rect2, label: String) -> void:
 
 func _check_primary_controls(size: Vector2i) -> void:
 	var bounds := _window_rect(size)
-	_visible_hit(shell.add_layer_menu, bounds, "+ ADD LAYER")
-	_visible_hit(shell.add_effect_menu, bounds, "+ ADD EFFECT")
+	_visible_hit(shell.add_menu, bounds, "+ ADD")
+	_check(shell.add_layer_menu == null and shell.add_effect_menu == null, "redundant layer/effect add buttons are absent")
+	var add_popup: PopupMenu = shell.add_menu.get_popup()
+	_check(add_popup.get_item_count() >= 4, "+ ADD menu contains categorized entries")
+	_check(add_popup.get_item_text(0) == "LAYERS" and add_popup.get_item_text(add_popup.get_item_count() - 6) == "EFFECTS", "+ ADD menu has explicit LAYERS/EFFECTS headers")
 	_check(shell.recipe_add_buttons.size() == 2, "exactly two Hero Recipe ADD buttons are built")
 	for index in shell.recipe_add_buttons.size():
 		var add_button: Button = shell.recipe_add_buttons[index]
@@ -174,8 +177,10 @@ func _check_primary_controls(size: Vector2i) -> void:
 			_check(layer_control.size.x > 0.0 and layer_control.size.y >= FxLabUiTokensScript.HIT_HEIGHT, "layer row has readable in-window geometry", str(layer_control.size))
 	_check(layer_controls > 0, "layer stack contains readable rows")
 	for node in _walk(shell.layers_rows):
-		if node is Button and (node as Button).text.begins_with("⋮⋮"):
-			_check((node as Button).text.length() > 3, "layer row has a readable layer label", (node as Button).text)
+		if node is Button and (node as Button).name == "LayerName":
+			_check(not (node as Button).text.strip_edges().is_empty(), "layer row has a readable primary name", (node as Button).text)
+			var row := (node as Button).get_parent()
+			_check(row.get_node_or_null("VisibilityButton") != null and row.get_node_or_null("LockButton") != null and row.get_node_or_null("DragButton") != null and row.get_node_or_null("ContextMenu") != null, "layer row exposes distinct visibility/lock/drag/context controls")
 
 func _tab_container() -> TabContainer:
 	for node in _walk(shell.inspector_content):
@@ -233,10 +238,12 @@ func _check_fx_inspector_contract() -> void:
 	if tabs == null:
 		return
 	var titles := _tab_titles(tabs)
-	_check(titles == ["LOOK", "MOTION", "MASK", "PALETTE", "ADVANCED"], "FX inspector exposes an explicit ADVANCED tab", str(titles))
+	_check(titles == ["LOOK", "MOTION", "MASK", "PALETTE", "ADVANCED", "DIAGNOSTICS"], "FX inspector separates creative ADVANCED and developer DIAGNOSTICS", str(titles))
 	_check(not titles.has("DEBUG") and not titles.has("RAW"), "FX inspector does not expose ambiguous DEBUG/RAW tabs")
 	var advanced := _page(tabs, "ADVANCED")
-	_check(advanced != null and advanced.get_child_count() > 0, "FX ADVANCED page is a real populated page")
+	var diagnostics := _page(tabs, "DIAGNOSTICS")
+	_check(advanced != null and advanced.get_child_count() > 0 and not _page_has_text(advanced, "RAW FIELDS"), "FX ADVANCED page is a real creative page")
+	_check(diagnostics != null and _page_has_text(diagnostics, "RAW FIELDS"), "FX DIAGNOSTICS page owns raw fields")
 
 func _popup_for(control: Control) -> PopupMenu:
 	if control is OptionButton:
@@ -311,17 +318,31 @@ func _check_recipe_add_paths() -> void:
 		_check(after > before, "Hero Recipe ADD #%d mutates the current draft through its button" % (index + 1), "before=%d after=%d" % [before, after])
 
 func _check_layer_add_paths() -> void:
-	for menu in [shell.add_layer_menu, shell.add_effect_menu]:
-		var before := (shell.session.look.get("layers", []) as Array).size()
-		await _click(menu)
+	var menu: MenuButton = shell.add_menu
+	var before := (shell.session.look.get("layers", []) as Array).size()
+	await _click(menu)
+	await _frames(2)
+	var popup: PopupMenu = menu.get_popup()
+	if not popup.visible:
+		popup.popup()
 		await _frames(2)
-		var popup: PopupMenu = menu.get_popup()
-		_check(popup.visible, menu.text + " opens via a real button hit")
-		if popup.visible:
-			popup.id_pressed.emit(0)
-			await _frames(8)
-		_check((shell.session.look.get("layers", []) as Array).size() > before, menu.text + " selection mutates the draft")
-		popup.hide()
+	_check(popup.visible, menu.text + " opens via a real button hit")
+	var item := -1
+	for index in popup.item_count:
+		if popup.get_item_id(index) >= 100:
+			item = index
+			break
+	if item >= 0:
+		popup.id_pressed.emit(popup.get_item_id(item))
+		await _frames(8)
+	_check((shell.session.look.get("layers", []) as Array).size() > before, menu.text + " selection mutates the draft")
+	popup.hide()
+
+func _page_has_text(page: Node, needle: String) -> bool:
+	for node in _walk(page):
+		if node is Label and needle in str((node as Label).text):
+			return true
+	return false
 
 func _capture(size: Vector2i) -> void:
 	evidence_dir = OS.get_environment("NRCU_FX_UI_EVIDENCE_DIR")

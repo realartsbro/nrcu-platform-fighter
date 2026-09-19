@@ -69,8 +69,8 @@ func _build() -> void:
 	add_child(matchup_body)
 	mode_option = _make_option("Mode", FORMAT_NAMES)
 	stage_option = _make_option("Stage", STAGE_IDS)
-	left_option = _make_option("Left fighter", fighter_ids)
-	right_option = _make_option("Right fighter", fighter_ids)
+	left_option = _make_option("Left fighter", fighter_ids, "Left")
+	right_option = _make_option("Right fighter", fighter_ids, "Right")
 	var remount := _make_button("⟲ REMOUNT CONTEXT", _on_remount)
 	matchup_body.add_child(remount)
 
@@ -107,7 +107,7 @@ func _build() -> void:
 	tree.item_selected.connect(_on_tree_selected)
 	add_child(tree)
 
-func _make_option(label_text: String, items: Array) -> OptionButton:
+func _make_option(label_text: String, items: Array, side := "") -> OptionButton:
 	var row := HBoxContainer.new()
 	matchup_body.add_child(row)
 	var label := Label.new()
@@ -120,7 +120,12 @@ func _make_option(label_text: String, items: Array) -> OptionButton:
 	option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	option.add_theme_font_size_override("font_size", UiTokens.T_META)
 	for item in items:
-		option.add_item(str(item))
+		var identity := _display_name(str(item))
+		if side != "":
+			identity += " · " + side
+		option.add_item(identity)
+		option.get_popup().set_item_tooltip(option.item_count - 1, _full_identity(str(item), side))
+	option.tooltip_text = "%s identity: %s" % [side if side != "" else label_text, _full_identity(str(items[0]) if not items.is_empty() else "", side)]
 	row.add_child(option)
 	return option
 
@@ -314,12 +319,35 @@ func _add_group(parent_item: TreeItem, label: String) -> TreeItem:
 
 func _add_target_row(parent_item: TreeItem, key: String, label: String) -> TreeItem:
 	var item := tree.create_item(parent_item)
-	item.set_text(0, label)
+	var ctx: Dictionary = runtime.registry.context_for_key(key) if runtime != null and runtime.registry != null else {}
+	var identity_label := _identity_label(label, ctx)
+	item.set_text(0, identity_label)
 	item.set_text(1, _badge_for(key))
 	item.set_custom_color(1, UiTokens.CREAM_DIM)
 	item.set_metadata(0, key)
+	item.set_tooltip_text(0, _full_identity(key, str(ctx.get("visual_side", "")), ctx))
+	item.set_tooltip_text(1, "Assignment status for " + _full_identity(key, str(ctx.get("visual_side", "")), ctx))
 	row_keys[item] = key
 	return item
+
+func _identity_label(label: String, ctx: Dictionary) -> String:
+	var side := str(ctx.get("visual_side", "")).to_lower()
+	if side in ["left", "right"] and not label.to_lower().contains(side):
+		return "%s — %s" % [label, side.capitalize()]
+	return label
+
+func _full_identity(key: String, side := "", ctx := {}) -> String:
+	var identity: Dictionary = ctx
+	if identity.is_empty() and runtime != null and runtime.registry != null:
+		identity = runtime.registry.context_for_key(key)
+	var actual_side := side if side != "" else str(identity.get("visual_side", ""))
+	return "Target identity\nkey: %s\nfighter: %s\nrole: %s\nvisual side: %s\nelement: %s" % [
+		key,
+		str(identity.get("fighter_id", "")),
+		str(identity.get("element_role", "")),
+		actual_side,
+		str(identity.get("element_id", "")),
+	]
 
 func _badge_for(key: String) -> String:
 	if status_provider.is_valid():
