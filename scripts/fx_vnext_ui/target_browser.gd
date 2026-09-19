@@ -332,8 +332,10 @@ func _add_target_row(parent_item: TreeItem, key: String, label: String) -> TreeI
 
 func _identity_label(label: String, ctx: Dictionary) -> String:
 	var side := str(ctx.get("visual_side", "")).to_lower()
-	if side in ["left", "right"] and not label.to_lower().contains(side):
-		return "%s — %s" % [label, side.capitalize()]
+	if side == "left":
+		return "L · " + label
+	if side == "right":
+		return "R · " + label
 	return label
 
 func _full_identity(key: String, side := "", ctx := {}) -> String:

@@ -158,7 +158,28 @@ func _check_primary_controls(size: Vector2i) -> void:
 	_check(shell.add_layer_menu == null and shell.add_effect_menu == null, "redundant layer/effect add buttons are absent")
 	var add_popup: PopupMenu = shell.add_menu.get_popup()
 	_check(add_popup.get_item_count() >= 4, "+ ADD menu contains categorized entries")
-	_check(add_popup.get_item_text(0) == "LAYERS" and add_popup.get_item_text(add_popup.get_item_count() - 6) == "EFFECTS", "+ ADD menu has explicit LAYERS/EFFECTS headers")
+	var layer_labels: Array = []
+	var effect_labels: Array = []
+	var leaf_ids: Dictionary = {}
+	var leaf_labels: Dictionary = {}
+	var effect_header_seen := false
+	for index in add_popup.item_count:
+		var text := add_popup.get_item_text(index)
+		if text == "LAYERS":
+			continue
+		if text == "EFFECTS":
+			effect_header_seen = true
+			continue
+		if add_popup.is_item_separator(index) or add_popup.is_item_disabled(index):
+			continue
+		var item_id := add_popup.get_item_id(index)
+		_check(not leaf_ids.has(item_id), "+ ADD leaf identifiers are unique")
+		_check(not leaf_labels.has(text), "+ ADD leaf labels are unique")
+		leaf_ids[item_id] = text
+		leaf_labels[text] = item_id
+		(effect_labels if effect_header_seen else layer_labels).append(text)
+	_check(layer_labels == ["Source Copy", "Custom FX Layer"] and effect_labels == ["Outer Halo", "Edge Treatment", "RGB Tear", "Dither Treatment"], "+ ADD leaves belong to semantic categories", str([layer_labels, effect_labels]))
+	_check(add_popup.get_item_text(0) == "LAYERS" and effect_header_seen, "+ ADD menu has explicit LAYERS/EFFECTS headers")
 	_check(shell.recipe_add_buttons.size() == 2, "exactly two Hero Recipe ADD buttons are built")
 	for index in shell.recipe_add_buttons.size():
 		var add_button: Button = shell.recipe_add_buttons[index]
@@ -347,6 +368,9 @@ func _page_has_text(page: Node, needle: String) -> bool:
 func _capture(size: Vector2i) -> void:
 	evidence_dir = OS.get_environment("NRCU_FX_UI_EVIDENCE_DIR")
 	if evidence_dir == "":
+		return
+	if DisplayServer.get_name().to_lower().contains("headless"):
+		_check(true, "headless product gate skips window readback for %dx%d" % [size.x, size.y])
 		return
 	DirAccess.make_dir_recursive_absolute(evidence_dir)
 	await RenderingServer.frame_post_draw

@@ -29,6 +29,8 @@ const TIMELINE_LEN := 2.4
 const FRAME_STEP := 1.0 / 30.0
 const AUTO_RAIL_WIDTH := 1440.0
 const AUTO_TIMELINE_COLLAPSE_HEIGHT := 800.0
+const ADD_LAYER_TEMPLATES := ["Source Copy", "Custom FX Layer"]
+const ADD_EFFECT_TEMPLATES := ["Outer Halo", "Edge Treatment", "RGB Tear", "Dither Treatment"]
 
 var ws
 var runtime
@@ -690,14 +692,13 @@ func _build_dock() -> void:
 	var add_popup: PopupMenu = add_menu.get_popup()
 	add_popup.add_item("LAYERS", 1)
 	add_popup.set_item_disabled(0, true)
-	for index in FxTemplatesScript.TEMPLATES.size():
-		add_popup.add_item(str(FxTemplatesScript.TEMPLATES[index]), 100 + index)
+	for index in ADD_LAYER_TEMPLATES.size():
+		add_popup.add_item(str(ADD_LAYER_TEMPLATES[index]), 100 + index)
 	add_popup.add_separator()
 	add_popup.add_item("EFFECTS", 2)
 	add_popup.set_item_disabled(add_popup.item_count - 1, true)
-	var effect_templates: Array = ["Outer Halo", "Edge Treatment", "RGB Tear", "Dither Treatment", "Custom FX Layer"]
-	for index in effect_templates.size():
-		add_popup.add_item(str(effect_templates[index]), 200 + index)
+	for index in ADD_EFFECT_TEMPLATES.size():
+		add_popup.add_item(str(ADD_EFFECT_TEMPLATES[index]), 200 + index)
 	add_popup.id_pressed.connect(_on_add_menu_pressed)
 	layers_header.add_child(add_menu)
 	# Kept as null compatibility aliases: there is intentionally one visible
@@ -1850,12 +1851,11 @@ func _action_add_layer(template: String) -> void:
 func _on_add_menu_pressed(id: int) -> void:
 	# The visible + ADD menu is categorized, but every leaf reaches the same
 	# canonical session mutation used by the legacy layer/effect actions.
-	if id >= 100 and id < 100 + FxTemplatesScript.TEMPLATES.size():
-		_action_add_layer(str(FxTemplatesScript.TEMPLATES[id - 100]))
+	if id >= 100 and id < 100 + ADD_LAYER_TEMPLATES.size():
+		_action_add_layer(str(ADD_LAYER_TEMPLATES[id - 100]))
 		return
-	var effects: Array = ["Outer Halo", "Edge Treatment", "RGB Tear", "Dither Treatment", "Custom FX Layer"]
-	if id >= 200 and id < 200 + effects.size():
-		_action_add_layer(str(effects[id - 200]))
+	if id >= 200 and id < 200 + ADD_EFFECT_TEMPLATES.size():
+		_action_add_layer(str(ADD_EFFECT_TEMPLATES[id - 200]))
 
 func _recipe_instance_key(recipe_id: String) -> String:
 	# Repeated clicks remain collision-free without introducing randomness. The
@@ -1968,23 +1968,45 @@ func _refresh_library() -> void:
 		return
 	for entry in library:
 		var row := HBoxContainer.new()
+		row.name = "ProductionLookRow_%s" % str(entry.get("look_id", ""))
 		row.add_theme_constant_override("separation", 4)
-		var label := Label.new()
+		row.custom_minimum_size.y = 38
 		var look_id := str(entry.get("look_id", ""))
 		var look_name := look_id
 		var loaded: Dictionary = production.load_look(look_id)
 		if bool(loaded.get("ok", false)):
 			look_name = str((loaded.get("doc", {}) as Dictionary).get("name", look_id))
-		label.text = "%s · ID: %s · rev%d · used by %d target%s" % [look_name, look_id, int(entry["revision"]), int(entry["usage"]), "" if int(entry["usage"]) == 1 else "s"]
-		label.tooltip_text = "Production Look: %s\nStable ID: %s\nRevision: %d\nUsage: %d target(s)" % [look_name, look_id, int(entry["revision"]), int(entry["usage"])]
-		label.set_meta("look_id", look_id)
-		label.set_meta("look_name", look_name)
-		label.clip_text = true
-		label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
-		label.add_theme_color_override("font_color", UiTokens.ACCENT if str(entry["look_id"]) == current_look else UiTokens.CREAM_DIM)
-		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		row.add_child(label)
+		var identity := VBoxContainer.new()
+		identity.name = "LookIdentity"
+		identity.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		identity.size_flags_stretch_ratio = 1.0
+		identity.custom_minimum_size.x = 0
+		identity.add_theme_constant_override("separation", 0)
+		var primary := Label.new()
+		primary.name = "LookName"
+		primary.text = look_name
+		primary.tooltip_text = "Production Look: %s" % look_name
+		primary.set_meta("look_id", look_id)
+		primary.set_meta("look_name", look_name)
+		primary.clip_text = true
+		primary.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		primary.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+		primary.add_theme_color_override("font_color", UiTokens.ACCENT if str(entry["look_id"]) == current_look else UiTokens.CREAM_DIM)
+		primary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		primary.custom_minimum_size.x = 0
+		identity.add_child(primary)
+		var metadata := Label.new()
+		metadata.name = "LookMetadata"
+		metadata.text = "ID: %s · rev%d · used by %d target%s" % [look_id, int(entry["revision"]), int(entry["usage"]), "" if int(entry["usage"]) == 1 else "s"]
+		metadata.tooltip_text = "Stable ID: %s\nRevision: %d\nUsage: %d target(s)" % [look_id, int(entry["revision"]), int(entry["usage"])]
+		metadata.clip_text = true
+		metadata.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		metadata.add_theme_font_size_override("font_size", UiTokens.T_META)
+		metadata.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
+		metadata.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		metadata.custom_minimum_size.x = 0
+		identity.add_child(metadata)
+		row.add_child(identity)
 		if not bool(entry["valid"]):
 			var broken := Label.new()
 			broken.text = "⚠ BROKEN"
@@ -1998,6 +2020,7 @@ func _refresh_library() -> void:
 			review.add_theme_color_override("font_color", Color(0.95, 0.75, 0.3))
 			row.add_child(review)
 		var delete_button := Button.new()
+		delete_button.name = "DeleteLookButton"
 		delete_button.text = "🗑"
 		delete_button.flat = true
 		delete_button.tooltip_text = "Delete Look (blocked while used)"
@@ -2242,7 +2265,10 @@ func _close_migration_review_panel() -> void:
 	review_overlay = null
 	if review_panel != null and is_instance_valid(review_panel):
 		review_panel.queue_free()
-	review_panel = null
+		review_panel = null
+
+func _modal_active() -> bool:
+	return (delete_panel != null and is_instance_valid(delete_panel)) or (review_panel != null and is_instance_valid(review_panel))
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and (event as InputEventKey).pressed and (event as InputEventKey).keycode == KEY_ESCAPE:
@@ -4041,6 +4067,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not (event as InputEventKey).pressed or (event as InputEventKey).echo:
 		return
 	var key := event as InputEventKey
+	if _modal_active():
+		accept_event()
+		return
 	if key.ctrl_pressed and key.keycode == KEY_S:
 		_action_save_draft()
 		accept_event()

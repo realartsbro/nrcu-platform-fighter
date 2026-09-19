@@ -68,7 +68,7 @@ func run() -> void:
 	await _check_add_menu_real_path()
 	_check_inspector_planes()
 	_check_toolbar_ia()
-	_check_library_inventory()
+	await _check_library_inventory()
 	_check_target_identity()
 	await _check_modals()
 	shell._open_migration_review_panel("RESPONSIVE_REVIEW", ["bounded at each supported size"])
@@ -217,16 +217,37 @@ func _check_add_menu_real_path() -> void:
 	_check(popup.visible, "real + ADD button opens its popup")
 	var layer_header := -1
 	var effect_header := -1
-	var layer_item := -1
+	var layer_labels: Array = []
+	var effect_labels: Array = []
+	var leaf_ids: Dictionary = {}
+	var leaf_labels: Dictionary = {}
 	for index in popup.item_count:
 		var text := popup.get_item_text(index)
 		if text == "LAYERS":
 			layer_header = index
-		elif text == "EFFECTS":
+			continue
+		if text == "EFFECTS":
 			effect_header = index
-		elif text == "Outer Halo":
+			continue
+		if popup.is_item_separator(index) or popup.is_item_disabled(index):
+			continue
+		var item_id := popup.get_item_id(index)
+		_check(not leaf_ids.has(item_id), "+ ADD leaf ids are unique", "duplicate id=%d" % item_id)
+		_check(not leaf_labels.has(text), "+ ADD leaf labels are unique", "duplicate label=%s" % text)
+		leaf_ids[item_id] = text
+		leaf_labels[text] = item_id
+		if effect_header >= 0:
+			effect_labels.append(text)
+		else:
+			layer_labels.append(text)
+	_check(layer_header >= 0 and effect_header >= 0, "+ ADD popup has LAYERS and EFFECTS categories")
+	_check(layer_labels == ["Source Copy", "Custom FX Layer"], "LAYERS contains only layer leaves", str(layer_labels))
+	_check(effect_labels == ["Outer Halo", "Edge Treatment", "RGB Tear", "Dither Treatment"], "EFFECTS contains only treatment leaves", str(effect_labels))
+	var layer_item := -1
+	for index in popup.item_count:
+		if popup.get_item_text(index) == "Outer Halo":
 			layer_item = index
-	_check(layer_header >= 0 and effect_header >= 0 and layer_item >= 0, "+ ADD popup has LAYERS and EFFECTS categories")
+	_check(layer_item >= 0, "real + ADD path exposes a treatment leaf exactly once")
 	var before := (shell.session.look.get("layers", []) as Array).size()
 	if layer_item >= 0:
 		await _click_popup_item(popup, layer_item)
@@ -299,39 +320,86 @@ func _check_library_inventory() -> void:
 	_check(bool(shell.production.apply({"assignments": assignments}).get("ok", false)), "production inventory receives a real look assignment")
 	print("[FX-LAB-UI-REMEDIATION] inventory usage first=", shell.production.usage("REMEDIATION_FIRST"))
 	shell._refresh_library()
-	var names_found := 0
-	var ids_found := 0
-	var revisions_found := 0
-	var usages_found := 0
-	for node in _walk(shell.library_rows):
-		if node is Label:
-			var text := str((node as Label).text)
-			if text.contains("First Distinct Look") or text.contains("Second Distinct Look"):
-				names_found += 1
-			if text.contains("ID:"):
-				ids_found += 1
-			if text.contains("rev"):
-				revisions_found += 1
-			if text.contains("used by"):
-				usages_found += 1
-	_check(names_found >= 2 and ids_found >= 2 and revisions_found >= 2 and usages_found >= 2, "production inventory shows name plus stable ID/revision/usage for distinct looks", "names=%d ids=%d revs=%d usage=%d" % [names_found, ids_found, revisions_found, usages_found])
+	await _frames(4)
+	var primary_found := 0
+	var metadata_found := 0
+	var distinct_action_rows := 0
+	var inventory_width: float = shell.library_rows.get_global_rect().size.x
+	_check(root.size == Vector2i(1280, 720) and inventory_width > 0.0 and inventory_width <= 420.0, "inventory geometry is exercised at the narrow 1280px layout", str(shell.library_rows.get_global_rect()))
+	_check(shell.review_button != null and shell.review_button.text.contains("REVIEW") and shell.review_button != shell.delete_panel, "Review remains a distinct action from inventory identity")
+	for row in shell.library_rows.get_children():
+		if not row is HBoxContainer:
+			continue
+		var identity := row.get_node_or_null("LookIdentity") as VBoxContainer
+		var delete_action := row.get_node_or_null("DeleteLookButton") as Button
+		_check(identity != null, "production inventory has a dedicated two-line identity container")
+		_check(delete_action != null and delete_action.tooltip_text.contains("Delete Look"), "Delete remains a distinct inventory action")
+		if identity == null:
+			continue
+		var primary := identity.get_node_or_null("LookName") as Label
+		var metadata := identity.get_node_or_null("LookMetadata") as Label
+		_check(primary != null and metadata != null, "inventory identity has separate primary and metadata Labels")
+		if primary == null or metadata == null:
+			continue
+		if primary.text in ["First Distinct Look", "Second Distinct Look"]:
+			primary_found += 1
+		if metadata.text.contains("ID:") and metadata.text.contains("rev") and metadata.text.contains("used by"):
+			metadata_found += 1
+		_check(not primary.text.contains("ID:") and not primary.text.contains("used by"), "primary inventory line remains human-readable", primary.text)
+		_check(primary.clip_text and metadata.clip_text, "inventory lines are independently ellipsis-safe")
+		_check(primary.size.x > 0.0 and primary.size.y > 0.0 and metadata.size.x > 0.0 and metadata.size.y > 0.0, "both inventory lines have real narrow-layout geometry", str([primary.size, metadata.size]))
+		_check(primary.get_parent() == identity and metadata.get_parent() == identity, "inventory lines are separate child Labels")
+		if delete_action != null:
+			distinct_action_rows += 1
+	_check(primary_found >= 2 and metadata_found >= 2 and distinct_action_rows >= 2, "production inventory keeps names, metadata, and Delete actions distinct", "primary=%d metadata=%d actions=%d" % [primary_found, metadata_found, distinct_action_rows])
 
 func _check_target_identity() -> void:
 	shell.browser.rebuild()
 	var left := 0
 	var right := 0
 	var tooltips := 0
+	var browser_rect: Rect2 = shell.browser.get_global_rect()
+	_check(root.size == Vector2i(1280, 720) and browser_rect.size.x > 0.0 and browser_rect.size.y > 0.0, "target identity is checked in the actual 1280px browser layout", str(browser_rect))
 	for item in shell.browser.row_keys.keys():
 		var text := str(item.get_text(0))
-		if text.contains("Left"):
+		if text.begins_with("L · "):
 			left += 1
-		if text.contains("Right"):
+		if text.begins_with("R · "):
 			right += 1
 		if item.get_tooltip_text(0) != "":
 			tooltips += 1
-	_check(left > 0 and right > 0, "target browser preserves Left/Right identity in row labels", "left=%d right=%d" % [left, right])
+	_check(left > 0 and right > 0, "target browser leads each row with L/R side identity", "left=%d right=%d" % [left, right])
 	_check(tooltips >= left + right, "target browser rows expose full identity tooltips", "tooltips=%d" % tooltips)
 	_check(shell.browser.left_option.get_item_text(shell.browser.left_option.selected).contains("Left") and shell.browser.right_option.get_item_text(shell.browser.right_option.selected).contains("Right"), "target context controls preserve side identity under width")
+
+func _send_shortcut(keycode: int, shift := false) -> void:
+	var key := InputEventKey.new()
+	key.keycode = keycode
+	key.pressed = true
+	key.ctrl_pressed = true
+	key.shift_pressed = shift
+	Input.parse_input_event(key)
+	await _frames(2)
+
+func _modal_state_snapshot() -> Dictionary:
+	var production_looks: Dictionary = {}
+	for look_id in shell.production.list_look_ids():
+		var loaded: Dictionary = shell.production.load_look(str(look_id))
+		production_looks[str(look_id)] = (loaded.get("doc", {}) as Dictionary).duplicate(true)
+	var draft: Dictionary = shell.drafts.load_target(shell.session.signature) if shell.session.signature != "" else {}
+	return {
+		"session": {
+			"look": shell.session.look.duplicate(true),
+			"base": shell.session.base.duplicate(true),
+			"dirty": shell.session.dirty,
+			"mode": shell.session.mode,
+		},
+		"production": {
+			"looks": production_looks,
+			"assignments": shell.production.load_assignments().get("doc", {}).duplicate(true),
+		},
+		"draft": draft.duplicate(true),
+	}
 
 func _check_modals() -> void:
 	# Use the real production delete button path for the selected look.
@@ -360,6 +428,13 @@ func _check_modals() -> void:
 		_check(shell.delete_overlay.mouse_filter == Control.MOUSE_FILTER_STOP, "delete backdrop captures input")
 		_check(_find_button_by_text(shell.delete_panel, "CANCEL") != null, "delete modal has a visible Cancel action")
 		_check(shell.get_viewport().gui_get_focus_owner() != null and shell.get_viewport().gui_get_focus_owner().get_parent() != null, "delete modal establishes initial focus")
+		var before_delete_shortcuts := _modal_state_snapshot()
+		await _send_shortcut(KEY_S)
+		await _send_shortcut(KEY_ENTER)
+		await _send_shortcut(KEY_Z)
+		await _send_shortcut(KEY_Z, true)
+		_check(_modal_state_snapshot() == before_delete_shortcuts, "delete modal isolates Ctrl+S/Ctrl+Enter/Ctrl+Z/Ctrl+Shift+Z from session, production, and draft state")
+		_check(shell.delete_panel != null, "delete modal remains open after background shortcuts")
 		var cancel := _find_button_by_text(shell.delete_panel, "CANCEL")
 		if cancel != null:
 			await _click(cancel)
@@ -373,6 +448,13 @@ func _check_modals() -> void:
 	if shell.review_panel != null:
 		_check(_find_button_by_text(shell.review_panel, "CANCEL") != null, "migration modal has a visible Cancel action")
 		_check(shell.review_ack_field != null and shell.get_viewport().gui_get_focus_owner() == shell.review_ack_field, "migration modal focuses acknowledgement input")
+		var before_review_shortcuts := _modal_state_snapshot()
+		await _send_shortcut(KEY_S)
+		await _send_shortcut(KEY_ENTER)
+		await _send_shortcut(KEY_Z)
+		await _send_shortcut(KEY_Z, true)
+		_check(_modal_state_snapshot() == before_review_shortcuts, "migration modal isolates Ctrl+S/Ctrl+Enter/Ctrl+Z/Ctrl+Shift+Z from session, production, and draft state")
+		_check(shell.review_panel != null, "migration modal remains open after background shortcuts")
 		print("[FX-LAB-UI-REMEDIATION] modal check: send escape")
 		var key := InputEventKey.new()
 		key.keycode = KEY_ESCAPE
