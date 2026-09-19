@@ -357,6 +357,10 @@ func lab_preview_seek(seconds: float) -> bool:
 	_match_ready = false
 	_cover_closed = false
 	_apply_cover(0.0)
+	# Absolute reconstruction starts from canonical visibility as well as
+	# canonical geometry. DONE/reveal may have left the root fully faded; an
+	# EXIT-close seek must not inherit that prior presentation state.
+	_restore_root_opaque()
 	# Rebuild ENTRY from canonical authored start values. This makes backwards
 	# scrubbing deterministic instead of trying to reverse an already-consumed
 	# one-way Tween.

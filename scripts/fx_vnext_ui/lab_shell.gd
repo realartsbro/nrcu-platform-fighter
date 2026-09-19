@@ -35,6 +35,7 @@ var runtime
 var selected_key := ""
 var event_marks: Dictionary = {}
 var time_syncing := false
+var _authoring_playhead := 0.0
 var _dragging := ""
 var _selecting := false
 var _focus_originals: Dictionary = {}
@@ -994,13 +995,17 @@ func _ruler_input(event: InputEvent, ruler: Control) -> void:
 
 func _seek(ruler: Control, x: float) -> void:
 	var t := _time_at_x(x, ruler.size.x)
-	runtime.seek(t)
-	# Round-2 Finding 18: the transport reconstructs Composition AND Layer Motion.
+	_seek_authoring(t)
+
+func _seek_authoring(t: float) -> void:
+	# Explicit authoring transport owns both the authoring playhead and the
+	# presentation reconstruction. Ordinary look rebuilds never call this path.
+	var authoring_t: float = clampf(t, 0.0, TIMELINE_LEN)
+	_authoring_playhead = authoring_t
+	runtime.seek(authoring_t)
 	if renderer != null:
-		renderer.set_time(t)
-	time_syncing = true
-	time_spin.set_value_no_signal(t)
-	time_syncing = false
+		renderer.set_time(authoring_t)
+	_sync_time(authoring_t)
 
 func _draw_timeline(ruler: Control) -> void:
 	var w := ruler.size.x
@@ -1041,7 +1046,7 @@ func _draw_timeline(ruler: Control) -> void:
 			ruler.draw_string(font, Vector2(x + 3.0, label_y), str(name), HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, UiTokens.ACCENT)
 		_timeline_label_rects.append({"name": str(name), "x": x + 3.0, "y": label_y - 11.0, "w": est, "h": 12.0})
 	# playhead
-	var t_now: float = clampf(float(runtime.elapsed()), 0.0, TIMELINE_LEN) if runtime != null else 0.0
+	var t_now: float = _authoring_playhead
 	var x_now := _x_at_time(t_now, w)
 	ruler.draw_line(Vector2(x_now, 6.0), Vector2(x_now, h - 6.0), UiTokens.CREAM, 2.0)
 
@@ -1223,10 +1228,7 @@ func _handle_drag(event: InputEvent, kind: String) -> void:
 # ================================================================ toolbar actions
 
 func _transport_to_start() -> void:
-	runtime.seek(0.0)
-	if renderer != null:
-		renderer.set_time(0.0)
-	_sync_time(0.0)
+	_seek_authoring(0.0)
 
 func _toggle_transport() -> void:
 	var screen = runtime.screen
@@ -1239,34 +1241,21 @@ func _toggle_transport() -> void:
 	_update_play_button()
 
 func _transport_step_back() -> void:
-	var t := clampf(runtime.elapsed() - FRAME_STEP, 0.0, TIMELINE_LEN)
-	runtime.seek(t)
-	if renderer != null:
-		renderer.set_time(t)
-	_sync_time(t)
+	_seek_authoring(_authoring_playhead - FRAME_STEP)
 
 func _transport_step_forward() -> void:
-	var t := clampf(runtime.elapsed() + FRAME_STEP, 0.0, TIMELINE_LEN)
-	runtime.seek(t)
-	if renderer != null:
-		renderer.set_time(t)
-	_sync_time(t)
+	_seek_authoring(_authoring_playhead + FRAME_STEP)
 
 func _transport_to_fx_peak() -> void:
 	var t := float(event_marks.get("clash_impact", 0.615))
-	runtime.seek(t)
-	if renderer != null:
-		renderer.set_time(t)
-	_sync_time(t)
+	_seek_authoring(t)
 
 func _on_time_entered(value: float) -> void:
 	if time_syncing:
 		return
-	# TM-02: numeric entry drives the SAME clock path as scrub — canonical
-	# composition and renderer advance together.
-	runtime.seek(value)
-	if renderer != null:
-		renderer.set_time(clampf(value, 0.0, TIMELINE_LEN))
+	# Numeric entry is explicit authoring transport: it is the only path that
+	# intentionally reconstructs the presentation lifecycle as well.
+	_seek_authoring(value)
 
 func _sync_time(t: float) -> void:
 	time_syncing = true
@@ -1333,6 +1322,7 @@ func _remount_current() -> void:
 	browser.refresh_context()
 	_apply_preview_focus()
 	_refresh_selection_ui()
+	_authoring_playhead = 0.0
 	_sync_time(0.0)
 
 func _on_remount_requested(format: String, stage: String, left: String, right: String) -> void:
@@ -1346,6 +1336,7 @@ func _on_remount_requested(format: String, stage: String, left: String, right: S
 	browser.refresh_context()
 	_apply_preview_focus()
 	_refresh_selection_ui()
+	_authoring_playhead = 0.0
 	_sync_time(0.0)
 
 # ================================================================ preview
@@ -1671,10 +1662,7 @@ func _render_current_look() -> void:
 	# Keep presentation lifecycle time/state owned by the mounted screen. The
 	# renderer has its own authoring/evaluation clock, advanced only by explicit
 	# transport actions; rebuilding a Look must never seek the presentation.
-	var authoring_time := 0.0
-	if renderer.has_method("clock_state"):
-		authoring_time = float(renderer.clock_state().get("presentation_time", 0.0))
-	renderer.set_time(authoring_time)
+	renderer.set_time(_authoring_playhead)
 	_plan_status = built["detail"]
 	_rendered_key = str(session.current_key) if session != null else ""
 	if bool(result.get("ok", false)):
@@ -4017,26 +4005,19 @@ func _process(_delta: float) -> void:
 			disp.position = (available - Vector2(1280, 720) * disp.scale) * 0.5
 	_update_selection_outline()
 	_update_play_button()
-	var presentation_t: float = maxf(runtime.elapsed(), 0.0)
-	var authoring_t: float = clampf(presentation_t, 0.0, TIMELINE_LEN)
+	var authoring_t: float = _authoring_playhead
 	if not time_syncing:
 		time_syncing = true
 		time_spin.set_value_no_signal(authoring_t)
 		time_syncing = false
-	# One visible clock: the authorable transport domain. Presentation may
-	# remain in HOLD/EXIT beyond it, but no second raw clock is shown as T 24.x.
+	# The visible timeline and authoring renderer use the bounded explicit
+	# playhead. The mounted screen owns its independent lifecycle elapsed clock.
 	timeline_time_label.text = "T %.3f / %.3f" % [authoring_t, TIMELINE_LEN]
 	if timeline_ruler.visible:
 		timeline_ruler.queue_redraw()
 	if renderer != null:
-		# TM-01: one authoritative presentation clock — while playing, the
-		# renderer FX clock follows canonical elapsed every frame instead
-		# of going stale after the last explicit seek.
-		var playing := true
-		if runtime != null and runtime.screen != null and runtime.screen.has_method("lab_preview_is_paused"):
-			playing = not bool(runtime.screen.lab_preview_is_paused())
-		if playing and runtime != null:
-			renderer.set_time(clampf(runtime.elapsed(), 0.0, TIMELINE_LEN))
+		# PRESENTATION_TIME changes only through explicit authoring transport;
+		# FREE_RUN remains wall-clock-driven even while presentation is paused.
 		renderer.set_free_run(Time.get_ticks_msec() / 1000.0)
 	if _stash_pending and session != null and session.dirty:
 		var now := Time.get_ticks_msec() / 1000.0

@@ -143,6 +143,7 @@ func _exercise_explicit_transport(screen: Node) -> void:
 	var reveal: float = screen.reveal_duration()
 	var end_time: float = exposure + close + reveal + 0.01
 	_check(bool(screen.lab_preview_is_paused()), "explicit transport test starts with paused intent")
+	await _exercise_long_hold_frame_steps(screen)
 	shell._on_time_entered(0.2)
 	_check(str(screen.state()) == "entry" and absf(screen.elapsed() - 0.2) < 0.02, "explicit numeric seek reconstructs ENTRY", str(screen.state()))
 	_check(bool(screen.lab_preview_is_paused()), "ENTRY seek preserves paused intent")
@@ -170,6 +171,32 @@ func _exercise_explicit_transport(screen: Node) -> void:
 	shell.runtime.seek(0.2)
 	_check(not screen.lab_preview_is_paused() and screen.is_processing(), "playing intent survives explicit EXIT-end then back seek")
 	screen.lab_preview_pause()
+
+func _exercise_long_hold_frame_steps(screen: Node) -> void:
+	# The presentation clock is deliberately allowed to run far beyond the
+	# authoring timeline. Frame steps must still operate on the authored
+	# playhead, not on raw lifecycle elapsed time from the open-ended HOLD.
+	var authored_t := 1.2
+	shell._on_time_entered(authored_t)
+	screen.lab_preview_resume()
+	await _settle(360)
+	var lifecycle_t := float(screen.elapsed())
+	_check(str(screen.state()) == "hold", "long-HOLD frame-step setup remains in HOLD", str(screen.state()))
+	_check(lifecycle_t > float(shell.TIMELINE_LEN), "long-HOLD frame-step setup exceeds authoring timeline", "elapsed=%.3f timeline=%.3f" % [lifecycle_t, float(shell.TIMELINE_LEN)])
+	_check(absf(_renderer_authoring_time() - authored_t) < 0.02, "long HOLD does not advance the authoring playhead", "authoring=%.3f expected=%.3f" % [_renderer_authoring_time(), authored_t])
+	shell._transport_step_back()
+	var back_t := authored_t - float(shell.FRAME_STEP)
+	_check(absf(_renderer_authoring_time() - back_t) < 0.02, "1F back uses the authoring playhead after long HOLD", "authoring=%.3f expected=%.3f" % [_renderer_authoring_time(), back_t])
+	_check(str(screen.state()) == "hold", "1F back does not jump lifecycle out of HOLD", str(screen.state()))
+	shell._transport_step_forward()
+	_check(absf(_renderer_authoring_time() - authored_t) < 0.02, "1F forward uses the authoring playhead after long HOLD", "authoring=%.3f expected=%.3f" % [_renderer_authoring_time(), authored_t])
+	_check(str(screen.state()) == "hold", "1F forward does not jump lifecycle out of HOLD", str(screen.state()))
+	screen.lab_preview_pause()
+
+func _renderer_authoring_time() -> float:
+	if shell.renderer != null and shell.renderer.has_method("clock_state"):
+		return float(shell.renderer.clock_state().get("presentation_time", -1.0))
+	return -1.0
 
 func _capture_preview(label: String, lifecycle: Dictionary) -> Image:
 	if DisplayServer.get_name().to_lower().contains("headless"):
