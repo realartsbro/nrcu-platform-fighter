@@ -156,10 +156,10 @@ func _mask_geometry(mask_path: String) -> Dictionary:
 
 func _prove_registry_and_ui_discoverability() -> void:
 	var ids: Array = FxRecipesScript.recipe_ids()
-	_check(ids == [FLAME_RECIPE, ORGANIC_RECIPE], "registry exposes exactly both stable Hero Recipe ids", str(ids))
-	_check(bool(FxRecipesScript.validate_registry().get("ok", false)), "both Hero Recipe registry definitions validate")
-	_check(shell.recipe_rows != null and shell.recipe_rows.get_child_count() == 2, "Lab UI exposes exactly two Hero Recipe rows")
-	_check(shell.library_rows != null and shell.recipe_rows != shell.library_rows and shell.library_rows.get_index() < shell.recipe_rows.get_index(), "Recipe Library is separate from Production Look inventory")
+	_check(ids.size() >= 5 and ids.has(FLAME_RECIPE) and ids.has(ORGANIC_RECIPE), "registry exposes both stable Hero Recipe ids and curated starting points", str(ids))
+	_check(bool(FxRecipesScript.validate_registry().get("ok", false)), "Hero Recipes and curated registry definitions validate")
+	_check(shell.recipe_rows != null and shell.recipe_rows.get_child_count() >= 5, "Lab UI exposes Hero Recipes plus curated starting points")
+	_check(shell.library_rows != null and shell.recipe_rows != shell.library_rows and shell.production_tab.is_ancestor_of(shell.library_rows) and shell.recipes_tab.is_ancestor_of(shell.recipe_rows), "Recipe Library is a separate secondary dock surface from Production Looks")
 	_check(shell.has_method("_action_add_recipe"), "Lab UI exposes the real recipe instantiation action")
 	_check(shell.runtime.registry.slot_nodes.has("primary_left"), "registry exposes the primary fighter target")
 	var organic_target := _target_for_role("side_field")

@@ -25,7 +25,7 @@ func _init() -> void:
 		return
 
 	var ids: Array = recipes_script.recipe_ids()
-	_check(ids == ["PRIMARY_FLAME_ENERGY", "ORGANIC_SIDE_FIELD"], "registry exposes exactly the two stable Hero Recipe ids", str(ids))
+	_check(ids.size() >= 5 and ids.has("PRIMARY_FLAME_ENERGY") and ids.has("ORGANIC_SIDE_FIELD") and ids.has("EDGE_HALO") and ids.has("RGB_TEAR") and ids.has("DITHER_TREATMENT"), "registry exposes Hero Recipes and curated starting points", str(ids))
 	var registry_check: Dictionary = recipes_script.validate_registry()
 	_check(bool(registry_check.get("ok", false)), "registry definitions validate", str(registry_check.get("errors", [])))
 	var unknown: Dictionary = recipes_script.instantiate("UNKNOWN_RECIPE", "fixture-target")
@@ -39,8 +39,9 @@ func _init() -> void:
 		_check(str(recipe.get("description", "")) != "", "%s has a description" % recipe_id)
 		_check(not (recipe.get("target_compatibility", {}) as Dictionary).is_empty(), "%s declares target compatibility" % recipe_id)
 		_check(bool(recipe.get("advanced_access", false)), "%s exposes Advanced access" % recipe_id)
-		_check((recipe.get("macros", []) as Array).size() >= 2, "%s declares macro metadata" % recipe_id)
-		_check((recipe.get("layers", []) as Array).size() >= 2, "%s is multi-layer" % recipe_id)
+		var hero_recipe := str(recipe_id) in ["PRIMARY_FLAME_ENERGY", "ORGANIC_SIDE_FIELD"]
+		_check((recipe.get("macros", []) as Array).size() >= (2 if hero_recipe else 1), "%s declares macro metadata" % recipe_id)
+		_check((recipe.get("layers", []) as Array).size() >= (2 if hero_recipe else 1), "%s has an authorable layer stack" % recipe_id)
 
 		var one: Dictionary = recipes_script.instantiate(str(recipe_id), "fixture-target")
 		var two: Dictionary = recipes_script.instantiate(str(recipe_id), "fixture-target")

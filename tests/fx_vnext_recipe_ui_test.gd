@@ -18,8 +18,8 @@ func _init() -> void:
 	shell._select_key("primary_left", false)
 	await settle(15)
 	_check(shell._session_ready(), "recipe shell test opens a primary target")
-	_check(shell.recipe_rows != null and shell.recipe_rows.get_child_count() == 2, "Recipe Library exposes exactly two Hero Recipe rows")
-	_check(shell.library_rows != null and shell.recipe_rows != null and shell.library_rows != shell.recipe_rows and shell.library_rows.get_index() < shell.recipe_rows.get_index(), "Production Inventory remains visibly separate")
+	_check(shell.recipe_rows != null and shell.recipe_rows.get_child_count() >= 5, "Recipe Library exposes Hero Recipes and curated starting points")
+	_check(shell.library_rows != null and shell.recipe_rows != null and shell.library_rows != shell.recipe_rows and shell.production_tab.is_ancestor_of(shell.library_rows) and shell.recipes_tab.is_ancestor_of(shell.recipe_rows), "Production Looks and Recipes are separate secondary dock surfaces")
 	_check(shell.has_method("_action_add_recipe"), "shell exposes a first-class recipe action")
 
 	if shell.has_method("_action_add_recipe") and shell._session_ready():

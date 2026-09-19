@@ -180,10 +180,22 @@ func _check_primary_controls(size: Vector2i) -> void:
 		(effect_labels if effect_header_seen else layer_labels).append(text)
 	_check(layer_labels == ["Source Copy", "Custom FX Layer"] and effect_labels == ["Outer Halo", "Edge Treatment", "RGB Tear", "Dither Treatment"], "+ ADD leaves belong to semantic categories", str([layer_labels, effect_labels]))
 	_check(add_popup.get_item_text(0) == "LAYERS" and effect_header_seen, "+ ADD menu has explicit LAYERS/EFFECTS headers")
-	_check(shell.recipe_add_buttons.size() == 2, "exactly two Hero Recipe ADD buttons are built")
+	_check(shell.recipe_add_buttons.size() >= 5, "Hero Recipes and curated preset ADD buttons are built")
+	# Recipes are secondary access, so enter the real Recipes tab before checking
+	# their actual hit geometry; presence in an off-screen page is not enough.
+	var prior_tab: int = shell.authoring_tabs.current_tab
+	if shell.recipes_tab != null:
+		shell.authoring_tabs.current_tab = shell.recipes_tab.get_index()
+		await _frames(2)
 	for index in shell.recipe_add_buttons.size():
 		var add_button: Button = shell.recipe_add_buttons[index]
+		if shell.recipes_tab != null:
+			shell.recipes_tab.ensure_control_visible(add_button)
+			await _frames(2)
 		_visible_hit(add_button, bounds, "Hero Recipe ADD #%d" % (index + 1))
+	if shell.authoring_tabs != null:
+		shell.authoring_tabs.current_tab = prior_tab
+		await _frames(2)
 	_check(shell.action_apply.text in ["APPLY", "UPDATE"], "Apply/Update action label is short", shell.action_apply.text)
 	_check(shell.assignment_scope_status != null and shell.assignment_scope_status.is_visible_in_tree(), "assignment scope status is separate from action label")
 	_check(not shell.preview_toggle.text.contains("PREVIEW"), "toolbar state label does not duplicate PREVIEW", shell.preview_toggle.text)
@@ -329,14 +341,24 @@ func _click(control: Control) -> void:
 	await process_frame
 
 func _check_recipe_add_paths() -> void:
+	var prior_tab: int = shell.authoring_tabs.current_tab
+	if shell.recipes_tab != null:
+		shell.authoring_tabs.current_tab = shell.recipes_tab.get_index()
+		await _frames(2)
 	var buttons: Array = shell.recipe_add_buttons.duplicate()
 	for index in buttons.size():
 		var button: Button = buttons[index]
+		if shell.recipes_tab != null:
+			shell.recipes_tab.ensure_control_visible(button)
+			await _frames(2)
 		var before := (shell.session.look.get("layers", []) as Array).size()
 		await _click(button)
 		await _frames(8)
 		var after := (shell.session.look.get("layers", []) as Array).size()
 		_check(after > before, "Hero Recipe ADD #%d mutates the current draft through its button" % (index + 1), "before=%d after=%d" % [before, after])
+	if shell.authoring_tabs != null:
+		shell.authoring_tabs.current_tab = prior_tab
+		await _frames(2)
 
 func _check_layer_add_paths() -> void:
 	var menu: MenuButton = shell.add_menu

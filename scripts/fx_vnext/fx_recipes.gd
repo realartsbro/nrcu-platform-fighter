@@ -12,7 +12,12 @@ const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
 
 const PRIMARY_FLAME_ENERGY := "PRIMARY_FLAME_ENERGY"
 const ORGANIC_SIDE_FIELD := "ORGANIC_SIDE_FIELD"
-const RECIPE_IDS := [PRIMARY_FLAME_ENERGY, ORGANIC_SIDE_FIELD]
+const EDGE_HALO := "EDGE_HALO"
+const RGB_TEAR := "RGB_TEAR"
+const DITHER_TREATMENT := "DITHER_TREATMENT"
+const HERO_RECIPE_IDS := [PRIMARY_FLAME_ENERGY, ORGANIC_SIDE_FIELD]
+const CURATED_RECIPE_IDS := [EDGE_HALO, RGB_TEAR, DITHER_TREATMENT]
+const RECIPE_IDS := HERO_RECIPE_IDS + CURATED_RECIPE_IDS
 
 static func recipe_ids() -> Array:
 	return RECIPE_IDS.duplicate()
@@ -129,8 +134,8 @@ static func validate_authored_fields(recipe_id: String, layers: Array) -> Dictio
 static func validate_registry() -> Dictionary:
 	var errors: Array = []
 	var ids := recipe_ids()
-	if ids.size() != 2:
-		errors.append("expected exactly two Hero Recipes")
+	if ids.size() < 5:
+		errors.append("recipe library must expose both Hero Recipes and at least three curated starting points")
 	for recipe_id in ids:
 		var recipe := _definition(str(recipe_id))
 		if recipe.is_empty():
@@ -280,6 +285,57 @@ static func _definition(recipe_id: String) -> Dictionary:
 						},
 					},
 				],
+			})
+		EDGE_HALO:
+			return _decorate({
+				"stable_id": EDGE_HALO,
+				"name": "Edge Halo",
+				"category": "Curated Preset",
+				"description": "A restrained alpha-contour halo that clarifies the silhouette without turning the fighter into a glowing cutout.",
+				"intent": "Readable silhouette edge",
+				"target_compatibility": {"target_roles": ["primary", "secondary"], "element_roles": ["primary", "secondary"], "allowed_planes": ["TARGET_OVERLAY"], "requires_fighter": true},
+				"advanced_access": true,
+				"macros": [{"id": "HALO_EDGE", "label": "Edge Halo", "fields": ["mask.source", "fx.edge_width", "fx.fringe", "fx.intensity"]}],
+				"source_semantics": {"mask_source": "ORIGINAL_SOURCE_ALPHA", "mask_space": "SOURCE_SPACE", "approximation": "NONE"},
+				"layers": [{"instance_key": "edge_halo", "name": "Edge Halo", "type": "FX", "authored_fields": {
+					"layer.plane": "TARGET_OVERLAY", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "ADD",
+					"mask.enabled": true, "mask.source": "ORIGINAL_SOURCE_ALPHA", "mask.region": "EDGE_BAND", "mask.space": "SOURCE_SPACE", "mask.width_px": 8.0, "mask.feather_px": 3.0,
+					"fx.edge_source_mode": 0.0, "fx.edge_width": 9.0, "fx.fringe": 0.65, "fx.intensity": 1.08, "fx.fringe_bleed": 0.55,
+				}}],
+			})
+		RGB_TEAR:
+			return _decorate({
+				"stable_id": RGB_TEAR,
+				"name": "RGB Tear",
+				"category": "Curated Preset",
+				"description": "A controlled chromatic split for impact and transition moments, with the source alpha kept as the authority.",
+				"intent": "Chromatic impact accent",
+				"target_compatibility": {"target_roles": ["primary", "secondary"], "element_roles": ["primary", "secondary"], "allowed_planes": ["TARGET_OVERLAY"], "requires_fighter": true},
+				"advanced_access": true,
+				"macros": [{"id": "RGB_IMPACT", "label": "RGB Impact", "fields": ["fx.rgb", "fx.rgb_shift_amount", "fx.rgb_shift_alpha"]}],
+				"source_semantics": {"mask_source": "ORIGINAL_SOURCE_ALPHA", "mask_space": "SOURCE_SPACE", "approximation": "NONE"},
+				"layers": [{"instance_key": "rgb_tear", "name": "RGB Tear", "type": "FX", "authored_fields": {
+					"layer.plane": "TARGET_OVERLAY", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "SCREEN",
+					"mask.enabled": true, "mask.source": "ORIGINAL_SOURCE_ALPHA", "mask.region": "FULL", "mask.space": "SOURCE_SPACE", "mask.feather_px": 2.0,
+					"fx.rgb": 0.78, "fx.rgb_shift_amount": 9.0, "fx.rgb_shift_alpha": 0.35, "fx.intensity": 0.92,
+				}}],
+			})
+		DITHER_TREATMENT:
+			return _decorate({
+				"stable_id": DITHER_TREATMENT,
+				"name": "Dither Treatment",
+				"category": "Curated Preset",
+				"description": "A small-pixel breakup for graphic texture and controlled degradation, balanced to remain production-readable.",
+				"intent": "Graphic texture breakup",
+				"target_compatibility": {"target_roles": ["primary", "secondary", "side_field"], "element_roles": ["primary", "secondary", "side_field"], "allowed_planes": ["TARGET_OVERLAY", "TARGET_SOURCE"], "requires_fighter": false},
+				"advanced_access": true,
+				"macros": [{"id": "DITHER_TEXTURE", "label": "Dither Texture", "fields": ["fx.dither", "fx.dither_pixel", "fx.dither_contrast", "fx.dither_gamma"]}],
+				"source_semantics": {"mask_source": "ORIGINAL_SOURCE_ALPHA", "mask_space": "SOURCE_SPACE", "approximation": "NONE"},
+				"layers": [{"instance_key": "dither_treatment", "name": "Dither Treatment", "type": "FX", "authored_fields": {
+					"layer.plane": "TARGET_OVERLAY", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
+					"mask.enabled": true, "mask.source": "ORIGINAL_SOURCE_ALPHA", "mask.region": "FULL", "mask.space": "SOURCE_SPACE", "mask.feather_px": 1.0,
+					"fx.dither": 0.55, "fx.dither_pixel": 2.0, "fx.dither_contrast": 1.4, "fx.dither_gamma": 1.25, "fx.intensity": 0.90,
+				}}],
 			})
 	return {}
 

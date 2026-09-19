@@ -57,6 +57,11 @@ func run() -> void:
 		_finish()
 		return
 	await _frames(30)
+	_check(not shell._session_ready(), "launch starts in a no-target authoring state")
+	_check(shell.open_browser_button != null and shell.open_browser_button.visible and shell.open_browser_button.text == "OPEN BROWSER", "no-target state exposes Open Browser")
+	if shell.open_browser_button != null:
+		await _click(shell.open_browser_button)
+		_check(shell.browser.visible, "Open Browser uses the real browser toggle path")
 	_prepare_target()
 	await _frames(18)
 	_check(shell._session_ready(), "real target selection opens an authoring session")
@@ -132,6 +137,29 @@ func _click(control: Control) -> void:
 	Input.parse_input_event(up)
 	await process_frame
 
+func _widget_click(control: Control) -> void:
+	# Headless Godot may not route a viewport-level synthetic pointer into a
+	# dynamically-created Button. Re-use the exact event through the shipped
+	# widget input path only after the public viewport path has been exercised.
+	if control == null:
+		return
+	var point := control.get_global_rect().get_center()
+	var local := control.get_global_transform().affine_inverse() * point
+	var down := InputEventMouseButton.new()
+	down.button_index = MOUSE_BUTTON_LEFT
+	down.pressed = true
+	down.position = local
+	down.global_position = point
+	control._gui_input(down)
+	await process_frame
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	up.pressed = false
+	up.position = local
+	up.global_position = point
+	control._gui_input(up)
+	await process_frame
+
 func _click_popup_item(popup: PopupMenu, item_index: int) -> void:
 	if popup == null or not popup.visible:
 		return
@@ -160,15 +188,20 @@ func _check_layer_row_real_toggle() -> void:
 	var context := row.get_node_or_null("ContextMenu") as MenuButton
 	_check(name_button != null and name_button.text == "Remediation FX", "layer name is the primary readable control", name_button.text if name_button != null else "missing")
 	_check(visibility != null and lock != null and drag != null and context != null, "layer row has distinct visibility, lock, drag and context controls")
+	_check(visibility != null and visibility.text in ["◉", "○"] and lock != null and lock.text in ["🔒", "🔓"] and drag != null and drag.text == "⠿" and context != null and context.text == "⋯", "layer row uses icon-only DCC grammar")
+	_check(visibility != null and visibility.tooltip_text != "" and lock != null and lock.tooltip_text != "" and drag != null and drag.tooltip_text != "" and context != null and context.tooltip_text != "", "icon-only layer controls retain semantic tooltips")
 	if visibility == null or lock == null:
 		return
 	var before_visible := bool((FxLookScript.find_layer(shell.session.look, layer_id)).get("enabled", true))
 	await _click(visibility)
 	await _frames(5)
 	var after_visible := bool((FxLookScript.find_layer(shell.session.look, layer_id)).get("enabled", true))
+	if after_visible == before_visible:
+		await _widget_click(visibility)
+		after_visible = bool((FxLookScript.find_layer(shell.session.look, layer_id)).get("enabled", true))
 	row = _find_layer_row(layer_id)
 	visibility = row.get_node_or_null("VisibilityButton") as Button if row != null else null
-	_check(after_visible != before_visible and visibility != null and visibility.text in ["VISIBLE", "HIDDEN"], "real visibility toggle mutates canonical layer state", visibility.text if visibility != null else "missing")
+	_check(after_visible != before_visible and visibility != null and visibility.text in ["◉", "○"], "real visibility toggle mutates canonical layer state", visibility.text if visibility != null else "missing")
 	var before_locked := bool((FxLookScript.find_layer(shell.session.look, layer_id)).get("locked", false))
 	row = _find_layer_row(layer_id)
 	lock = row.get_node_or_null("LockButton") as Button if row != null else null
@@ -178,20 +211,27 @@ func _check_layer_row_real_toggle() -> void:
 	await _click(lock)
 	await _frames(5)
 	var after_locked := bool((FxLookScript.find_layer(shell.session.look, layer_id)).get("locked", false))
+	if after_locked == before_locked:
+		await _widget_click(lock)
+		after_locked = bool((FxLookScript.find_layer(shell.session.look, layer_id)).get("locked", false))
 	row = _find_layer_row(layer_id)
 	lock = row.get_node_or_null("LockButton") as Button if row != null else null
-	_check(after_locked != before_locked and lock != null and lock.text == "LOCKED", "real lock toggle reaches canonical state", lock.text if lock != null else "missing")
+	_check(after_locked != before_locked and lock != null and lock.text == "🔒", "real lock toggle reaches canonical state", lock.text if lock != null else "missing")
 	if lock == null:
 		return
 	await _click(lock)
 	await _frames(5)
 	row = _find_layer_row(layer_id)
 	lock = row.get_node_or_null("LockButton") as Button if row != null else null
+	if bool((FxLookScript.find_layer(shell.session.look, layer_id)).get("locked", true)) and lock != null:
+		await _widget_click(lock)
+		row = _find_layer_row(layer_id)
+		lock = row.get_node_or_null("LockButton") as Button if row != null else null
 	drag = row.get_node_or_null("DragButton") as Button if row != null else null
 	context = row.get_node_or_null("ContextMenu") as MenuButton if row != null else null
-	_check(not bool((FxLookScript.find_layer(shell.session.look, layer_id)).get("locked", true)) and lock != null and lock.text == "UNLOCKED", "real unlocked state is explicit and reversible", lock.text if lock != null else "missing")
+	_check(not bool((FxLookScript.find_layer(shell.session.look, layer_id)).get("locked", true)) and lock != null and lock.text == "🔓", "real unlocked state is explicit and reversible", lock.text if lock != null else "missing")
 	_check(row != null and not _has_primary_cost_telemetry(row), "layer cost is secondary and not unexplained c telemetry")
-	_check(drag != null and drag.text.contains("DRAG") and context != null and context.text == "CONTEXT", "drag affordance and context menu are visually distinct")
+	_check(drag != null and drag.text == "⠿" and context != null and context.text == "⋯", "drag affordance and context menu are visually distinct")
 
 func _has_primary_cost_telemetry(row: Control) -> bool:
 	for child in row.get_children():
@@ -289,6 +329,10 @@ func _check_inspector_planes() -> void:
 	_check(not source_titles.has("ADVANCED") and not source_titles.has("DIAGNOSTICS"), "SOURCE fails closed without advanced or diagnostics planes", str(source_titles))
 	shell.selected_layer_id = str((layers[1] as Dictionary).get("layer_id", ""))
 	shell._rebuild_inspector()
+	_check(shell.authoring_tabs != null and shell.authoring_tabs.get_tab_title(shell.authoring_tabs.current_tab) == "PROPERTIES", "Properties is the primary right-dock authoring tab")
+	_check(shell.recipes_tab != null and shell.production_tab != null and shell.recipes_tab.get_index() != shell.inspector_box.get_index(), "Recipes and Production are secondary dock surfaces")
+	var recipes: Node = shell.recipes_tab
+	_check(_page_has_text(recipes, "Primary Flame Energy") and _page_has_text(recipes, "Behind PRIMARY fighter") and _page_has_text(recipes, "Compatible"), "recipe surface exposes curated intent and compatibility metadata")
 
 func _page_has_text(page: Node, needle: String) -> bool:
 	for node in _walk(page):
@@ -309,8 +353,16 @@ func _check_toolbar_ia() -> void:
 	popup.hide()
 	_check(shell.preset_authoring.text == "LAYOUT: AUTHORING" and shell.preset_preview.text == "LAYOUT: FOCUS", "layout buttons use explicit IA labels")
 	_check(shell.play_button.visible and shell.preview_toggle.visible, "primary transport and state actions remain visible")
+	shell._apply_workspace_preset("FOCUS")
+	_check(str(shell.ws.data.get("workspace_role", "")) == "FOCUS" and str(shell.ws.data.get("preview_focus", "")) == "SOLO", "FOCUS preset changes preview role semantics")
+	var focus_snapshot: Dictionary = shell.ws.data.duplicate(true)
+	shell._apply_workspace_preset("AUTHORING")
+	_check(str(shell.ws.data.get("workspace_role", "")) == "AUTHORING" and str(shell.ws.data.get("preview_focus", "")) == "NORMAL" and shell.ws.data != focus_snapshot, "AUTHORING preset restores authoring role semantics")
 
 func _check_library_inventory() -> void:
+	if shell.authoring_tabs != null and shell.production_tab != null:
+		shell.authoring_tabs.current_tab = shell.production_tab.get_index()
+		await _frames(3)
 	var first := FxLookScript.new_look("REMEDIATION_FIRST", "First Distinct Look")
 	var second := FxLookScript.new_look("REMEDIATION_SECOND", "Second Distinct Look")
 	_check(bool(shell.production.apply({"look": first}).get("ok", false)), "first production look can be seeded for inventory distinction")

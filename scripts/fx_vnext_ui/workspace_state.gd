@@ -4,7 +4,10 @@ extends RefCounted
 
 const PATH := "user://nrcu_fx_vnext_workspace.json"
 const PRESET_AUTHORING := "AUTHORING"
-const PRESET_PREVIEW := "PREVIEW"
+const PRESET_FOCUS := "FOCUS"
+# Compatibility for existing workspace files and callers. The product label is
+# FOCUS; PREVIEW remains an accepted input while old persisted state migrates.
+const PRESET_PREVIEW := PRESET_FOCUS
 const INTENT_AUTO := "AUTO"
 const INTENT_USER_OPEN := "USER_OPEN"
 const INTENT_USER_CLOSED := "USER_CLOSED"
@@ -19,7 +22,7 @@ const DEFAULTS := {
 	"browser_w": 280.0,
 	"dock_w": 390.0,
 	"dock_hidden": false,
-	"layers_split": 0.42,
+	"layers_split": 0.38,
 	"timeline_h": 200.0,
 	"timeline_expanded": false,
 	"browser_collapsed": false,
@@ -27,6 +30,7 @@ const DEFAULTS := {
 	"timeline_intent": INTENT_AUTO,
 	"preview_focus": "NORMAL",
 	"preset": "AUTHORING",
+	"workspace_role": "AUTHORING",
 }
 
 var data: Dictionary = {}
@@ -66,21 +70,32 @@ func reset() -> void:
 	data = DEFAULTS.duplicate(true)
 
 func apply_preset(name: String) -> void:
-	data["preset"] = name
-	match name:
-		PRESET_PREVIEW:
+	var role := PRESET_FOCUS if name in [PRESET_FOCUS, "PREVIEW"] else PRESET_AUTHORING
+	data["preset"] = role
+	data["workspace_role"] = role
+	match role:
+		PRESET_FOCUS:
+			# Focus is a presentation-review role: the preview is soloed, the
+			# browser yields space, and the inspector remains available through
+			# the right-dock Properties tab.
 			data["browser_w"] = BROWSER_MIN
-			data["dock_w"] = DOCK_MIN
+			data["dock_w"] = 420.0
+			data["layers_split"] = 0.28
+			data["preview_focus"] = "SOLO"
 			data["timeline_expanded"] = false
-			data["browser_collapsed"] = false
-			data["browser_intent"] = INTENT_AUTO
+			data["browser_collapsed"] = true
+			data["browser_intent"] = INTENT_USER_CLOSED
 			data["timeline_intent"] = INTENT_AUTO
 		_:
+			# Authoring is the default DCC role: keep target discovery open,
+			# show the full layer stack, and restore a neutral preview.
 			data["browser_w"] = DEFAULTS["browser_w"]
 			data["dock_w"] = DEFAULTS["dock_w"]
+			data["layers_split"] = 0.38
+			data["preview_focus"] = "NORMAL"
 			data["timeline_expanded"] = false
 			data["browser_collapsed"] = false
-			data["browser_intent"] = INTENT_AUTO
+			data["browser_intent"] = INTENT_USER_OPEN
 			data["timeline_intent"] = INTENT_AUTO
 
 func _clamp() -> void:

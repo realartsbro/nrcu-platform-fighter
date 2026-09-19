@@ -153,6 +153,7 @@ var browser_rail: Button
 var left_handle: ColorRect
 var preview_area: VBoxContainer
 var breadcrumb_label: Label
+var open_browser_button: Button
 var focus_buttons: Dictionary = {}
 var viewport_host: Control
 var disp: SubViewportContainer
@@ -174,6 +175,9 @@ var assignment_scope_advanced: VBoxContainer
 var assignment_scope_fields: Dictionary = {}
 var layers_box: VBoxContainer
 var inspector_box: VBoxContainer
+var authoring_tabs: TabContainer
+var recipes_tab: ScrollContainer
+var production_tab: ScrollContainer
 var layers_split_handle: ColorRect
 var layers_rows: VBoxContainer
 var layers_empty: Label
@@ -191,6 +195,7 @@ var action_unassign: Button
 var action_unique: Button
 var action_edit_shared: Button
 var action_why: Button
+var action_more_menu: MenuButton
 var target_action_row: HBoxContainer
 var target_action_row2: HBoxContainer
 var protected_actions_host: Control
@@ -402,7 +407,7 @@ func _build_toolbar(parent: Node) -> void:
 	reset_workspace_button = _toolbar_button("RESET WORKSPACE", _reset_workspace)
 	reset_workspace_button.visible = false
 	preset_authoring = _toolbar_button("LAYOUT: AUTHORING", func() -> void: _apply_workspace_preset("AUTHORING"))
-	preset_preview = _toolbar_button("LAYOUT: FOCUS", func() -> void: _apply_workspace_preset("PREVIEW"))
+	preset_preview = _toolbar_button("LAYOUT: FOCUS", func() -> void: _apply_workspace_preset("FOCUS"))
 
 	remount_button = _toolbar_button("⟲ REMOUNT", _remount_current)
 	review_button = _toolbar_button("⚠ REVIEW", _open_migration_review_queue)
@@ -477,6 +482,13 @@ func _build_preview() -> void:
 	breadcrumb_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	breadcrumb_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	crumb_row.add_child(breadcrumb_label)
+	open_browser_button = Button.new()
+	open_browser_button.name = "OpenBrowserButton"
+	open_browser_button.text = "OPEN BROWSER"
+	open_browser_button.tooltip_text = "Select a target to start designing FX"
+	FxLabUiTokensScript.apply_hit_target(open_browser_button)
+	open_browser_button.pressed.connect(_open_browser_from_empty)
+	crumb_row.add_child(open_browser_button)
 	for mode in ["NORMAL", "DIM OTHERS", "SOLO"]:
 		var button := Button.new()
 		button.text = mode
@@ -568,7 +580,7 @@ func _build_dock() -> void:
 	status_box.add_theme_constant_override("separation", 2)
 	status_margin.add_child(status_box)
 	var status_header := Label.new()
-	status_header.text = "TARGET STATUS"
+	status_header.text = "TARGET"
 	status_header.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	status_header.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
 	status_box.add_child(status_header)
@@ -622,31 +634,57 @@ func _build_dock() -> void:
 	action_unique = _styled_button("UNIQUE", Callable(self, "_action_make_unique"))
 	action_edit_shared = _styled_button("EDIT SHARED", Callable(self, "_action_edit_shared"))
 	action_why = _styled_button("WHY?", Callable(self, "_action_why"))
-	for button in [action_save, action_apply, action_styling, action_why]:
+	for button in [action_save, action_apply]:
 		target_action_row.add_child(button)
+	action_more_menu = MenuButton.new()
+	action_more_menu.name = "TargetActionsMenu"
+	action_more_menu.text = "MORE"
+	action_more_menu.tooltip_text = "Secondary target actions: styling, explanation, history and assignment"
+	FxLabUiTokensScript.apply_hit_target(action_more_menu)
+	var more_popup := action_more_menu.get_popup()
+	more_popup.add_item("STYLING", 1)
+	more_popup.add_item("WHY THIS TARGET", 2)
+	more_popup.add_separator()
+	more_popup.add_item("UNDO", 3)
+	more_popup.add_item("REDO", 4)
+	more_popup.add_item("REVERT", 5)
+	more_popup.add_separator()
+	more_popup.add_item("UNASSIGN", 6)
+	more_popup.add_item("MAKE UNIQUE", 7)
+	more_popup.add_item("EDIT SHARED", 8)
+	more_popup.id_pressed.connect(_on_target_actions_menu)
+	target_action_row.add_child(action_more_menu)
 	target_action_row2 = HBoxContainer.new()
 	target_action_row2.add_theme_constant_override("separation", 4)
 	protected_actions_host = Control.new()
-	protected_actions_host.custom_minimum_size = Vector2(0, 28)
+	protected_actions_host.custom_minimum_size = Vector2.ZERO
 	protected_actions_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	protected_actions_host.visible = false
 	target_action_row2.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	protected_actions_host.add_child(target_action_row2)
+	# Keep protected-scope actions reachable without competing with the primary
+	# Save/Apply/More row. This host stays hidden for normal editable targets.
 	status_box.add_child(protected_actions_host)
 	protected_actions_spacer = Control.new()
-	protected_actions_spacer.custom_minimum_size = Vector2(220, 28)
+	protected_actions_spacer.custom_minimum_size = Vector2.ZERO
 	target_action_row2.add_child(protected_actions_spacer)
 	for button in [action_unique, action_edit_shared]:
 		target_action_row2.add_child(button)
 	target_action_row3 = HBoxContainer.new()
 	target_action_row3.add_theme_constant_override("separation", 4)
-	status_box.add_child(target_action_row3)
 	undo_button = _styled_button("↶ UNDO", func() -> void: _action_undo())
 	redo_button = _styled_button("↷ REDO", func() -> void: _action_redo())
 	var revert_button := _styled_button("Revert Changes", func() -> void: _action_revert())
-	action_unassign = _styled_button("UNASSIGN", func() -> void: _action_unassign())
+	var action_unassign_button := _styled_button("UNASSIGN", func() -> void: _action_unassign())
+	revert_button.visible = false
+	action_unassign_button.visible = false
+	action_unassign = action_unassign_button
 	for button in [undo_button, redo_button, revert_button, action_unassign]:
 		target_action_row3.add_child(button)
+	# Undo/redo remain visible editor actions, while Styling/Revert/assignment
+	# discovery is consolidated behind MORE. Keep the row mounted in the compact
+	# target card rather than leaving its controls orphaned off-tree.
+	status_box.add_child(target_action_row3)
 	action_status = Label.new()
 	action_status.text = ""
 	action_status.add_theme_font_size_override("font_size", UiTokens.T_HELP)
@@ -715,65 +753,152 @@ func _build_dock() -> void:
 	layers_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	layers_scroll.add_child(layers_rows)
 
-	# ---- vertical splitter ----
+	# ---- vertical splitter ----------------------------------------------------
 	layers_split_handle = _make_handle(Control.CURSOR_VSIZE)
 	layers_split_handle.gui_input.connect(func(event: InputEvent) -> void: _handle_drag(event, "layers"))
 	dock_box.add_child(layers_split_handle)
 
-	# ---- Inspector ----
+	# ---- Properties / Recipes / Production -----------------------------------
+	# Properties is the primary authoring surface. Recipes and Production are
+	# real secondary tabs so their inventories never consume inspector height.
+	authoring_tabs = TabContainer.new()
+	authoring_tabs.name = "AuthoringDockTabs"
+	authoring_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	authoring_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	authoring_tabs.size_flags_stretch_ratio = 0.62
+	dock_box.add_child(authoring_tabs)
+
 	inspector_box = VBoxContainer.new()
+	inspector_box.name = "PROPERTIES"
 	inspector_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	inspector_box.size_flags_stretch_ratio = 0.58
-	dock_box.add_child(inspector_box)
-	_section_header(inspector_box, "INSPECTOR")
-	inspector_empty = _section_empty(inspector_box, "Select a layer to edit its properties.")
+	inspector_box.add_theme_constant_override("separation", 4)
+	authoring_tabs.add_child(inspector_box)
+	_section_header(inspector_box, "PROPERTIES")
+	inspector_empty = _section_empty(inspector_box, "Select a target to start designing FX.\nThen select a layer to edit its properties.")
 	inspector_content = VBoxContainer.new()
 	inspector_content.add_theme_constant_override("separation", 4)
 	var inspector_scroll := ScrollContainer.new()
+	inspector_scroll.name = "PropertiesScroll"
 	inspector_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	inspector_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	inspector_box.add_child(inspector_scroll)
 	var inspector_inner := VBoxContainer.new()
+	inspector_inner.name = "PropertiesContent"
 	inspector_inner.add_theme_constant_override("separation", 4)
 	inspector_inner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	inspector_scroll.add_child(inspector_inner)
 
-	# Production and Recipe are secondary authoring surfaces. Keep them above
-	# the deep inspector in this scroll so both Hero Recipe actions are visible
-	# at the 1280x720 floor without stealing space from Target/Layers.
-	# ---- Production inventory (persisted Looks) -------------------------------
-	_section_header(inspector_inner, "PRODUCTION LOOK INVENTORY")
-	library_rows = VBoxContainer.new()
-	library_rows.add_theme_constant_override("separation", 2)
-	inspector_inner.add_child(library_rows)
-	# Recipes are authoring templates, not persisted Production Looks.
-	_section_header(inspector_inner, "RECIPE LIBRARY · AUTHORING TEMPLATES")
+	# Recipes are curated authoring templates, not a capability registry.
+	recipes_tab = ScrollContainer.new()
+	recipes_tab.name = "RECIPES"
+	recipes_tab.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	recipes_tab.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	authoring_tabs.add_child(recipes_tab)
+	var recipes_inner := VBoxContainer.new()
+	recipes_inner.name = "RecipeLibraryContent"
+	recipes_inner.add_theme_constant_override("separation", 6)
+	# Give the scroll child a real authoring width. Without an explicit width a
+	# wrapped Label reports a one-pixel minimum, stacking every recipe character
+	# vertically and pushing the second curated preset below the viewport.
+	recipes_inner.custom_minimum_size.x = 340.0
+	recipes_inner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	recipes_tab.add_child(recipes_inner)
+	_section_header(recipes_inner, "RECIPES · CURATED STARTING POINTS")
+	var recipe_intro := Label.new()
+	recipe_intro.text = "Authoring templates with real defaults. Add one, then refine it in Properties."
+	recipe_intro.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	recipe_intro.add_theme_color_override("font_color", FxLabUiTokensScript.TEXT_DIM)
+	recipe_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	recipes_inner.add_child(recipe_intro)
 	recipe_rows = VBoxContainer.new()
-	recipe_rows.add_theme_constant_override("separation", 2)
+	recipe_rows.name = "RecipeRows"
+	recipe_rows.add_theme_constant_override("separation", 6)
+	recipes_inner.add_child(recipe_rows)
 	for recipe in FxRecipesScript.list():
 		var recipe_data: Dictionary = recipe
 		var recipe_id := str(recipe_data.get("stable_id", ""))
-		var recipe_row := HBoxContainer.new()
-		recipe_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		recipe_row.custom_minimum_size.y = 40
+		var recipe_card := PanelContainer.new()
+		recipe_card.name = "RecipeCard_%s" % recipe_id
+		FxLabUiTokensScript.apply_tool_style(recipe_card)
+		recipe_rows.add_child(recipe_card)
+		var recipe_box := VBoxContainer.new()
+		recipe_box.add_theme_constant_override("separation", 2)
+		recipe_card.add_child(recipe_box)
+		var recipe_head := HBoxContainer.new()
+		recipe_box.add_child(recipe_head)
 		var recipe_label := Label.new()
+		recipe_label.name = "RecipeName"
 		recipe_label.text = str(recipe_data.get("name", recipe_id))
-		recipe_label.tooltip_text = str(recipe_data.get("intent", recipe_data.get("description", "")))
+		recipe_label.tooltip_text = str(recipe_data.get("description", ""))
 		recipe_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		recipe_label.size_flags_stretch_ratio = 1.0
-		recipe_label.custom_minimum_size.x = 0
-		recipe_label.add_theme_font_size_override("font_size", 12)
-		recipe_label.add_theme_color_override("font_color", FxLabUiTokensScript.TEXT_DIM)
-		recipe_label.clip_text = true
-		recipe_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		recipe_row.add_child(recipe_label)
+		recipe_label.add_theme_font_size_override("font_size", UiTokens.T_META)
+		recipe_label.add_theme_color_override("font_color", FxLabUiTokensScript.TEXT)
+		recipe_head.add_child(recipe_label)
 		var recipe_add := _styled_button("ADD", func() -> void: _action_add_recipe(recipe_id))
-		recipe_add.custom_minimum_size = Vector2(52, FxLabUiTokensScript.HIT_HEIGHT)
-		recipe_add.tooltip_text = "Add %s to the current draft. This is an authoring template, not a Production Look." % recipe_id
+		recipe_add.name = "RecipeAdd"
+		recipe_add.custom_minimum_size = Vector2(64, FxLabUiTokensScript.HIT_HEIGHT)
+		recipe_add.tooltip_text = "Add %s to the current draft. Defaults are canonical and editable." % recipe_id
 		recipe_add_buttons.append(recipe_add)
-		recipe_row.add_child(recipe_add)
-		recipe_rows.add_child(recipe_row)
-	inspector_inner.add_child(recipe_rows)
+		recipe_head.add_child(recipe_add)
+		var intent_label := Label.new()
+		intent_label.name = "RecipeIntent"
+		intent_label.text = "Intent: " + str(recipe_data.get("intent", ""))
+		intent_label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+		intent_label.add_theme_color_override("font_color", FxLabUiTokensScript.ACCENT)
+		intent_label.clip_text = true
+		intent_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		intent_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		intent_label.custom_minimum_size.x = 0.0
+		recipe_box.add_child(intent_label)
+		var description := Label.new()
+		description.name = "RecipeDescription"
+		description.text = str(recipe_data.get("description", ""))
+		description.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+		description.add_theme_color_override("font_color", FxLabUiTokensScript.TEXT_DIM)
+		# Keep the curated card scannable; the full intent remains available in
+		# the tooltip and the compatibility line stays visible below it.
+		description.clip_text = true
+		description.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		description.tooltip_text = str(recipe_data.get("description", ""))
+		description.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		description.custom_minimum_size.x = 0.0
+		recipe_box.add_child(description)
+		var compatibility: Dictionary = recipe_data.get("target_compatibility", {})
+		var roles: Array = compatibility.get("target_roles", [])
+		var planes: Array = compatibility.get("allowed_planes", [])
+		var compatible := Label.new()
+		compatible.name = "RecipeCompatibility"
+		compatible.text = "Compatible: %s · planes %s" % [", ".join(roles), ", ".join(planes)]
+		compatible.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+		compatible.add_theme_color_override("font_color", FxLabUiTokensScript.TEXT_MUTED)
+		compatible.tooltip_text = "Target roles: %s\nAllowed planes: %s" % [", ".join(roles), ", ".join(planes)]
+		compatible.clip_text = true
+		compatible.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		compatible.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		compatible.custom_minimum_size.x = 0.0
+		recipe_box.add_child(compatible)
+
+	production_tab = ScrollContainer.new()
+	production_tab.name = "PRODUCTION"
+	production_tab.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	production_tab.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	authoring_tabs.add_child(production_tab)
+	var production_inner := VBoxContainer.new()
+	production_inner.name = "ProductionLibraryContent"
+	production_inner.add_theme_constant_override("separation", 6)
+	production_inner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	production_tab.add_child(production_inner)
+	_section_header(production_inner, "PRODUCTION LOOKS")
+	var production_intro := Label.new()
+	production_intro.text = "Saved looks used by assignments. Editing stays in the current target session."
+	production_intro.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	production_intro.add_theme_color_override("font_color", FxLabUiTokensScript.TEXT_DIM)
+	production_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	production_inner.add_child(production_intro)
+	library_rows = VBoxContainer.new()
+	library_rows.name = "ProductionRows"
+	library_rows.add_theme_constant_override("separation", 4)
+	production_inner.add_child(library_rows)
 
 	inspector_empty.reparent(inspector_inner)
 	inspector_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -783,13 +908,14 @@ func _build_assignment_scope_controls(parent: Node) -> void:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 2)
 	var title := Label.new()
-	title.text = "ASSIGNMENT SCOPE · USER CHOICE"
+	title.text = "SCOPE"
 	title.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	title.add_theme_color_override("font_color", UiTokens.ACCENT)
+	title.visible = false
 	box.add_child(title)
 	var row := HBoxContainer.new()
 	assignment_scope_option = OptionButton.new()
-	var labels := ["CURRENT OCCURRENCE / EXACT TARGET", "FIGHTER + ROLE + VISUAL SIDE", "FIGHTER + ROLE", "ROLE + VISUAL SIDE", "ROLE", "STATIC ELEMENT", "ADVANCED SELECTOR"]
+	var labels := ["Exact target", "Fighter + role + side", "Fighter + role", "Role + visual side", "Role", "Static element", "Advanced selector"]
 	for label in labels:
 		assignment_scope_option.add_item(label)
 	assignment_scope_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -812,19 +938,22 @@ func _build_assignment_scope_controls(parent: Node) -> void:
 	assignment_scope_count = Label.new()
 	assignment_scope_count.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	assignment_scope_count.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
+	row.add_child(assignment_scope_count)
 	box.add_child(row)
-	# Keep the selector itself shrink-safe. The affected-target count is status,
-	# not part of the selector's hit row, so a long count cannot push APPLY or
-	# the layer/recipe actions beyond the dock edge.
-	assignment_scope_count.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	box.add_child(assignment_scope_count)
+	# The compact row carries both the selector and affected-target count;
+	# assignment_scope_status remains a tooltip-only technical explanation.
+	assignment_scope_count.size_flags_horizontal = Control.SIZE_SHRINK_END
+	assignment_scope_count.custom_minimum_size.x = 0.0
+	assignment_scope_count.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	assignment_scope_status = Label.new()
 	assignment_scope_status.text = "Scope: current target"
 	assignment_scope_status.add_theme_font_size_override("font_size", 12)
 	assignment_scope_status.add_theme_color_override("font_color", FxLabUiTokensScript.TEXT_DIM)
 	assignment_scope_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	assignment_scope_status.clip_text = true
+	assignment_scope_status.visible = true
 	assignment_scope_status.tooltip_text = "The visible scope is the exact assignment selector used by APPLY/UPDATE."
+	assignment_scope_option.tooltip_text = "Scope selector — choose the assignment reach used by APPLY/UPDATE"
 	box.add_child(assignment_scope_status)
 	assignment_scope_advanced = VBoxContainer.new()
 	assignment_scope_advanced.add_theme_constant_override("separation", 1)
@@ -1056,12 +1185,40 @@ func _draw_timeline(ruler: Control) -> void:
 func _on_resized() -> void:
 	if body == null:
 		return
+	# Study zoom is useful during review but is secondary to target discovery,
+	# preview, and the authoring dock. Remove its minimum width at the 1280px
+	# floor instead of allowing it to push the DCC shell outside the window.
+	var available_width := float(get_window().size.x) if get_window() != null else size.x
+	for zoom_button in study_buttons.values():
+		if zoom_button is Control:
+			(zoom_button as Control).visible = available_width >= 1400.0
 	_apply_browser_mode()
 	_apply_timeline()
 	_toolbar_overflow()
 	_apply_layers_split()
 	_layout_modal_panel(delete_panel)
 	_layout_modal_panel(review_panel)
+
+func _on_target_actions_menu(id: int) -> void:
+	# Keep the target card compact: Save/Apply stay visible, while secondary
+	# mutation/review actions remain reachable through one explicit menu.
+	match id:
+		1:
+			_action_toggle_styling()
+		2:
+			_action_why()
+		3:
+			_action_undo()
+		4:
+			_action_redo()
+		5:
+			_action_revert()
+		6:
+			_action_unassign()
+		7:
+			_action_make_unique()
+		8:
+			_action_edit_shared()
 
 func _apply_state() -> void:
 	var dock_hidden := _is_dock_hidden()
@@ -1127,9 +1284,10 @@ func _apply_timeline() -> void:
 func _apply_layers_split() -> void:
 	if layers_box == null:
 		return
-	var ratio := clampf(float(ws.data.get("layers_split", 0.42)), 0.15, 0.85)
+	var ratio := clampf(float(ws.data.get("layers_split", 0.38)), 0.24, 0.58)
 	layers_box.size_flags_stretch_ratio = ratio
-	inspector_box.size_flags_stretch_ratio = 1.0 - ratio
+	if authoring_tabs != null:
+		authoring_tabs.size_flags_stretch_ratio = 1.0 - ratio
 
 func _toolbar_overflow() -> void:
 	if toolbar == null:
@@ -1277,6 +1435,18 @@ func _toggle_browser() -> void:
 	ws.data["browser_intent"] = WorkspaceStateScript.INTENT_USER_CLOSED if open_now else WorkspaceStateScript.INTENT_USER_OPEN
 	ws.data["browser_collapsed"] = open_now
 	_apply_browser_mode()
+	ws.save_state()
+
+func _open_browser_from_empty() -> void:
+	# The no-target state has one obvious route into discovery. Keep this a real
+	# workspace toggle so the same action works when the browser is auto-collapsed
+	# at the 1280px floor.
+	if browser == null:
+		return
+	if not browser.visible:
+		ws.data["browser_intent"] = WorkspaceStateScript.INTENT_USER_OPEN
+		ws.data["browser_collapsed"] = false
+		_apply_browser_mode()
 	ws.save_state()
 
 func _toggle_dock() -> void:
@@ -1487,6 +1657,8 @@ func _refresh_selection_ui() -> void:
 	var registry = runtime.registry
 	if selected_key == "" or not registry.slot_nodes.has(selected_key):
 		breadcrumb_label.text = "NO TARGET SELECTED"
+		if open_browser_button != null:
+			open_browser_button.visible = true
 		status_title.text = "NO TARGET SELECTED"
 		status_badge.text = "○ UNASSIGNED"
 		status_badge.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
@@ -1509,6 +1681,8 @@ func _refresh_selection_ui() -> void:
 		return
 	var ctx: Dictionary = registry.context_for_key(selected_key)
 	breadcrumb_label.text = _breadcrumb(ctx)
+	if open_browser_button != null:
+		open_browser_button.visible = false
 	status_title.text = _breadcrumb(ctx)
 	if _session_ready():
 		status_badge.text = session.badge_text()
@@ -1890,7 +2064,7 @@ func _action_add_recipe(recipe_id: String) -> void:
 	if bool(result.get("ok", false)):
 		selected_layer_id = str((recipe_layers[0] as Dictionary).get("layer_id", "")) if not recipe_layers.is_empty() else selected_layer_id
 		var recipe: Dictionary = FxRecipesScript.get_recipe(recipe_id)
-		action_status.text = "✓ Added Hero Recipe · " + str(recipe.get("name", recipe_id))
+		action_status.text = "✓ Added Recipe · " + str(recipe.get("name", recipe_id))
 		_schedule_stash()
 		_render_current_look()
 		_rebuild_layers_panel()
@@ -2435,17 +2609,17 @@ func _sync_actions() -> void:
 	action_unique.visible = scope_valid and str(session.mode) == "SHARED_PROTECTED"
 	action_edit_shared.visible = scope_valid and str(session.mode) == "SHARED_PROTECTED"
 	if target_action_row2 != null:
-		target_action_row2.visible = has
+		target_action_row2.visible = has and str(session.mode) == "SHARED_PROTECTED"
 	if protected_actions_host != null:
-		protected_actions_host.visible = has
+		protected_actions_host.visible = has and str(session.mode) == "SHARED_PROTECTED"
 	if protected_actions_spacer != null:
-		protected_actions_spacer.visible = has and str(session.mode) != "SHARED_PROTECTED"
+		protected_actions_spacer.visible = false
 	if add_menu != null:
 		add_menu.visible = has
 	for recipe_button in recipe_add_buttons:
 		(recipe_button as Button).disabled = not has or not session.is_editable()
 	if recipe_rows != null:
-		recipe_rows.visible = has
+		recipe_rows.visible = true
 	if undo_button != null:
 		var editable: bool = has and session.is_editable()
 		undo_button.disabled = not editable
@@ -2513,10 +2687,10 @@ func _layer_row(layer: Dictionary) -> Control:
 	row.mouse_filter = Control.MOUSE_FILTER_PASS
 	var eye := Button.new()
 	eye.name = "VisibilityButton"
-	eye.custom_minimum_size = Vector2(64, FxLabUiTokensScript.HIT_HEIGHT)
+	eye.custom_minimum_size = Vector2(FxLabUiTokensScript.HIT_WIDTH, FxLabUiTokensScript.HIT_HEIGHT)
 	FxLabUiTokensScript.apply_hit_target(eye)
-	eye.text = "VISIBLE" if bool(layer.get("enabled", true)) else "HIDDEN"
-	eye.tooltip_text = "Visibility: click to %s this layer" % ("hide" if bool(layer.get("enabled", true)) else "show")
+	eye.text = "◉" if bool(layer.get("enabled", true)) else "○"
+	eye.tooltip_text = "Visible — click to hide this layer" if bool(layer.get("enabled", true)) else "Hidden — click to show this layer"
 	eye.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	eye.pressed.connect(func() -> void: _edit_layer(layer_id, func(doc):
 		var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
@@ -2525,10 +2699,10 @@ func _layer_row(layer: Dictionary) -> Control:
 	row.add_child(eye)
 	var lock := Button.new()
 	lock.name = "LockButton"
-	lock.custom_minimum_size.x = 72
+	lock.custom_minimum_size.x = FxLabUiTokensScript.HIT_WIDTH
 	FxLabUiTokensScript.apply_hit_target(lock)
-	lock.text = "LOCKED" if bool(layer.get("locked", false)) else "UNLOCKED"
-	lock.tooltip_text = "Edit lock: %s" % ("editing blocked" if bool(layer.get("locked", false)) else "editing allowed")
+	lock.text = "🔒" if bool(layer.get("locked", false)) else "🔓"
+	lock.tooltip_text = "Locked — click to allow editing" if bool(layer.get("locked", false)) else "Unlocked — click to lock editing"
 	lock.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	lock.pressed.connect(func() -> void:
 		if not _session_ready() or not session.is_editable():
@@ -2568,9 +2742,9 @@ func _layer_row(layer: Dictionary) -> Control:
 	row.add_child(pick)
 	var drag := Button.new()
 	drag.name = "DragButton"
-	drag.text = "↕ DRAG"
-	drag.tooltip_text = "Drag this layer onto another row or plane section"
-	drag.custom_minimum_size.x = 50
+	drag.text = "⠿"
+	drag.tooltip_text = "Drag handle — move this layer onto another row or plane section"
+	drag.custom_minimum_size.x = FxLabUiTokensScript.HIT_WIDTH
 	drag.flat = true
 	FxLabUiTokensScript.apply_hit_target(drag)
 	drag.add_theme_font_size_override("font_size", UiTokens.T_HELP)
@@ -2580,10 +2754,10 @@ func _layer_row(layer: Dictionary) -> Control:
 	var menu := MenuButton.new()
 	menu.name = "ContextMenu"
 	FxLabUiTokensScript.apply_hit_target(menu)
-	menu.text = "CONTEXT"
+	menu.text = "⋯"
 	menu.flat = true
-	menu.custom_minimum_size.x = 66
-	menu.tooltip_text = "Layer context actions"
+	menu.custom_minimum_size.x = FxLabUiTokensScript.HIT_WIDTH
+	menu.tooltip_text = "Layer context actions — duplicate, move, reset, delete, copy or paste"
 	menu.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	menu.get_popup().add_item("Duplicate Layer", 1)
 	menu.get_popup().add_item("Move Up", 2)
@@ -2939,6 +3113,7 @@ func _rebuild_inspector() -> void:
 		misc_spin.step = float(spec[4])
 		misc_spin.value = float(displacement.get(str(spec[1]), spec[2]))
 		misc_spin.custom_minimum_size.x = 84
+		misc_spin.set_meta("canonical_field", "displacement.%s" % str(spec[1]))
 		misc_spin.editable = not protected
 		misc_spin.value_changed.connect(func(value: float) -> void: _edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
