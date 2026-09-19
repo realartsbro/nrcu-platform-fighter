@@ -1,8 +1,10 @@
 extends SceneTree
 # Phase 4 clock regressions (windowed — needs real frames + shell):
-# TM-01 playback advances the renderer FX clock; TM-02 numeric entry syncs
-# both clocks; TM-05 seeks reconstruct ENTRY/HOLD/EXIT; TM-06 seeks and
-# edits never steal the user's play/pause choice.
+# TM-01 playback advances the presentation lifecycle without implicitly
+# advancing the authoring FX clock; TM-02 numeric entry syncs both clocks;
+# TM-05 seeks reconstruct ENTRY/HOLD/EXIT; TM-06 seeks and edits never steal
+# the user's play/pause choice; TM-07 keeps direct lifecycle seeks separate
+# from explicit shell authoring transport.
 
 const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
 
@@ -46,12 +48,18 @@ func _quad_fx_time() -> float:
 
 func _tm01_playback_advances_fx_clock() -> void:
 	shell.renderer.apply_composition([{"key": "mark", "look": (shell.production.load_look("TM_CLOCK") as Dictionary)["doc"]}])
-	shell.runtime.screen.lab_preview_resume()
-	var t0 := _quad_fx_time()
+	var screen = shell.runtime.screen
+	var authoring_t0 := float(shell.renderer.clock_state().get("presentation_time", -1.0))
+	# Direct lifecycle control enters the open-ended HOLD without touching the
+	# shell's authoring/evaluation playhead.
+	screen.lab_preview_seek(screen.hold_start_time() + 0.05)
+	screen.lab_preview_resume()
+	var lifecycle_t0 := float(screen.elapsed())
 	await settle(30)
-	var t1 := _quad_fx_time()
-	_check(t1 > t0 + 0.2, "TM-01 playback advances renderer FX clock", "t0=%.2f t1=%.2f" % [t0, t1])
-	shell.runtime.screen.lab_preview_pause()
+	var lifecycle_t1 := float(screen.elapsed())
+	var authoring_t1 := float(shell.renderer.clock_state().get("presentation_time", -1.0))
+	_check(str(screen.state()) == "hold" and lifecycle_t1 > lifecycle_t0 + 0.2 and absf(authoring_t1 - authoring_t0) < 0.01, "TM-01 open-ended lifecycle advances without implicit authoring FX-time mutation", "lifecycle=%.2f->%.2f authoring=%.2f->%.2f" % [lifecycle_t0, lifecycle_t1, authoring_t0, authoring_t1])
+	screen.lab_preview_pause()
 
 func _tm02_numeric_entry_syncs() -> void:
 	shell._on_time_entered(1.2)
@@ -72,10 +80,19 @@ func _tm05_exit_seekable() -> void:
 	await settle(2)
 	_check(str(screen.state()) == "exit", "TM-05 late seek reconstructs EXIT", str(screen.state()))
 	_check(bool(screen.match_ready_signalled()), "TM-05 EXIT seek keeps match-ready", str(screen.match_ready_signalled()))
+	var direct_authoring_t := float(shell.renderer.clock_state().get("presentation_time", -1.0))
+	var direct_spin_t := float(shell.time_spin.value)
 	screen.lab_preview_seek(24.0)
 	await settle(3)
-	_check(absf(float(shell.time_spin.value) - float(shell.TIMELINE_LEN)) < 0.01, "TM-07 authoring clock clamps beyond presentation hold", "spin=%.3f" % float(shell.time_spin.value))
-	_check(str(shell.timeline_time_label.text).begins_with("T 2.400 / 2.400"), "TM-07 timeline has one bounded visible clock", shell.timeline_time_label.text)
+	var direct_after_t := float(shell.renderer.clock_state().get("presentation_time", -1.0))
+	_check(absf(direct_after_t - direct_authoring_t) < 0.01 and absf(float(shell.time_spin.value) - direct_spin_t) < 0.01, "TM-07 direct screen lifecycle seek leaves authoring playhead unchanged", "spin=%.3f->%.3f fx=%.3f->%.3f" % [direct_spin_t, float(shell.time_spin.value), direct_authoring_t, direct_after_t])
+	# Only explicit shell transport clamps and synchronizes the bounded
+	# authoring/evaluation clock to the visible timeline.
+	shell._on_time_entered(24.0)
+	await settle(3)
+	var explicit_t := float(shell.renderer.clock_state().get("presentation_time", -1.0))
+	_check(absf(float(shell.time_spin.value) - float(shell.TIMELINE_LEN)) < 0.01 and absf(explicit_t - float(shell.TIMELINE_LEN)) < 0.01, "TM-07 explicit shell transport clamps authoring clock beyond presentation hold", "spin=%.3f fx=%.3f" % [float(shell.time_spin.value), explicit_t])
+	_check(str(shell.timeline_time_label.text).begins_with("T 2.400 / 2.400"), "TM-07 explicit shell transport updates bounded visible clock", shell.timeline_time_label.text)
 
 func _tm06_seek_keeps_play_choice() -> void:
 	var screen = shell.runtime.screen
