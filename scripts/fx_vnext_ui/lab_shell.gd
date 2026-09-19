@@ -1652,13 +1652,13 @@ func _render_current_look() -> void:
 	# rebuild/switch/remount can neither leak nor silently drop debug state.
 	renderer.set_debug_view(debug_view)
 	_update_debug_badge()
-	# Park the transport at its current presentation time so the preview stays a
-	# deterministic still (and layer motion follows the same time).
-	var parked := 0.0
-	if runtime.has_method("elapsed"):
-		parked = clampf(float(runtime.elapsed()), 0.0, TIMELINE_LEN)
-	runtime.seek(parked)
-	renderer.set_time(parked)
+	# Keep presentation lifecycle time/state owned by the mounted screen. The
+	# renderer has its own authoring/evaluation clock, advanced only by explicit
+	# transport actions; rebuilding a Look must never seek the presentation.
+	var authoring_time := 0.0
+	if renderer.has_method("clock_state"):
+		authoring_time = float(renderer.clock_state().get("presentation_time", 0.0))
+	renderer.set_time(authoring_time)
 	_plan_status = built["detail"]
 	_rendered_key = str(session.current_key) if session != null else ""
 	if bool(result.get("ok", false)):

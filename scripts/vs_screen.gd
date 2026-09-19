@@ -392,7 +392,11 @@ func lab_preview_seek(seconds: float) -> bool:
 		_restore_root_opaque()
 	# TM-06: a seek reconstructs the frame for t but never changes the
 	# user's play/pause choice — editing or scrubbing during playback must
-	# not park the preview behind the user's back.
+	# not park the preview behind the user's back. A seek back from DONE also
+	# resurrects the processing authority when the user was playing.
+	if _state != STATE_DONE:
+		_started = true
+	_sync_process()
 	return true
 
 # --- start (DUEL_1V1, approved path) ----------------------------------------
@@ -1275,13 +1279,15 @@ func _step_exit() -> void:
 			# Ready/Go start hang off this signal, and the overlay is still up
 			# and still fully covering the frame (acceptance test 11).
 			_emit("transition_cover_reached")
-		return
-	var q := clampf((t - close) / maxf(reveal, 0.0001), 0.0, 1.0)
-	var root := get_node_or_null(P_ROOT) as Control
-	if root != null:
-		root.modulate.a = 1.0 - _ease_out_quad(q)
-	if q >= 1.0:
-		_finish()
+	# Direct preview seeks may cross both cover close and reveal in one call;
+	# continue into the reveal phase instead of returning at full cover.
+	if _cover_closed:
+		var q := clampf((t - close) / maxf(reveal, 0.0001), 0.0, 1.0)
+		var root := get_node_or_null(P_ROOT) as Control
+		if root != null:
+			root.modulate.a = 1.0 - _ease_out_quad(q)
+		if q >= 1.0:
+			_finish()
 
 func _ease_out_quad(t: float) -> float:
 	return 1.0 - (1.0 - t) * (1.0 - t)
@@ -1300,9 +1306,11 @@ func _finish() -> void:
 	_state = STATE_DONE
 	_started = false
 	_sync_process()
-	# Hidden before the signal: the overlay is never observable as still up once
-	# it has finished (the cover stays the last thing on screen until here).
-	visible = false
+	var preview_owned := bool(get_meta("fx_preview_no_teardown", false))
+	# Preview-owned screens remain visible on the deterministic EXIT frame. The
+	# game lifecycle keeps the legacy hidden-before-signal behavior.
+	if not preview_owned:
+		visible = false
 	# Teardown releases the cursor: ordinary frontend cursor behavior resumes
 	# (the frontend scope decides whether the hand is drawn again).
 	_release_cursor()
@@ -1312,7 +1320,7 @@ func _finish() -> void:
 	# minimum_exposure must never free the composition out from under the
 	# shared renderer (fail-closed lifetime belongs to the consumer).
 	# The game path never sets this meta and keeps exact legacy behavior.
-	if bool(get_meta("fx_preview_no_teardown", false)):
+	if preview_owned:
 		return
 	queue_free()
 
