@@ -23,6 +23,7 @@ const FxTemplatesScript := preload("res://scripts/fx_vnext/fx_templates.gd")
 const FxRecipesScript := preload("res://scripts/fx_vnext/fx_recipes.gd")
 const FxLayerRowScript := preload("res://scripts/fx_vnext_ui/fx_layer_row.gd")
 const FxPlaneSectionScript := preload("res://scripts/fx_vnext_ui/fx_plane_section.gd")
+const FxLabUiTokensScript := preload("res://scripts/fx_vnext_ui/fx_lab_ui_tokens.gd")
 
 const TIMELINE_LEN := 2.4
 const FRAME_STEP := 1.0 / 30.0
@@ -106,9 +107,20 @@ static func display_token(token: String) -> String:
 
 func _tab_page(tab_pages_ref: Dictionary, tab_name: String) -> VBoxContainer:
 	if tab_pages_ref.has(tab_name):
-		return tab_pages_ref[tab_name]
-	return tab_pages_ref.values()[0]
+		var page: Variant = tab_pages_ref[tab_name]
+		if page is VBoxContainer:
+			return page as VBoxContainer
+	return null
+
+func _tab_page_add(tab_pages_ref: Dictionary, tab_name: String, child: Node) -> void:
+	var page: VBoxContainer = _tab_page(tab_pages_ref, tab_name)
+	if page == null or child == null:
+		return
+	page.add_child(child)
+var _native_pointer_acquired := false
 var renderer
+var lab_theme: Theme
+var _popup_contracts: Array[PopupMenu] = []
 var _rendered_key := ""
 var _stash_at := 0.0
 var _stash_pending := false
@@ -125,6 +137,7 @@ var remount_button: Button
 var browser_toggle: Button
 var inspector_toggle: Button
 var timeline_toggle: Button
+var reset_workspace_button: Button
 
 # body
 var body: HBoxContainer
@@ -150,6 +163,7 @@ var protected_banner: Label
 var protected_banner_host: Control
 var assignment_scope_option: OptionButton
 var assignment_scope_count: Label
+var assignment_scope_status: Label
 var assignment_scope_advanced: VBoxContainer
 var assignment_scope_fields: Dictionary = {}
 var layers_box: VBoxContainer
@@ -158,6 +172,7 @@ var layers_split_handle: ColorRect
 var layers_rows: VBoxContainer
 var layers_empty: Label
 var add_layer_menu: MenuButton
+var add_effect_menu: MenuButton
 var recipe_add_buttons: Array = []
 var inspector_content: VBoxContainer
 var inspector_empty: Label
@@ -198,7 +213,36 @@ var timeline_resize_handle: ColorRect
 
 var _timing_retired := true # P0: timing tables live in FxScreenRuntime now
 
+func _native_pointer_service() -> Node:
+	if not is_inside_tree() or get_tree() == null:
+		return null
+	return get_tree().root.get_node_or_null("Cursor")
+
+func _acquire_native_pointer() -> void:
+	if _native_pointer_acquired:
+		return
+	var cursor := _native_pointer_service()
+	if cursor == null or not cursor.has_method("acquire_native_pointer"):
+		return
+	# Cursor owns the claim by object identity. Keep this shell as the stable
+	# owner across runtime.mount() calls; never release from a remount path.
+	_native_pointer_acquired = bool(cursor.call("acquire_native_pointer", self))
+
+func _release_native_pointer() -> void:
+	if not _native_pointer_acquired:
+		return
+	var cursor := _native_pointer_service()
+	_native_pointer_acquired = false
+	if cursor != null and cursor.has_method("release_native_pointer"):
+		cursor.call("release_native_pointer", self)
+
+func _exit_tree() -> void:
+	# queue_free, scene replacement, and explicit teardown all converge here.
+	# The local flag makes repeated lifecycle notifications harmless.
+	_release_native_pointer()
+
 func _ready() -> void:
+	_acquire_native_pointer()
 	# R3 §17: the workspace layout guarantees every primary control is inside the
 	# window at >= 1280x720 (progressive collapse below 1440; at 1280 every
 	# primary control fits with the brand hidden). Enforce that floor at the OS
@@ -220,7 +264,10 @@ func _ready() -> void:
 	if draft_override != "":
 		drafts.base_dir = draft_override
 	session = FxSessionScript.new(production, drafts)
+	lab_theme = FxLabUiTokensScript.make_theme()
+	theme = lab_theme
 	_build()
+	call_deferred("_apply_lab_ui_contract")
 	_update_pixel_space()
 	disp.add_child(runtime.subvp)
 	runtime.mount("1v1", "debug", "ice_mage", "doge_man")
@@ -251,7 +298,11 @@ func _update_pixel_space() -> void:
 	# Net rendering scale is 1:1; input coordinates stay pixel-true.
 	if not is_inside_tree():
 		return
-	var win := Vector2(DisplayServer.window_get_size())
+	# Window.size is the logical client canvas used by Control layout. The
+	# DisplayServer value is physical/DPI-scaled on Windows and made the shell
+	# wider than its actual viewport (the right dock and primary actions fell
+	# outside a nominal 1280px window).
+	var win := Vector2(get_window().size)
 	if win.x < 10.0 or win.y < 10.0:
 		return
 	var engine_scale := get_tree().root.get_final_transform().get_scale()
@@ -312,6 +363,7 @@ func _build_toolbar(parent: Node) -> void:
 	brand_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	toolbar.add_child(brand_label)
 
+	_toolbar_group_label("TRANSPORT")
 	_toolbar_button("⏮ START", _transport_to_start)
 	play_button = _toolbar_button("⏸ PAUSE", _toggle_transport)
 	_toolbar_button("◀ 1F", _transport_step_back)
@@ -336,16 +388,18 @@ func _build_toolbar(parent: Node) -> void:
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	toolbar.add_child(spacer)
 
+	_toolbar_group_label("VIEW")
 	browser_toggle = _toolbar_button("◧ BROWSER", _toggle_browser)
 	inspector_toggle = _toolbar_button("◨ INSPECTOR", _toggle_dock)
 	timeline_toggle = _toolbar_button("▤ TIMELINE", _toggle_timeline_expanded)
-	_toolbar_button("RESET WORKSPACE", _reset_workspace)
+	reset_workspace_button = _toolbar_button("RESET WORKSPACE", _reset_workspace)
 	preset_authoring = _toolbar_button("AUTHORING", func() -> void: _apply_workspace_preset("AUTHORING"))
-	preset_preview = _toolbar_button("PREVIEW", func() -> void: _apply_workspace_preset("PREVIEW"))
+	preset_preview = _toolbar_button("WORKSPACE", func() -> void: _apply_workspace_preset("PREVIEW"))
 
 	remount_button = _toolbar_button("⟲ REMOUNT", _remount_current)
 	review_button = _toolbar_button("⚠ REVIEW", _open_migration_review_queue)
-	preview_toggle = _toolbar_button("PREVIEW: WORKING", _toggle_preview_mode)
+	_toolbar_group_label("STATE")
+	preview_toggle = _toolbar_button("STATE: WORKING", _toggle_preview_mode)
 	overflow_button = MenuButton.new()
 	overflow_button.text = "⋯"
 	overflow_button.custom_minimum_size.x = 40
@@ -353,6 +407,15 @@ func _build_toolbar(parent: Node) -> void:
 	# Items are rebuilt by _toolbar_overflow() (dynamic overflow set);
 	# dispatch lives in _on_toolbar_overflow_chosen (single connection).
 	toolbar.add_child(overflow_button)
+
+func _toolbar_group_label(text: String) -> void:
+	var label := Label.new()
+	label.text = text
+	label.add_theme_font_size_override("font_size", 10)
+	label.add_theme_color_override("font_color", FxLabUiTokensScript.TEXT_MUTED)
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.tooltip_text = text.capitalize() + " controls"
+	toolbar.add_child(label)
 
 func _toolbar_button(text: String, callback: Callable) -> Button:
 	var button := _styled_button(text, callback)
@@ -362,14 +425,9 @@ func _toolbar_button(text: String, callback: Callable) -> Button:
 func _styled_button(text: String, callback: Callable) -> Button:
 	var button := Button.new()
 	button.text = text
-	button.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	FxLabUiTokensScript.apply_hit_target(button)
+	button.add_theme_font_size_override("font_size", 13)
 	button.pressed.connect(callback)
-	UiTokens.apply_styles(button, {
-		"normal": UiTokens.flat(UiTokens.SURFACE_1, UiTokens.RULE, UiTokens.STROKE, UiTokens.RADIUS_PLATE),
-		"hover": UiTokens.flat(UiTokens.SURFACE_2, UiTokens.RULE_WARM, UiTokens.STROKE, UiTokens.RADIUS_PLATE),
-		"pressed": UiTokens.flat(UiTokens.SURFACE_2, UiTokens.ACCENT, UiTokens.STROKE_STRONG, UiTokens.RADIUS_PLATE),
-		"focus": UiTokens.flat(UiTokens.SURFACE_2, UiTokens.ACCENT, UiTokens.STROKE, UiTokens.RADIUS_PLATE),
-	})
 	return button
 
 func _build_browser() -> void:
@@ -550,11 +608,11 @@ func _build_dock() -> void:
 	target_action_row = HBoxContainer.new()
 	target_action_row.add_theme_constant_override("separation", 4)
 	status_box.add_child(target_action_row)
-	action_save = _styled_button("SAVE DRAFT", Callable(self, "_action_save_draft"))
-	action_apply = _styled_button("Apply to Target", Callable(self, "_action_apply"))
-	action_styling = _styled_button("Active in Game: ON", Callable(self, "_action_toggle_styling"))
-	action_unique = _styled_button("MAKE UNIQUE", Callable(self, "_action_make_unique"))
-	action_edit_shared = _styled_button("Edit Shared Look", Callable(self, "_action_edit_shared"))
+	action_save = _styled_button("SAVE", Callable(self, "_action_save_draft"))
+	action_apply = _styled_button("APPLY", Callable(self, "_action_apply"))
+	action_styling = _styled_button("STYLING ON", Callable(self, "_action_toggle_styling"))
+	action_unique = _styled_button("UNIQUE", Callable(self, "_action_make_unique"))
+	action_edit_shared = _styled_button("EDIT SHARED", Callable(self, "_action_edit_shared"))
 	action_why = _styled_button("WHY?", Callable(self, "_action_why"))
 	for button in [action_save, action_apply, action_styling, action_why]:
 		target_action_row.add_child(button)
@@ -619,11 +677,23 @@ func _build_dock() -> void:
 	layers_header.add_child(layers_cost_label)
 	add_layer_menu = MenuButton.new()
 	add_layer_menu.text = "+ ADD LAYER"
-	add_layer_menu.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	FxLabUiTokensScript.apply_hit_target(add_layer_menu)
+	add_layer_menu.custom_minimum_size.x = 84
+	add_layer_menu.add_theme_font_size_override("font_size", 11)
 	for template in FxTemplatesScript.TEMPLATES:
 		add_layer_menu.get_popup().add_item(template)
 	add_layer_menu.get_popup().id_pressed.connect(func(index: int) -> void: _action_add_layer(FxTemplatesScript.TEMPLATES[index]))
 	layers_header.add_child(add_layer_menu)
+	add_effect_menu = MenuButton.new()
+	add_effect_menu.text = "+ ADD EFFECT"
+	FxLabUiTokensScript.apply_hit_target(add_effect_menu)
+	add_effect_menu.custom_minimum_size.x = 88
+	add_effect_menu.add_theme_font_size_override("font_size", 11)
+	var effect_templates: Array = ["Outer Halo", "Edge Treatment", "RGB Tear", "Dither Treatment", "Custom FX Layer"]
+	for template in effect_templates:
+		add_effect_menu.get_popup().add_item(template)
+	add_effect_menu.get_popup().id_pressed.connect(func(index: int) -> void: _action_add_layer(effect_templates[index]))
+	layers_header.add_child(add_effect_menu)
 	layers_empty = _section_empty(layers_box, "No design yet.\nSelect a target — the layer stack opens here.")
 	layers_rows = VBoxContainer.new()
 	layers_rows.add_theme_constant_override("separation", 2)
@@ -656,18 +726,16 @@ func _build_dock() -> void:
 	inspector_inner.add_theme_constant_override("separation", 4)
 	inspector_inner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	inspector_scroll.add_child(inspector_inner)
-	inspector_empty.reparent(inspector_inner)
-	inspector_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	inspector_inner.add_child(inspector_content)
 
+	# Production and Recipe are secondary authoring surfaces. Keep them above
+	# the deep inspector in this scroll so both Hero Recipe actions are visible
+	# at the 1280x720 floor without stealing space from Target/Layers.
 	# ---- Production inventory (persisted Looks) -------------------------------
 	_section_header(inspector_inner, "PRODUCTION LOOK INVENTORY")
 	library_rows = VBoxContainer.new()
 	library_rows.add_theme_constant_override("separation", 2)
 	inspector_inner.add_child(library_rows)
-	# Recipes are authoring templates, not persisted Production Looks. Keep the
-	# two inventories visibly separate so a recipe can never masquerade as a
-	# selectable/assignable Production asset.
+	# Recipes are authoring templates, not persisted Production Looks.
 	_section_header(inspector_inner, "RECIPE LIBRARY · AUTHORING TEMPLATES")
 	recipe_rows = VBoxContainer.new()
 	recipe_rows.add_theme_constant_override("separation", 2)
@@ -675,18 +743,30 @@ func _build_dock() -> void:
 		var recipe_data: Dictionary = recipe
 		var recipe_id := str(recipe_data.get("stable_id", ""))
 		var recipe_row := HBoxContainer.new()
+		recipe_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		recipe_row.custom_minimum_size.y = 40
 		var recipe_label := Label.new()
-		recipe_label.text = "%s  · HERO RECIPE\n%s" % [str(recipe_data.get("name", recipe_id)), str(recipe_data.get("intent", recipe_data.get("description", "")))]
+		recipe_label.text = "%s · HERO RECIPE" % str(recipe_data.get("name", recipe_id))
+		recipe_label.tooltip_text = str(recipe_data.get("intent", recipe_data.get("description", "")))
 		recipe_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		recipe_label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
-		recipe_label.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
+		recipe_label.size_flags_stretch_ratio = 1.0
+		recipe_label.custom_minimum_size.x = 0
+		recipe_label.add_theme_font_size_override("font_size", 12)
+		recipe_label.add_theme_color_override("font_color", FxLabUiTokensScript.TEXT_DIM)
+		recipe_label.clip_text = true
+		recipe_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		recipe_row.add_child(recipe_label)
 		var recipe_add := _styled_button("ADD", func() -> void: _action_add_recipe(recipe_id))
-		recipe_add.tooltip_text = "Instantiate %s into the current draft; it is not a Production Look. Advanced fields remain available." % recipe_id
+		recipe_add.custom_minimum_size = Vector2(52, FxLabUiTokensScript.HIT_HEIGHT)
+		recipe_add.tooltip_text = "Add %s to the current draft. This is an authoring template, not a Production Look." % recipe_id
 		recipe_add_buttons.append(recipe_add)
 		recipe_row.add_child(recipe_add)
 		recipe_rows.add_child(recipe_row)
 	inspector_inner.add_child(recipe_rows)
+
+	inspector_empty.reparent(inspector_inner)
+	inspector_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inspector_inner.add_child(inspector_content)
 
 func _build_assignment_scope_controls(parent: Node) -> void:
 	var box := VBoxContainer.new()
@@ -721,8 +801,20 @@ func _build_assignment_scope_controls(parent: Node) -> void:
 	assignment_scope_count = Label.new()
 	assignment_scope_count.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	assignment_scope_count.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
-	row.add_child(assignment_scope_count)
 	box.add_child(row)
+	# Keep the selector itself shrink-safe. The affected-target count is status,
+	# not part of the selector's hit row, so a long count cannot push APPLY or
+	# the layer/recipe actions beyond the dock edge.
+	assignment_scope_count.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	box.add_child(assignment_scope_count)
+	assignment_scope_status = Label.new()
+	assignment_scope_status.text = "Scope: current target"
+	assignment_scope_status.add_theme_font_size_override("font_size", 12)
+	assignment_scope_status.add_theme_color_override("font_color", FxLabUiTokensScript.TEXT_DIM)
+	assignment_scope_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	assignment_scope_status.clip_text = true
+	assignment_scope_status.tooltip_text = "The visible scope is the exact assignment selector used by APPLY/UPDATE."
+	box.add_child(assignment_scope_status)
 	assignment_scope_advanced = VBoxContainer.new()
 	assignment_scope_advanced.add_theme_constant_override("separation", 1)
 	assignment_scope_advanced.visible = false
@@ -775,6 +867,10 @@ func _refresh_scope_ui() -> void:
 			if FxResolverScript.selector_matches(selector, runtime.registry.context_for_key(str(key))):
 				affected += 1
 	assignment_scope_count.text = "affects %d target%s" % [affected, "" if affected == 1 else "s"]
+	if assignment_scope_status != null:
+		var scope_name: String = str(session.assignment_scope_text())
+		assignment_scope_status.text = "Scope: %s · %d target%s" % [scope_name, affected, "" if affected == 1 else "s"]
+		assignment_scope_status.tooltip_text = "APPLY/UPDATE commits this exact scope: " + scope_name
 
 func _section_header(parent: Node, text: String) -> void:
 	var label := Label.new()
@@ -1021,7 +1117,9 @@ func _apply_layers_split() -> void:
 func _toolbar_overflow() -> void:
 	if toolbar == null:
 		return
-	brand_label.visible = size.x >= 1240.0
+	# Keep brand context on a wide desktop; at the 1280 floor it yields to
+	# transport and state controls.
+	brand_label.visible = size.x >= 1440.0
 	# Dynamic overflow: collapse least-critical buttons into the "⋯" menu
 	# until the toolbar fits the real window width. Static width tiers are
 	# whack-a-mole across DPIs and fonts; measuring is the only honest gate
@@ -1029,8 +1127,9 @@ func _toolbar_overflow() -> void:
 	var pool: Array = [
 		[remount_button, "⟲ REMOUNT", _remount_current],
 		[review_button, "⚠ REVIEW", _open_migration_review_queue],
+		[reset_workspace_button, "RESET WORKSPACE", _reset_workspace],
 		[preset_authoring, "AUTHORING", func() -> void: _apply_workspace_preset("AUTHORING")],
-		[preset_preview, "PREVIEW", func() -> void: _apply_workspace_preset("PREVIEW")],
+		[preset_preview, "WORKSPACE", func() -> void: _apply_workspace_preset("PREVIEW")],
 	]
 	var popup := overflow_button.get_popup()
 	popup.clear()
@@ -1059,8 +1158,9 @@ func _on_toolbar_overflow_chosen(id: int) -> void:
 	var pool: Array = [
 		[remount_button, "⟲ REMOUNT", _remount_current],
 		[review_button, "⚠ REVIEW", _open_migration_review_queue],
+		[reset_workspace_button, "RESET WORKSPACE", _reset_workspace],
 		[preset_authoring, "AUTHORING", func() -> void: _apply_workspace_preset("AUTHORING")],
-		[preset_preview, "PREVIEW", func() -> void: _apply_workspace_preset("PREVIEW")],
+		[preset_preview, "WORKSPACE", func() -> void: _apply_workspace_preset("PREVIEW")],
 	]
 	var hidden: Array = []
 	for entry in pool:
@@ -1383,6 +1483,9 @@ func _refresh_selection_ui() -> void:
 		status_badge.text = "○ UNASSIGNED"
 		status_badge.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
 		status_detail.text = "-"
+		if assignment_scope_status != null:
+			assignment_scope_status.text = "Scope: select a target"
+			assignment_scope_status.tooltip_text = "Select a target before choosing an assignment scope."
 		if protected_banner != null:
 			protected_banner.visible = false
 			protected_banner_host.visible = false
@@ -1567,7 +1670,7 @@ func _render_current_look() -> void:
 func _toggle_preview_mode() -> void:
 	preview_mode = "PRODUCTION" if preview_mode == "WORKING" else "WORKING"
 	if preview_toggle != null:
-		preview_toggle.text = "PREVIEW: " + preview_mode
+		preview_toggle.text = "STATE: " + preview_mode
 	_render_current_look()
 
 func _production_look_for(key: String) -> Dictionary:
@@ -1851,7 +1954,10 @@ func _refresh_library() -> void:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 4)
 		var label := Label.new()
-		label.text = "%s  rev%d · used×%d" % [str(entry["look_id"]), int(entry["revision"]), int(entry["usage"])]
+		label.text = "Production Look · rev%d · used by %d target%s" % [int(entry["revision"]), int(entry["usage"]), "" if int(entry["usage"]) == 1 else "s"]
+		label.tooltip_text = "Production Look assignment status · revision %d" % int(entry["revision"])
+		label.clip_text = true
+		label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 		label.add_theme_color_override("font_color", UiTokens.ACCENT if str(entry["look_id"]) == current_look else UiTokens.CREAM_DIM)
 		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2087,7 +2193,7 @@ func _action_apply(look_id_override := "") -> void:
 		return
 	var result: Dictionary = session.apply(look_id_override)
 	if bool(result.get("ok", false)):
-		action_status.text = "✓ Applied %s (rev %d)" % [str(result["look_id"]), int(result["revision"])]
+		action_status.text = "✓ Applied current draft · revision %d" % int(result["revision"])
 		browser.rebuild()
 	else:
 		action_status.text = "✗ " + str(result.get("errors", []))
@@ -2113,7 +2219,7 @@ func _action_make_unique() -> void:
 		return
 	var result: Dictionary = session.make_unique()
 	if bool(result.get("ok", false)):
-		action_status.text = "✓ Unique Look: " + str(result["look_id"])
+		action_status.text = "✓ Created a unique editable Production Look"
 		browser.rebuild()
 	else:
 		action_status.text = "✗ " + str(result.get("errors", []))
@@ -2214,17 +2320,17 @@ func _sync_actions() -> void:
 	action_styling.disabled = not scope_valid
 	action_why.disabled = not has
 	var scope: String = session.assignment_scope_text() if has else ""
-	action_styling.text = ("Active in Game: " + ("ON" if session.styling_enabled else "OFF")) if has else "Active in Game"
+	action_styling.text = ("STYLING " + ("ON" if session.styling_enabled else "OFF")) if has else "STYLING"
 	action_styling.tooltip_text = "Styling scope: " + scope if has else ""
 	if action_unassign != null:
 		action_unassign.text = "UNASSIGN"
 		action_unassign.disabled = not scope_valid
 		action_unassign.tooltip_text = "Unassign scope: " + scope if scope_valid else "Choose a non-empty assignment scope"
-	action_apply.text = "Update Target Style" if (has and str(session.base.get("kind", "")) == "production") else "Apply to Target"
-	# RS-07: the commit scope is part of the action label, not hidden.
+	action_apply.text = "UPDATE" if (has and str(session.base.get("kind", "")) == "production") else "APPLY"
 	if has:
-		action_apply.text += " · " + session.assignment_scope_text()
 		action_apply.tooltip_text = "Commits to assignment scope: " + session.assignment_scope_text()
+	else:
+		action_apply.tooltip_text = "Select a target and choose a non-empty assignment scope"
 	action_unique.visible = scope_valid and str(session.mode) == "SHARED_PROTECTED"
 	action_edit_shared.visible = scope_valid and str(session.mode) == "SHARED_PROTECTED"
 	if target_action_row2 != null:
@@ -2235,6 +2341,8 @@ func _sync_actions() -> void:
 		protected_actions_spacer.visible = has and str(session.mode) != "SHARED_PROTECTED"
 	if add_layer_menu != null:
 		add_layer_menu.visible = has
+	if add_effect_menu != null:
+		add_effect_menu.visible = has
 	for recipe_button in recipe_add_buttons:
 		(recipe_button as Button).disabled = not has or not session.is_editable()
 	if recipe_rows != null:
@@ -2293,16 +2401,20 @@ func _rebuild_layers_panel() -> void:
 		for index in range(plane_rows.size()):
 			section_box.add_child(_layer_row(plane_rows[index]))
 		layers_rows.add_child(section)
+	_apply_lab_ui_contract()
 
 func _layer_row(layer: Dictionary) -> Control:
 	var row = FxLayerRowScript.new()
 	row.shell = self
 	var layer_id := str(layer.get("layer_id", ""))
 	row.layer_id = layer_id
-	row.add_theme_constant_override("separation", 4)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.custom_minimum_size = Vector2(0, FxLabUiTokensScript.HIT_HEIGHT)
+	row.add_theme_constant_override("separation", 2)
 	row.mouse_filter = Control.MOUSE_FILTER_PASS
 	var eye := Button.new()
-	eye.flat = true
+	eye.custom_minimum_size = Vector2(FxLabUiTokensScript.HIT_WIDTH, FxLabUiTokensScript.HIT_HEIGHT)
+	FxLabUiTokensScript.apply_hit_target(eye)
 	eye.text = "●" if bool(layer.get("enabled", true)) else "○"
 	eye.tooltip_text = "Visibility"
 	eye.add_theme_font_size_override("font_size", UiTokens.T_HELP)
@@ -2312,7 +2424,7 @@ func _layer_row(layer: Dictionary) -> Control:
 	))
 	row.add_child(eye)
 	var lock := Button.new()
-	lock.flat = true
+	FxLabUiTokensScript.apply_hit_target(lock)
 	lock.text = "🔒" if bool(layer.get("locked", false)) else "·"
 	lock.tooltip_text = "Edit lock"
 	lock.add_theme_font_size_override("font_size", UiTokens.T_HELP)
@@ -2333,13 +2445,16 @@ func _layer_row(layer: Dictionary) -> Control:
 	)
 	row.add_child(lock)
 	var pick := Button.new()
-	pick.flat = true
+	FxLabUiTokensScript.apply_hit_target(pick)
 	pick.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	pick.text = "⋮⋮ " + str(layer.get("name", "Layer"))
 	pick.tooltip_text = "Drag onto another row or a plane section"
 	pick.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	pick.add_theme_color_override("font_color", UiTokens.ACCENT if layer_id == selected_layer_id else UiTokens.CREAM)
 	pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pick.custom_minimum_size.x = 0
+	pick.clip_text = true
+	pick.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	pick.pressed.connect(func() -> void:
 		selected_layer_id = layer_id
 		_rebuild_layers_panel()
@@ -2360,6 +2475,7 @@ func _layer_row(layer: Dictionary) -> Control:
 	opacity.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
 	row.add_child(opacity)
 	var menu := MenuButton.new()
+	FxLabUiTokensScript.apply_hit_target(menu)
 	menu.text = "⋯"
 	menu.flat = true
 	menu.add_theme_font_size_override("font_size", UiTokens.T_HELP)
@@ -2513,7 +2629,7 @@ func _rebuild_inspector() -> void:
 	title.text = "%s  ·  %s" % [str(layer.get("name", "")), type]
 	title.add_theme_font_size_override("font_size", UiTokens.T_META)
 	title.add_theme_color_override("font_color", UiTokens.CREAM)
-	_tab_page(tab_pages, tab_identity).add_child(title)
+	_tab_page_add(tab_pages, tab_identity, title)
 	var name_edit := LineEdit.new()
 	name_edit.text = str(layer.get("name", ""))
 	name_edit.editable = not protected
@@ -2524,7 +2640,7 @@ func _rebuild_inspector() -> void:
 			(FxLookScript.find_layer(doc, layer_id))["name"] = text.strip_edges()
 		)
 	)
-	_tab_page(tab_pages, tab_identity).add_child(name_edit)
+	_tab_page_add(tab_pages, tab_identity, name_edit)
 
 	# --- Opacity / Blend ---------------------------------------------------------
 	var opacity_slider := _inspector_slider("Opacity", 0.0, 1.0, 0.01, float(layer.get("opacity", 1.0)), protected, func(value: float) -> void:
@@ -2533,13 +2649,13 @@ func _rebuild_inspector() -> void:
 		, false, true)
 	, "layer:%s:opacity" % layer_id
 	)
-	_tab_page(tab_pages, tab_identity).add_child(opacity_slider)
+	_tab_page_add(tab_pages, tab_identity, opacity_slider)
 	var blend := _inspector_option("Blend", FxLookScript.BLEND_MODES, str(layer.get("blend_mode", "NORMAL")), protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			(FxLookScript.find_layer(doc, layer_id))["blend_mode"] = value
 		, false)
 	)
-	_tab_page(tab_pages, tab_identity).add_child(blend)
+	_tab_page_add(tab_pages, tab_identity, blend)
 
 	# --- Plane --------------------------------------------------------------------
 	var plane_opt := _inspector_option("Plane", FxLookScript.PLANES, str(layer.get("plane", "TARGET_SOURCE")), protected or is_source, func(value: String) -> void:
@@ -2553,7 +2669,7 @@ func _rebuild_inspector() -> void:
 	if is_source:
 		plane_opt.tooltip_text = "Mandatory SOURCE is fixed to TARGET_SOURCE"
 	plane_opt.set_meta("canonical_field", "layer.plane")
-	_tab_page(tab_pages, tab_identity).add_child(plane_opt)
+	_tab_page_add(tab_pages, tab_identity, plane_opt)
 
 	if type == "FX":
 		var input_row := _inspector_option("Input", FxLookScript.INPUTS, str(layer.get("input", "ORIGINAL_SOURCE")), protected, func(value: String) -> void:
@@ -2562,7 +2678,7 @@ func _rebuild_inspector() -> void:
 			, false)
 		)
 		input_row.set_meta("canonical_field", "layer.input")
-		_tab_page(tab_pages, "LOOK").add_child(input_row)
+		_tab_page_add(tab_pages, "LOOK", input_row)
 
 	# --- Transform ------------------------------------------------------------------
 	var transform: Dictionary = layer.get("transform", {})
@@ -2585,7 +2701,7 @@ func _rebuild_inspector() -> void:
 		, false, true, "layer:%s:transform.position_px.%d" % [layer_id, axis]))
 		_wire_spin_transaction(spin, "layer:%s:transform.position_px.%d" % [layer_id, axis])
 		pos_row.add_child(spin)
-	_tab_page(tab_pages, tab_transform).add_child(pos_row)
+	_tab_page_add(tab_pages, tab_transform, pos_row)
 
 	var scale_row := HBoxContainer.new()
 	var scale_label := Label.new()
@@ -2606,7 +2722,7 @@ func _rebuild_inspector() -> void:
 		, false, true, "layer:%s:transform.scale.%d" % [layer_id, axis]))
 		_wire_spin_transaction(scale_spin, "layer:%s:transform.scale.%d" % [layer_id, axis])
 		scale_row.add_child(scale_spin)
-	_tab_page(tab_pages, tab_transform).add_child(scale_row)
+	_tab_page_add(tab_pages, tab_transform, scale_row)
 
 	var rot_pivot_row := HBoxContainer.new()
 	var rot_label := Label.new()
@@ -2642,7 +2758,7 @@ func _rebuild_inspector() -> void:
 		, false, true, "layer:%s:transform.pivot.%d" % [layer_id, axis]))
 		_wire_spin_transaction(pivot_spin, "layer:%s:transform.pivot.%d" % [layer_id, axis])
 		rot_pivot_row.add_child(pivot_spin)
-	_tab_page(tab_pages, tab_transform).add_child(rot_pivot_row)
+	_tab_page_add(tab_pages, tab_transform, rot_pivot_row)
 
 	var flip_row := HBoxContainer.new()
 	for flip_key in ["flip_x", "flip_y"]:
@@ -2662,7 +2778,7 @@ func _rebuild_inspector() -> void:
 	)
 	reset_transform.disabled = protected
 	flip_row.add_child(reset_transform)
-	_tab_page(tab_pages, tab_transform).add_child(flip_row)
+	_tab_page_add(tab_pages, tab_transform, flip_row)
 
 	# --- Displacement -----------------------------------------------------------------
 	var displacement: Dictionary = layer.get("displacement", {})
@@ -2676,7 +2792,7 @@ func _rebuild_inspector() -> void:
 		(l["displacement"] as Dictionary)["enabled"] = pressed
 	, false))
 	disp_head.add_child(disp_check)
-	_tab_page(tab_pages, tab_motion).add_child(disp_head)
+	_tab_page_add(tab_pages, tab_motion, disp_head)
 	var driver_row := _inspector_option("Driver", FxLookScript.DISPLACEMENT_DRIVERS, str(displacement.get("driver", "NOISE")), protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
@@ -2684,7 +2800,7 @@ func _rebuild_inspector() -> void:
 		, true)
 	)
 	driver_row.set_meta("canonical_field", "displacement.driver")
-	_tab_page(tab_pages, tab_motion).add_child(driver_row)
+	_tab_page_add(tab_pages, tab_motion, driver_row)
 	var amount_row := HBoxContainer.new()
 	var amount_label := Label.new()
 	amount_label.text = "Amount"
@@ -2704,7 +2820,7 @@ func _rebuild_inspector() -> void:
 		, false, true, "layer:%s:displacement.amount_px.%d" % [layer_id, axis]))
 		_wire_spin_transaction(amount_spin, "layer:%s:displacement.amount_px.%d" % [layer_id, axis])
 		amount_row.add_child(amount_spin)
-	_tab_page(tab_pages, tab_motion).add_child(amount_row)
+	_tab_page_add(tab_pages, tab_motion, amount_row)
 	var disp_misc := HBoxContainer.new()
 	for spec in [["Speed", "speed", 0.0, 8.0, 0.05], ["Seed", "seed", 0.0, 999.0, 1.0], ["Angle", "angle_deg", -360.0, 360.0, 1.0]]:
 		var misc_label := Label.new()
@@ -2724,14 +2840,14 @@ func _rebuild_inspector() -> void:
 		, false, true, "layer:%s:displacement.%s" % [layer_id, str(spec[1])]))
 		_wire_spin_transaction(misc_spin, "layer:%s:displacement.%s" % [layer_id, str(spec[1])])
 		disp_misc.add_child(misc_spin)
-	_tab_page(tab_pages, tab_motion).add_child(disp_misc)
+	_tab_page_add(tab_pages, tab_motion, disp_misc)
 	var edge_row := _inspector_option("Edge", FxLookScript.EDGE_MODES, str(displacement.get("edge_mode", "TRANSPARENT")), protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["displacement"] as Dictionary)["edge_mode"] = value
 		, false)
 	)
-	_tab_page(tab_pages, tab_motion).add_child(edge_row)
+	_tab_page_add(tab_pages, tab_motion, edge_row)
 	# UI-01: displacement fully authorable — scale/phase/time/custom/influence.
 	var disp_extra := HBoxContainer.new()
 	for spec in [["Scale", "scale", 0.05, 8.0, 0.05], ["Phase", "phase", -8.0, 8.0, 0.1]]:
@@ -2752,14 +2868,14 @@ func _rebuild_inspector() -> void:
 		, false, true, "layer:%s:displacement.%s" % [layer_id, str(spec[1])]))
 		_wire_spin_transaction(extra_spin, "layer:%s:displacement.%s" % [layer_id, str(spec[1])])
 		disp_extra.add_child(extra_spin)
-	_tab_page(tab_pages, tab_motion).add_child(disp_extra)
-	_tab_page(tab_pages, tab_motion).add_child(_inspector_option("Time", FxLookScript.TIME_SOURCES, str(displacement.get("time_source", "PRESENTATION_TIME")), protected, func(value: String) -> void:
+	_tab_page_add(tab_pages, tab_motion, disp_extra)
+	_tab_page_add(tab_pages, tab_motion, _inspector_option("Time", FxLookScript.TIME_SOURCES, str(displacement.get("time_source", "PRESENTATION_TIME")), protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["displacement"] as Dictionary)["time_source"] = value
 		, true)
 	))
-	_tab_page(tab_pages, tab_motion).add_child(_dep_asset_row("displacement.custom_texture", "Custom tex", layer, layer_id, protected, func(text: String) -> void:
+	_tab_page_add(tab_pages, tab_motion, _dep_asset_row("displacement.custom_texture", "Custom tex", layer, layer_id, protected, func(text: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["displacement"] as Dictionary)["custom_texture"] = text.strip_edges() if text.strip_edges() != "" else null
@@ -2767,7 +2883,7 @@ func _rebuild_inspector() -> void:
 	))
 	_dep_note(tab_pages, tab_motion, "displacement.custom_texture", layer)
 	# --- influence mask subgroup (same contract as layer.mask, pre-displacement)
-	_tab_page(tab_pages, tab_motion).add_child(_fx_group_header("INFLUENCE"))
+	_tab_page_add(tab_pages, tab_motion, _fx_group_header("INFLUENCE"))
 	var infl = displacement.get("influence_mask", null)
 	var infl_dict: Dictionary = infl if infl is Dictionary else {}
 	var infl_check := CheckBox.new()
@@ -2782,20 +2898,20 @@ func _rebuild_inspector() -> void:
 			d["influence_mask"] = FxLookScript.neutral_mask()
 		(d["influence_mask"] as Dictionary)["enabled"] = pressed
 	, true))
-	_tab_page(tab_pages, tab_motion).add_child(infl_check)
+	_tab_page_add(tab_pages, tab_motion, infl_check)
 	var infl_source_row := _inspector_option("I-Source", FxLookScript.MASK_SOURCES, str(infl_dict.get("source", "NONE")), protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			_disp_ensure_influence(doc, layer_id)["source"] = value
 		, true)
 	)
 	infl_source_row.set_meta("canonical_field", "displacement.influence.source")
-	_tab_page(tab_pages, tab_motion).add_child(infl_source_row)
-	_tab_page(tab_pages, tab_motion).add_child(_inspector_option("I-Region", FxLookScript.MASK_REGIONS, str(infl_dict.get("region", "FULL")), protected, func(value: String) -> void:
+	_tab_page_add(tab_pages, tab_motion, infl_source_row)
+	_tab_page_add(tab_pages, tab_motion, _inspector_option("I-Region", FxLookScript.MASK_REGIONS, str(infl_dict.get("region", "FULL")), protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			_disp_ensure_influence(doc, layer_id)["region"] = value
 		, true)
 	))
-	_tab_page(tab_pages, tab_motion).add_child(_inspector_option("I-Space", FxLookScript.MASK_SPACES, str(infl_dict.get("space", "LAYER_SPACE")), protected, func(value: String) -> void:
+	_tab_page_add(tab_pages, tab_motion, _inspector_option("I-Space", FxLookScript.MASK_SPACES, str(infl_dict.get("space", "LAYER_SPACE")), protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			_disp_ensure_influence(doc, layer_id)["space"] = value
 		, true)
@@ -2826,8 +2942,8 @@ func _rebuild_inspector() -> void:
 		_disp_ensure_influence(doc, layer_id)["invert"] = pressed
 	, true))
 	infl_misc.add_child(infl_invert)
-	_tab_page(tab_pages, tab_motion).add_child(infl_misc)
-	_tab_page(tab_pages, tab_motion).add_child(_dep_asset_row("displacement.influence_mask.custom_mask", "I-Custom", layer, layer_id, protected, func(text: String) -> void:
+	_tab_page_add(tab_pages, tab_motion, infl_misc)
+	_tab_page_add(tab_pages, tab_motion, _dep_asset_row("displacement.influence_mask.custom_mask", "I-Custom", layer, layer_id, protected, func(text: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			_disp_ensure_influence(doc, layer_id)["custom_mask"] = text.strip_edges() if text.strip_edges() != "" else null
 		, true)
@@ -2845,7 +2961,7 @@ func _rebuild_inspector() -> void:
 		var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 		(l["mask"] as Dictionary)["enabled"] = pressed
 	, true))
-	_tab_page(tab_pages, "MASK").add_child(mask_check)
+	_tab_page_add(tab_pages, "MASK", mask_check)
 	var mask_source_row := _inspector_option("Source", FxLookScript.MASK_SOURCES, str(mask.get("source", "NONE")), protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
@@ -2853,7 +2969,7 @@ func _rebuild_inspector() -> void:
 		, true)
 	)
 	mask_source_row.set_meta("canonical_field", "mask.source")
-	_tab_page(tab_pages, "MASK").add_child(mask_source_row)
+	_tab_page_add(tab_pages, "MASK", mask_source_row)
 	var mask_region_row := _inspector_option("Region", FxLookScript.MASK_REGIONS, str(mask.get("region", "FULL")), protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
@@ -2861,8 +2977,8 @@ func _rebuild_inspector() -> void:
 		, false)
 	)
 	mask_region_row.set_meta("canonical_field", "mask.region")
-	_tab_page(tab_pages, "MASK").add_child(mask_region_row)
-	_tab_page(tab_pages, "MASK").add_child(_inspector_option("Space", FxLookScript.MASK_SPACES, str(mask.get("space", "LAYER_SPACE")), protected, func(value: String) -> void:
+	_tab_page_add(tab_pages, "MASK", mask_region_row)
+	_tab_page_add(tab_pages, "MASK", _inspector_option("Space", FxLookScript.MASK_SPACES, str(mask.get("space", "LAYER_SPACE")), protected, func(value: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["mask"] as Dictionary)["space"] = value
@@ -2898,8 +3014,8 @@ func _rebuild_inspector() -> void:
 		(l["mask"] as Dictionary)["invert"] = pressed
 	, false))
 	mask_misc.add_child(invert_check)
-	_tab_page(tab_pages, "MASK").add_child(mask_misc)
-	_tab_page(tab_pages, "MASK").add_child(_dep_asset_row("mask.custom_mask", "Custom", layer, layer_id, protected, func(text: String) -> void:
+	_tab_page_add(tab_pages, "MASK", mask_misc)
+	_tab_page_add(tab_pages, "MASK", _dep_asset_row("mask.custom_mask", "Custom", layer, layer_id, protected, func(text: String) -> void:
 		_edit_layer(layer_id, func(doc):
 			var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 			(l["mask"] as Dictionary)["custom_mask"] = text.strip_edges() if text.strip_edges() != "" else null
@@ -2911,7 +3027,7 @@ func _rebuild_inspector() -> void:
 	if is_fx:
 		var fx: Dictionary = layer.get("fx", {})
 		for key in ["fringe", "rgb", "dither", "intensity", "size"]:
-			_tab_page(tab_pages, "LOOK").add_child(_inspector_slider(str(key).to_upper(), 0.0, 4.0, 0.05, float(fx.get(key, 1.0 if key in ["intensity", "size"] else 0.0)), protected, func(value: float) -> void:
+			_tab_page_add(tab_pages, "LOOK", _inspector_slider(str(key).to_upper(), 0.0, 4.0, 0.05, float(fx.get(key, 1.0 if key in ["intensity", "size"] else 0.0)), protected, func(value: float) -> void:
 				_edit_layer(layer_id, func(doc):
 					var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
 					(l["fx"] as Dictionary)[key] = value
@@ -2920,7 +3036,9 @@ func _rebuild_inspector() -> void:
 			))
 		# UI-01: intent macro groups — additive UX over the same canonical fx
 		# fields (macros never replace the direct expert controls in ADVANCED).
-		var look_page: Control = _tab_page(tab_pages, "LOOK")
+		var look_page: VBoxContainer = _tab_page(tab_pages, "LOOK")
+		if look_page == null:
+			return
 		look_page.add_child(_fx_group_header("FRINGE"))
 		for spec in [["Fringe", "fringe"], ["Edge width", "edge_width"], ["Wind reach", "wind_reach"], ["Wind trail", "wind_trail"], ["Split", "split_separation"]]:
 			look_page.add_child(_fx_slider(str(spec[0]), str(spec[1]), fx, layer_id, protected))
@@ -2957,12 +3075,13 @@ func _rebuild_inspector() -> void:
 	inspector_cost_badge.add_theme_font_size_override("font_size", UiTokens.T_HELP)
 	inspector_cost_badge.add_theme_color_override("font_color", UiTokens.DISABLED)
 	inspector_cost_badge.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_tab_page(tab_pages, tab_identity).add_child(inspector_cost_badge)
+	_tab_page_add(tab_pages, tab_identity, inspector_cost_badge)
 	_build_advanced_page(tab_pages, layer, layer_id, type, protected)
 	_restore_canonical_focus(focus_field)
+	_apply_lab_ui_contract()
 
 func _focused_canonical_field() -> String:
-	var owner := get_viewport().gui_get_focus_owner()
+	var owner: Node = get_viewport().gui_get_focus_owner()
 	while owner != null and owner != inspector_content:
 		if owner.has_meta("canonical_field"):
 			return str(owner.get_meta("canonical_field"))
@@ -3175,7 +3294,7 @@ func _incomplete_note(message: String) -> Label:
 func _disp_incomplete(tab_pages: Dictionary, tab_name: String, message: String) -> void:
 	if message == "":
 		return
-	_tab_page(tab_pages, tab_name).add_child(_incomplete_note(message))
+	_tab_page_add(tab_pages, tab_name, _incomplete_note(message))
 
 func _disp_ensure_influence(doc: Dictionary, layer_id: String) -> Dictionary:
 	var l: Dictionary = FxLookScript.find_layer(doc, layer_id)
@@ -3236,6 +3355,8 @@ func _build_palette_page(tab_pages: Dictionary, layer: Dictionary, layer_id: Str
 	# author the intent; GENERATE materializes fringe_color_a/b; the shader
 	# only ever renders the materialized colors).
 	var page: VBoxContainer = _tab_page(tab_pages, "PALETTE")
+	if page == null:
+		return
 	var fx: Dictionary = layer.get("fx", {})
 	var names := ["DOMINANT + DISTANT", "COMPLEMENT", "SPLIT COMPLEMENT", "ANALOGOUS", "TRIADIC", "MONOCHROME"]
 	page.add_child(_inspector_option("Strategy", names, names[clampi(int(float(fx.get("palette_strategy", 0.0))), 0, 5)], protected, func(value: String) -> void:
@@ -3325,6 +3446,8 @@ func _build_motion_page(tab_pages: Dictionary, layer: Dictionary, layer_id: Stri
 	# name. Ranges mirror validator + runtime clamps (TM-07): attack/release
 	# > 0, sustain in [0,1], times >= 0.
 	var page: VBoxContainer = _tab_page(tab_pages, "MOTION")
+	if page == null:
+		return
 	var motion = layer.get("motion", {})
 	var header := Label.new()
 	header.text = "MOTION ENVELOPES"
@@ -3494,7 +3617,13 @@ func _motion_track(doc: Dictionary, layer_id: String, domain: String) -> Diction
 	return tracks[domain]
 
 func _build_advanced_page(tab_pages: Dictionary, layer: Dictionary, layer_id: String, type: String, protected: bool) -> void:
+	# SOURCE is intentionally artist-simple. Diagnostics/raw fields only exist
+	# on an explicit FX ADVANCED page; never route SOURCE through fallback.
+	if type == "SOURCE":
+		return
 	var page: VBoxContainer = _tab_page(tab_pages, "ADVANCED")
+	if page == null:
+		return
 	var debug_header := Label.new()
 	debug_header.text = "DIAGNOSTICS · DEBUG VIEW (preview only)"
 	debug_header.add_theme_font_size_override("font_size", UiTokens.T_HELP)
@@ -3728,7 +3857,50 @@ func _inspector_option(label_text: String, options: Array, current: String, disa
 
 # ================================================================ frame
 
+func _apply_lab_ui_contract() -> void:
+	if lab_theme == null:
+		lab_theme = FxLabUiTokensScript.make_theme()
+		theme = lab_theme
+	_apply_lab_ui_node_contract(self)
+
+func _apply_lab_ui_node_contract(node: Node) -> void:
+	if node is Control:
+		(node as Control).theme = lab_theme
+	if node is Button or node is OptionButton or node is MenuButton:
+		FxLabUiTokensScript.apply_hit_target(node as Control)
+	if node is PopupMenu:
+		_register_lab_popup(node as PopupMenu)
+	if node is OptionButton or node is MenuButton:
+		var popup: PopupMenu
+		if node is OptionButton:
+			popup = (node as OptionButton).get_popup()
+		else:
+			popup = (node as MenuButton).get_popup()
+		_register_lab_popup(popup)
+	for child in node.get_children():
+		_apply_lab_ui_node_contract(child)
+
+func _register_lab_popup(popup: PopupMenu) -> void:
+	if popup == null or not is_instance_valid(popup):
+		return
+	popup.theme = lab_theme
+	if not popup.has_meta("fx_lab_popup_contract"):
+		popup.set_meta("fx_lab_popup_contract", true)
+		popup.about_to_popup.connect(func() -> void: _bound_lab_popup(popup))
+	if popup not in _popup_contracts:
+		_popup_contracts.append(popup)
+
+func _bound_lab_popup(popup: PopupMenu) -> void:
+	if popup == null or not is_instance_valid(popup):
+		return
+	FxLabUiTokensScript.bound_popup(popup, get_viewport_rect().size)
+
 func _process(_delta: float) -> void:
+	if not _native_pointer_acquired:
+		_acquire_native_pointer()
+	for popup in _popup_contracts:
+		if is_instance_valid(popup) and popup.visible:
+			_bound_lab_popup(popup)
 	if runtime == null or viewport_host == null or disp == null:
 		return
 	if dock_host != null and dock != null and dock_host.size.x > 0.0:
