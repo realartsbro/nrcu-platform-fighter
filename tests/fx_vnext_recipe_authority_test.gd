@@ -24,6 +24,8 @@ func _init() -> void:
 
 	_test_target_compatibility_matrix(session)
 	_test_repeated_target_recipe_memberships(session)
+	_test_unscoped_macro_refuses_ambiguous_instances(session)
+	_test_composition_macro_targets_declared_passes(session)
 	_test_composition_memberships_survive_apply_reopen_and_undo(session, production)
 
 	print("[FX-RECIPE-AUTHORITY] done · checks=%d failures=%d" % [checks, failures])
@@ -80,6 +82,48 @@ func _test_repeated_target_recipe_memberships(session) -> void:
 	_check(after_undo.size() == 1 and str((after_undo[0] as Dictionary).get("recipe_instance_id", "")) == first_id, "undo removes only the latest Recipe instance", str(after_undo))
 	_check(_contains_all_layer_ids(session.look.get("layers", []), before_undo_ids), "undo retains the first Recipe instance canonical layers")
 	session.close_target()
+
+func _test_unscoped_macro_refuses_ambiguous_instances(session) -> void:
+	var ctx := {"target_key": "echo_left", "element_id": "echo_left", "element_role": "echo", "fighter_id": "ice_mage", "visual_side": "left", "presentation_slot": "left", "team_side": "A", "mode_family": "1v1", "stage_id": "debug"}
+	session.open_target("echo_left", ctx, "echo_left|ice_mage|echo|left|left|A|1v1|debug", "echo")
+	var first: Dictionary = session.add_recipe_instance(FxRecipesScript.SIGNAL_MELT, ctx)
+	var second: Dictionary = session.add_recipe_instance(FxRecipesScript.SIGNAL_MELT, ctx)
+	_check(bool(first.get("ok", false)) and bool(second.get("ok", false)), "repeated Signal Melt instances instantiate")
+	var before: Dictionary = session.look.duplicate(true)
+	var ambiguous := FxRecipesScript.apply_macro(session.look, FxRecipesScript.SIGNAL_MELT, "MELT", 0.9)
+	_check(not ambiguous, "unscoped macro refuses ambiguous repeated Recipe instances")
+	_check(session.look == before, "ambiguous unscoped macro is zero-mutation")
+	session.close_target()
+
+func _test_composition_macro_targets_declared_passes(session) -> void:
+	var ctx := {"target_key": "composition", "element_id": "composition", "element_role": "composition", "mode_family": "1v1", "stage_id": "debug"}
+	session.open_target("composition", ctx, "composition||composition||||1v1|debug", "composition")
+	var added: Dictionary = session.add_recipe_instance(FxRecipesScript.CLASH_OVERDRIVE, ctx)
+	_check(bool(added.get("ok", false)), "Clash Overdrive instantiates for macro pass targeting")
+	var instance_id := str(added.get("recipe_instance_id", ""))
+	var before: Array = (session.composition.get("final_passes", []) as Array).duplicate(true)
+	var changed := FxRecipesScript.apply_macro(session.composition, FxRecipesScript.CLASH_OVERDRIVE, instance_id, "GRAPHIC_BREAKUP", "GRID")
+	_check(changed, "Clash Graphic Breakup macro applies to its instance")
+	var touched := 0
+	var pattern_changed := false
+	for raw_pass in session.composition.get("final_passes", []):
+		var pass_doc: Dictionary = raw_pass
+		var operator_id := str(pass_doc.get("operator", (pass_doc.get("fx", {}) as Dictionary).get("operator", "")))
+		var before_pass := _pass_for_operator(before, operator_id)
+		var before_fx: Dictionary = before_pass.get("fx", {})
+		var after_fx: Dictionary = pass_doc.get("fx", {})
+		if float(after_fx.get("operator_pattern_family", 0.0)) != float(before_fx.get("operator_pattern_family", 0.0)):
+			touched += 1
+			pattern_changed = operator_id == "pattern_transition"
+	_check(touched == 1 and pattern_changed, "Graphic Breakup targets only the pattern pass", str(session.composition.get("final_passes", [])))
+	session.close_target()
+
+func _pass_for_operator(passes: Array, operator_id: String) -> Dictionary:
+	for raw_pass in passes:
+		var pass_doc: Dictionary = raw_pass
+		if str(pass_doc.get("operator", (pass_doc.get("fx", {}) as Dictionary).get("operator", ""))) == operator_id:
+			return pass_doc
+	return {}
 
 func _test_composition_memberships_survive_apply_reopen_and_undo(session, production) -> void:
 	var ctx := {"target_key": "composition", "element_id": "composition", "element_role": "composition", "mode_family": "1v1", "stage_id": "debug"}

@@ -4087,13 +4087,39 @@ func _build_advanced_page(tab_pages: Dictionary, layer: Dictionary, layer_id: St
 # field metadata (no parallel ranges/enums here). Groups mirror macro domains
 # plus FIELD/DRIVER catalogues; palette colors live on PALETTE while final
 # composite color remains authorable in ADVANCED; assets have dedicated rows;
-# compat/rejected fields are listed, never controlled.
+# Recipe macro controls are instance-owned. A recipe_id-only projection is
+# intentionally not enough: repeated instances must never share an edit path.
+func _recipe_instance_for_layer(layer_id: String) -> Dictionary:
+	if session == null:
+		return {}
+	var documents: Array = []
+	if session.look is Dictionary:
+		documents.append(session.look)
+	if session.composition is Dictionary:
+		documents.append(session.composition)
+	for raw_document in documents:
+		var document: Dictionary = raw_document
+		var metadata: Dictionary = document.get("metadata", {}) if document.get("metadata", {}) is Dictionary else {}
+		var raw_instances: Variant = metadata.get("recipe_instances", [])
+		if not (raw_instances is Array):
+			continue
+		for raw_instance in raw_instances:
+			if not (raw_instance is Dictionary):
+				continue
+			var instance: Dictionary = raw_instance
+			var layer_ids: Array = instance.get("layer_ids", []) if instance.get("layer_ids", []) is Array else []
+			var pass_ids: Array = instance.get("pass_ids", []) if instance.get("pass_ids", []) is Array else []
+			if layer_id in layer_ids or layer_id in pass_ids:
+				return instance
+	return {}
+
 func _build_recipe_macros(page: VBoxContainer, layer: Dictionary, layer_id: String, protected: bool) -> void:
-	if session == null or not (session.look is Dictionary):
+	if session == null:
 		return
-	var metadata: Dictionary = (session.look as Dictionary).get("metadata", {})
-	var recipe_id := str(metadata.get("recipe_id", ""))
-	if recipe_id == "" or not FxRecipesScript.has_recipe(recipe_id):
+	var instance := _recipe_instance_for_layer(layer_id)
+	var recipe_id := str(instance.get("recipe_id", ""))
+	var recipe_instance_id := str(instance.get("recipe_instance_id", ""))
+	if recipe_id == "" or recipe_instance_id == "" or not FxRecipesScript.has_recipe(recipe_id):
 		return
 	var recipe := FxRecipesScript.get_recipe(recipe_id)
 	var macros: Array = recipe.get("macros", [])
@@ -4125,7 +4151,7 @@ func _build_recipe_macros(page: VBoxContainer, layer: Dictionary, layer_id: Stri
 			option.disabled = protected
 			option.tooltip_text = "Intent macro → canonical fields: " + ", ".join((macro.get("fields", []) as Array).map(func(path): return str(path)))
 			option.item_selected.connect(func(index: int) -> void:
-				_edit_recipe_macro(recipe_id, macro_id, items[index], layer_id)
+				_edit_recipe_macro(recipe_id, recipe_instance_id, macro_id, items[index], layer_id)
 			)
 			page.add_child(_macro_row(str(macro.get("label", macro_id)), option))
 		else:
@@ -4138,7 +4164,7 @@ func _build_recipe_macros(page: VBoxContainer, layer: Dictionary, layer_id: Stri
 			spin.editable = not protected
 			spin.tooltip_text = "Normalized intent macro → canonical fields: " + ", ".join((macro.get("fields", []) as Array).map(func(path): return str(path)))
 			spin.value_changed.connect(func(value: float) -> void:
-				_edit_recipe_macro(recipe_id, macro_id, value, layer_id)
+				_edit_recipe_macro(recipe_id, recipe_instance_id, macro_id, value, layer_id)
 			)
 			page.add_child(_macro_row(str(macro.get("label", macro_id)), spin))
 
@@ -4198,8 +4224,10 @@ func _recipe_macro_current_normalized(layer: Dictionary, macro: Dictionary) -> f
 		return inverse_lerp(min_value, max_value, float(raw_value)) if not is_equal_approx(min_value, max_value) else 0.0
 	return 0.0
 
-func _edit_recipe_macro(recipe_id: String, macro_id: String, value, layer_id: String) -> void:
-	_edit_layer(layer_id, func(doc): FxRecipesScript.apply_macro(doc, recipe_id, macro_id, value), false, true)
+func _edit_recipe_macro(recipe_id: String, recipe_instance_id: String, macro_id: String, value, layer_id: String) -> void:
+	if recipe_instance_id == "":
+		return
+	_edit_layer(layer_id, func(doc): FxRecipesScript.apply_macro(doc, recipe_id, recipe_instance_id, macro_id, value), false, true)
 
 func _build_expert_fx(page: VBoxContainer, layer: Dictionary, layer_id: String, protected: bool) -> void:
 	var fx: Dictionary = layer.get("fx", {})

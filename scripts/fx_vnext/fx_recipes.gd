@@ -266,6 +266,8 @@ static func apply_macro(doc: Dictionary, recipe_id: String, arg3, arg4, arg5 = n
 		return false
 
 	var membership := _resolve_membership(doc, recipe_id, instance_selector, explicit_instance)
+	if bool(membership.get("ambiguous", false)):
+		return false
 	var selected_layer_ids: Dictionary = _id_set(membership.get("layer_ids", []))
 	var selected_pass_ids: Dictionary = _id_set(membership.get("pass_ids", []))
 	if explicit_instance and selected_layer_ids.is_empty() and selected_pass_ids.is_empty():
@@ -289,13 +291,19 @@ static func apply_macro(doc: Dictionary, recipe_id: String, arg3, arg4, arg5 = n
 			continue
 		if not explicit_instance and not selected_layer_ids.is_empty() and not selected_layer_ids.has(layer_id):
 			continue
+		var layer_changed_here := false
 		for raw_path in mapping.keys():
 			var path := str(raw_path)
 			var rule: Dictionary = mapping[raw_path] if mapping[raw_path] is Dictionary else {}
+			if not _macro_rule_targets(layer, rule):
+				continue
 			var source := str(rule.get("source", "value"))
 			var mapped = _macro_mapped_value(layer, path, rule, source, macro_value, recipe_id, macro_id)
 			if mapped == null or not _set_field(layer, path, mapped):
 				return false
+			layer_changed_here = true
+		if not layer_changed_here:
+			continue
 		layer_changed = true
 		changed_layer_indexes.append(index)
 		staged_layers[index] = layer
@@ -308,14 +316,20 @@ static func apply_macro(doc: Dictionary, recipe_id: String, arg3, arg4, arg5 = n
 			continue
 		if not explicit_instance and not selected_pass_ids.is_empty() and not selected_pass_ids.has(pass_id):
 			continue
+		var pass_changed_here := false
 		for raw_path in mapping.keys():
 			var path := str(raw_path)
 			var rule: Dictionary = mapping[raw_path] if mapping[raw_path] is Dictionary else {}
+			if not _macro_rule_targets(final_pass, rule):
+				continue
 			var source := str(rule.get("source", "value"))
 			var mapped = _macro_mapped_value(final_pass, path, rule, source, macro_value, recipe_id, macro_id)
 			if mapped == null or not _set_field(final_pass, path, mapped):
 				return false
-			pass_changed = true
+			pass_changed_here = true
+		if not pass_changed_here:
+			continue
+		pass_changed = true
 		changed_pass_indexes.append(index)
 		staged_passes[index] = final_pass
 	if not layer_changed and not pass_changed:
@@ -363,6 +377,7 @@ static func _resolve_membership(doc: Dictionary, recipe_id: String, selector, ex
 		matching.append_array(_membership_entries((metadata as Dictionary).get("recipe_instances", [])))
 	matching.append_array(_membership_entries(doc.get("recipe_instances", [])))
 	var resolved: Dictionary = {}
+	var matching_instance_ids: Dictionary = {}
 	for raw_entry in matching:
 		if not (raw_entry is Dictionary):
 			continue
@@ -370,6 +385,8 @@ static func _resolve_membership(doc: Dictionary, recipe_id: String, selector, ex
 		if str(entry.get("recipe_id", recipe_id)) != recipe_id:
 			continue
 		var entry_id := str(entry.get("recipe_instance_id", entry.get("instance_id", "")))
+		if not explicit_instance and entry_id != "":
+			matching_instance_ids[entry_id] = true
 		if explicit_instance and entry_id != selector_id:
 			continue
 		for key in ["layer_ids", "pass_ids"]:
@@ -381,6 +398,8 @@ static func _resolve_membership(doc: Dictionary, recipe_id: String, selector, ex
 			resolved[key] = current
 		if explicit_instance:
 			break
+	if not explicit_instance and matching_instance_ids.size() > 1:
+		return {"ambiguous": true}
 	if explicit_instance and resolved.is_empty():
 		return _derived_membership(recipe_id, selector_id)
 	if not resolved.is_empty():
@@ -424,6 +443,14 @@ static func _id_set(ids) -> Dictionary:
 		for raw_id in ids:
 			out[str(raw_id)] = true
 	return out
+
+static func _macro_rule_targets(container: Dictionary, rule: Dictionary) -> bool:
+	var operators: Array = rule.get("operators", []) if rule.get("operators", []) is Array else []
+	if operators.is_empty():
+		return true
+	var fx: Dictionary = container.get("fx", {}) if container.get("fx", {}) is Dictionary else {}
+	var operator_id := str(container.get("operator", fx.get("operator", "")))
+	return operator_id in operators
 
 static func _macro_mapped_value(_layer: Dictionary, path: String, rule: Dictionary, source: String, value, recipe_id: String, macro_id: String):
 	if source == "anchor":
@@ -723,10 +750,10 @@ static func _definition(recipe_id: String) -> Dictionary:
 				"target_compatibility": {"target_roles": ["composition"], "element_roles": ["composition"], "allowed_planes": ["COMPOSITION_FOREGROUND"], "requires_fighter": false},
 				"advanced_access": true,
 				"macros": [
-					{"id": "IMPACT", "label": "Impact", "fields": ["fx.operator_strength"], "mapping": {"fx.operator_strength": {"source": "value"}}},
-					{"id": "DIRECTION", "label": "Direction", "fields": ["fx.operator_axis_x", "fx.operator_axis_y"], "mapping": {"fx.operator_axis_x": {"source": "value", "axis": "x"}, "fx.operator_axis_y": {"source": "value", "axis": "y"}}},
-					{"id": "GRAPHIC_BREAKUP", "label": "Graphic Breakup", "fields": ["fx.operator_pattern_family"], "mapping": {"fx.operator_pattern_family": {"source": "option"}}},
-					{"id": "DISTORTION", "label": "Distortion", "fields": ["fx.operator_mix_mode"], "mapping": {"fx.operator_mix_mode": {"source": "mode"}}},
+					{"id": "IMPACT", "label": "Impact", "fields": ["fx.operator_strength"], "mapping": {"fx.operator_strength": {"source": "value", "operators": ["vacuum_burst", "speedlines_field", "pattern_transition"]}}},
+					{"id": "DIRECTION", "label": "Direction", "fields": ["fx.operator_axis_x", "fx.operator_axis_y"], "mapping": {"fx.operator_axis_x": {"source": "value", "axis": "x", "operators": ["speedlines_field", "pattern_transition"]}, "fx.operator_axis_y": {"source": "value", "axis": "y", "operators": ["speedlines_field", "pattern_transition"]}}},
+					{"id": "GRAPHIC_BREAKUP", "label": "Graphic Breakup", "fields": ["fx.operator_pattern_family"], "mapping": {"fx.operator_pattern_family": {"source": "option", "operators": ["pattern_transition"]}}},
+					{"id": "DISTORTION", "label": "Distortion", "fields": ["fx.operator_mix_mode"], "mapping": {"fx.operator_mix_mode": {"source": "mode", "operators": ["speedlines_field"]}}},
 					{"id": "DURATION", "label": "Duration", "fields": ["fx.operator_duration"], "mapping": {"fx.operator_duration": {"source": "value", "min": 0.1, "max": 3.0}}},
 				],
 				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "composition": "VACUUM_SPEEDLINES_PATTERN", "approximation": "NONE"},
