@@ -199,11 +199,11 @@ static func _definition(recipe_id: String) -> Dictionary:
 				"operator_ids": ["speedlines_field"],
 				"target_compatibility": {"target_roles": ["primary", "secondary", "side_field"], "element_roles": ["primary", "secondary", "side_field"], "allowed_planes": ["TARGET_OVERLAY"], "requires_fighter": false},
 				"advanced_access": true,
-				"macros": [{"id": "KINETIC_FIELD", "label": "Kinetic Field", "fields": ["fx.operator_strength", "fx.operator_scale", "fx.operator_speed", "fx.operator_time_source"]}],
+				"macros": [{"id": "KINETIC_FIELD", "label": "Kinetic Field", "fields": ["fx.operator_strength", "fx.operator_scale", "fx.operator_speed", "fx.operator_pattern_mode", "fx.operator_mix_mode", "fx.operator_distortion", "fx.operator_center_x", "fx.operator_center_y", "fx.operator_axis_x", "fx.operator_axis_y", "fx.operator_time_source"]}],
 				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "approximation": "NONE"},
 				"layers": [{"instance_key": "kinetic_speedlines", "name": "Kinetic Speedlines", "type": "FX", "authored_fields": {
 					"layer.plane": "TARGET_OVERLAY", "layer.lane": "FINAL_COMPOSITE", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
-					"fx.operator": "speedlines_field", "fx.operator_strength": 0.72, "fx.operator_scale": 1.0, "fx.operator_speed": 1.25, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.final_tint_amount": 0.0,
+					"fx.operator": "speedlines_field", "fx.operator_strength": 0.72, "fx.operator_scale": 1.0, "fx.operator_speed": 1.25, "fx.operator_pattern_mode": 0.0, "fx.operator_mix_mode": 2.0, "fx.operator_distortion": 0.24, "fx.operator_center_x": 0.5, "fx.operator_center_y": 0.5, "fx.operator_axis_x": 1.0, "fx.operator_axis_y": 0.0, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.final_tint_amount": 0.0,
 				}}],
 			})
 		PATTERN_CUT:
@@ -216,11 +216,11 @@ static func _definition(recipe_id: String) -> Dictionary:
 				"operator_ids": ["pattern_transition"],
 				"target_compatibility": {"target_roles": ["primary", "secondary", "side_field"], "element_roles": ["primary", "secondary", "side_field"], "allowed_planes": ["TARGET_OVERLAY"], "requires_fighter": false},
 				"advanced_access": true,
-				"macros": [{"id": "PATTERN_CUT", "label": "Pattern Cut", "fields": ["fx.operator_strength", "fx.operator_scale", "fx.operator_speed", "fx.operator_pattern_family", "fx.operator_time_source", "fx.operator_color_a", "fx.operator_color_b"]}],
+				"macros": [{"id": "PATTERN_CUT", "label": "Pattern Cut", "fields": ["fx.operator_strength", "fx.operator_scale", "fx.operator_speed", "fx.operator_pattern_family", "fx.operator_progress", "fx.operator_axis_x", "fx.operator_axis_y", "fx.operator_time_source", "fx.operator_color_a", "fx.operator_color_b"]}],
 				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "approximation": "NONE"},
 				"layers": [{"instance_key": "pattern_cut", "name": "Pattern Cut", "type": "FX", "authored_fields": {
 					"layer.plane": "TARGET_OVERLAY", "layer.lane": "FINAL_COMPOSITE", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
-					"fx.operator": "pattern_transition", "fx.operator_strength": 0.78, "fx.operator_scale": 1.0, "fx.operator_speed": 1.0, "fx.operator_pattern_family": 1.0, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.operator_color_a": [0.25, 0.95, 1.0, 1.0], "fx.operator_color_b": [1.0, 0.35, 0.82, 1.0], "fx.final_tint_amount": 0.0,
+					"fx.operator": "pattern_transition", "fx.operator_strength": 0.78, "fx.operator_scale": 1.0, "fx.operator_speed": 1.0, "fx.operator_pattern_family": 1.0, "fx.operator_progress": 0.5, "fx.operator_axis_x": 1.0, "fx.operator_axis_y": 0.18, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.operator_color_a": [0.25, 0.95, 1.0, 1.0], "fx.operator_color_b": [1.0, 0.35, 0.82, 1.0], "fx.final_tint_amount": 0.0,
 				}}],
 			})
 		LIVING_CONTOUR:
@@ -255,7 +255,7 @@ static func _definition(recipe_id: String) -> Dictionary:
 				"source_semantics": {"input": "LOCAL_RESOLVED_INPUT", "approximation": "NONE"},
 				"layers": [{"instance_key": "signal_melt", "name": "Signal Melt", "type": "FX", "authored_fields": {
 					"layer.plane": "TARGET_OVERLAY", "layer.lane": "TARGET_LOCAL", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
-					"fx.operator": "pixel_sort_smear", "fx.operator_strength": 0.76, "fx.operator_scale": 1.2, "fx.operator_threshold": 0.4, "fx.operator_softness": 0.16, "fx.operator_axis_x": 1.0, "fx.operator_axis_y": 0.0, "fx.operator_time_source": "PRESENTATION_TIME",
+					"fx.operator": "pixel_sort_smear", "fx.operator_strength": 0.98, "fx.operator_scale": 2.4, "fx.operator_threshold": 0.32, "fx.operator_softness": 0.08, "fx.operator_axis_x": 1.0, "fx.operator_axis_y": 0.0, "fx.operator_time_source": "PRESENTATION_TIME",
 				}}],
 			})
 		VACUUM_CLASH:
@@ -268,11 +268,11 @@ static func _definition(recipe_id: String) -> Dictionary:
 				"operator_ids": ["vacuum_burst"],
 				"target_compatibility": {"target_roles": ["primary", "secondary"], "element_roles": ["primary", "secondary"], "allowed_planes": ["TARGET_OVERLAY"], "requires_fighter": false},
 				"advanced_access": true,
-				"macros": [{"id": "VACUUM_CLASH", "label": "Vacuum Clash", "fields": ["fx.operator_strength", "fx.operator_scale", "fx.operator_speed", "fx.operator_time_source", "fx.operator_color_a", "fx.operator_color_b"]}],
+				"macros": [{"id": "VACUUM_CLASH", "label": "Vacuum Clash", "fields": ["fx.operator_strength", "fx.operator_scale", "fx.operator_speed", "fx.operator_center_x", "fx.operator_center_y", "fx.operator_polarity", "fx.operator_time_source", "fx.operator_color_a", "fx.operator_color_b"]}],
 				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "approximation": "NONE"},
 				"layers": [{"instance_key": "vacuum_clash", "name": "Vacuum Clash", "type": "FX", "authored_fields": {
 					"layer.plane": "TARGET_OVERLAY", "layer.lane": "FINAL_COMPOSITE", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
-					"fx.operator": "vacuum_burst", "fx.operator_strength": 0.86, "fx.operator_scale": 1.0, "fx.operator_speed": 1.3, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.operator_color_a": [0.25, 0.95, 1.0, 1.0], "fx.operator_color_b": [1.0, 0.35, 0.82, 1.0], "fx.final_tint_amount": 0.0,
+					"fx.operator": "vacuum_burst", "fx.operator_strength": 0.86, "fx.operator_scale": 1.0, "fx.operator_speed": 1.3, "fx.operator_center_x": 0.5, "fx.operator_center_y": 0.5, "fx.operator_polarity": 0.0, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.operator_color_a": [0.25, 0.95, 1.0, 1.0], "fx.operator_color_b": [1.0, 0.35, 0.82, 1.0], "fx.final_tint_amount": 0.0,
 				}}],
 			})
 		CLASH_OVERDRIVE:
@@ -289,7 +289,7 @@ static func _definition(recipe_id: String) -> Dictionary:
 				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "composition": "SPEEDLINES_PLUS_VACUUM", "approximation": "NONE"},
 				"layers": [{"instance_key": "clash_overdrive", "name": "Clash Overdrive", "type": "FX", "authored_fields": {
 					"layer.plane": "TARGET_OVERLAY", "layer.lane": "FINAL_COMPOSITE", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
-					"fx.operator": "speedlines_field", "fx.operator_secondary": "vacuum_burst", "fx.operator_strength": 0.92, "fx.operator_scale": 1.1, "fx.operator_speed": 1.5, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.final_tint_amount": 0.0,
+					"fx.operator": "speedlines_field", "fx.operator_secondary": "vacuum_burst", "fx.operator_strength": 0.92, "fx.operator_scale": 1.1, "fx.operator_speed": 1.5, "fx.operator_pattern_mode": 0.0, "fx.operator_mix_mode": 2.0, "fx.operator_distortion": 0.28, "fx.operator_center_x": 0.5, "fx.operator_center_y": 0.5, "fx.operator_polarity": 0.0, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.final_tint_amount": 0.0,
 				}}],
 			})
 		PRIMARY_FLAME_ENERGY:

@@ -121,7 +121,7 @@ static func neutral_fx() -> Dictionary:
 		# branches and keeps the supplied clock contract intact.
 		"operator": "NONE", "operator_secondary": "NONE", "operator_strength": 0.0, "operator_scale": 1.0,
 		"operator_speed": 1.0, "operator_threshold": 0.5,
-		"operator_softness": 0.1, "operator_mix": 0.75, "operator_axis_x": 1.0, "operator_axis_y": 0.0, "operator_pattern_mode": 0.0, "operator_pattern_family": 0.0, "operator_distortion": 0.0,
+		"operator_softness": 0.1, "operator_mix": 0.75, "operator_mix_mode": 0.0, "operator_axis_x": 1.0, "operator_axis_y": 0.0, "operator_center_x": 0.5, "operator_center_y": 0.5, "operator_progress": 0.5, "operator_polarity": 0.0, "operator_pattern_mode": 0.0, "operator_pattern_family": 0.0, "operator_distortion": 0.0,
 		"operator_time_source": "PRESENTATION_TIME", "operator_event_start": 0.0, "operator_duration": 0.5,
 		"operator_color_a": [0.25, 0.95, 1.0, 1.0], "operator_color_b": [1.0, 0.35, 0.82, 1.0],
 		"time_source": "PRESENTATION_TIME",
@@ -491,7 +491,7 @@ static func validate(doc: Dictionary) -> Dictionary:
 		errors.append_array(_validate_transform(layer.get("transform", {}), layer_id))
 		errors.append_array(_validate_displacement(layer.get("displacement", {}), layer_id))
 		errors.append_array(_validate_mask(layer.get("mask", {}), layer_id))
-		errors.append_array(_validate_fx(layer.get("fx", {}), layer_id))
+		errors.append_array(_validate_fx(layer.get("fx", {}), layer_id, str(layer.get("lane", ""))))
 		errors.append_array(_validate_motion(layer.get("motion", {}), layer_id))
 	if source_count != 1:
 		errors.append("layers: exactly one SOURCE layer required (found %d)" % source_count)
@@ -533,7 +533,7 @@ static func validate_topology(doc: Dictionary) -> Array:
 		errors.append("topology: mixing TRANSFORMED_SOURCE with LAYER_BELOW/COMPOSITE_BELOW needs nested stages (unsupported yet)")
 	return errors
 
-static func _validate_fx(fx, layer_id: String) -> Array:
+static func _validate_fx(fx, layer_id: String, lane: String = "") -> Array:
 	var errors: Array = []
 	if not (fx is Dictionary):
 		return ["fx: missing (layer %s)" % layer_id]
@@ -557,7 +557,7 @@ static func _validate_fx(fx, layer_id: String) -> Array:
 		"rgb_shift_units", "rgb_shift_alpha", "temporal_hold", "palette_strategy", "palette_hue_offset",
 		"palette_saturation", "palette_value", "final_tint_amount",
 		"operator_strength", "operator_scale", "operator_speed", "operator_threshold", "operator_softness", "operator_mix",
-		"operator_axis_x", "operator_axis_y", "operator_pattern_mode", "operator_pattern_family", "operator_distortion", "operator_event_start", "operator_duration"]:
+		"operator_axis_x", "operator_axis_y", "operator_center_x", "operator_center_y", "operator_progress", "operator_polarity", "operator_pattern_mode", "operator_pattern_family", "operator_distortion", "operator_mix_mode", "operator_event_start", "operator_duration"]:
 		if f.has(key) and not _finite_number(f.get(key, null)):
 			errors.append("fx.%s: non-finite (layer %s)" % [key, layer_id])
 	for key in ["palette_lock_a", "palette_lock_b", "palette_swap"]:
@@ -581,6 +581,17 @@ static func _validate_fx(fx, layer_id: String) -> Array:
 		errors.append("fx.operator_secondary: invalid (layer %s)" % layer_id)
 	if f.has("operator_time_source") and str(f.get("operator_time_source", "")) not in TIME_SOURCES:
 		errors.append("fx.operator_time_source: invalid (layer %s)" % layer_id)
+	var operator_id := str(f.get("operator", "NONE"))
+	var secondary_id := str(f.get("operator_secondary", "NONE"))
+	if operator_id != "NONE":
+		var expected_lane := str(FxOperatorsScript.operator_entry(operator_id).get("lane", ""))
+		if expected_lane != "" and lane != "" and lane != expected_lane:
+			errors.append("fx.operator: %s requires lane %s (layer %s has %s)" % [operator_id, expected_lane, layer_id, lane])
+	if secondary_id != "NONE":
+		if lane != "FINAL_COMPOSITE":
+			errors.append("fx.operator_secondary: %s requires lane FINAL_COMPOSITE (layer %s)" % [secondary_id, layer_id])
+		if not (operator_id == "speedlines_field" and secondary_id == "vacuum_burst"):
+			errors.append("fx.operator_secondary: unsupported Gold pair %s + %s (layer %s)" % [operator_id, secondary_id, layer_id])
 	# MK-02/MK-04: treatment-mask and edge-mask asset intents are validated
 	# here; a missing required asset fails closed at apply time.
 	if bool(f.get("effect_mask_enabled", false)):
@@ -875,6 +886,11 @@ static func field_meta_more() -> Dictionary:
 		"operator_threshold": {"kind": "amount", "min": 0.0, "max": 1.0, "step": 0.01},
 		"operator_softness": {"kind": "amount", "min": 0.001, "max": 1.0, "step": 0.01},
 		"operator_mix": {"kind": "amount", "min": 0.0, "max": 1.0, "step": 0.01},
+		"operator_mix_mode": {"kind": "option", "options": ["LINES", "DISTORTION", "COMBINED"]},
+		"operator_center_x": {"kind": "amount", "min": 0.0, "max": 1.0, "step": 0.01},
+		"operator_center_y": {"kind": "amount", "min": 0.0, "max": 1.0, "step": 0.01},
+		"operator_progress": {"kind": "amount", "min": 0.0, "max": 1.0, "step": 0.01},
+		"operator_polarity": {"kind": "amount", "min": 0.0, "max": 1.0, "step": 0.01},
 		"operator_axis_x": {"kind": "amount", "min": -1.0, "max": 1.0, "step": 0.01},
 		"operator_axis_y": {"kind": "amount", "min": -1.0, "max": 1.0, "step": 0.01},
 		"operator_pattern_mode": {"kind": "amount", "min": 0.0, "max": 1.0, "step": 1.0},

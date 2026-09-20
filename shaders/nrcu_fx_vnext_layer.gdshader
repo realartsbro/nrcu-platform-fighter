@@ -1403,35 +1403,47 @@ vec4 apply_gold_local_operator(vec4 source, vec2 uv, vec2 pres_px) {
 		// The signed distance is measured from the actual sampled alpha field.
 		// Transparent pixels outside the silhouette cannot create a rectangle or
 		// radial border because the scan fails closed at the source alpha edge.
-		float width = max(gold_operator_scale * 18.0, 1.0);
+		float width = max(gold_operator_scale * 30.0, 1.0);
 		float distance_px = silhouette_distance_px(uv, width);
 		float border = 1.0 - smoothstep(0.0, width, abs(distance_px));
-		float noise = fbm(uv * (18.0 + gold_operator_scale * 12.0) + vec2(clock * gold_operator_speed, -clock * gold_operator_speed * 0.63));
+		float noise = fbm(uv * (22.0 + gold_operator_scale * 16.0) + vec2(clock * gold_operator_speed, -clock * gold_operator_speed * 0.63));
 		float live = smoothstep(gold_operator_threshold - max(gold_operator_softness, 0.001), gold_operator_threshold + max(gold_operator_softness, 0.001), noise);
 		float coverage = clamp(border * live * strength, 0.0, 1.0);
 		vec3 border_color = mix(gold_operator_color_b.rgb, gold_operator_color_a.rgb, noise);
-		return vec4(mix(source.rgb, border_color, coverage), max(source.a, coverage * 0.82));
+		vec3 energized = clamp(source.rgb + border_color * (1.4 + strength * 1.5), vec3(0.0), vec3(1.0));
+		return vec4(mix(source.rgb, energized, coverage), max(source.a, coverage * 0.92));
 	}
 	if (gold_operator_mode > 1.5 && gold_operator_mode < 2.5) {
-		// Directional luminance-run selection. Every candidate is read from the
-		// layer-selected input, so LAYER_BELOW/COMPOSITE_BELOW remain local.
+		// Directional luminance-run selection. Bright regions are selected from
+		// the local input, while dark regions remain readable instead of receiving
+		// a uniform quad displacement. The clocked tangent jitter breaks the run
+		// into a controlled melt without becoming RGB split or dither.
 		vec2 axis = normalize(vec2(gold_operator_axis_x, gold_operator_axis_y) + vec2(EPS));
-		vec2 texel = 1.0 / max(source_rect.zw, vec2(1.0));
-		float stride = max(gold_operator_scale, 0.25) * 3.0;
+		vec2 tangent = vec2(-axis.y, axis.x);
+		vec2 texel = 1.0 / max(source_tex_size, vec2(1.0));
+		float stride = max(gold_operator_scale, 0.25) * 28.0;
+		float source_key = dot(source.rgb, vec3(0.299, 0.587, 0.114));
 		vec4 selected = source;
-		float selected_key = dot(source.rgb, vec3(0.299, 0.587, 0.114));
-		for (int i = 1; i <= 6; i++) {
+		float selected_key = source_key;
+		for (int i = 1; i <= 12; i++) {
 			float distance = float(i) * stride;
-			vec4 forward = sample_source(uv + axis * texel * distance);
-			vec4 backward = sample_source(uv - axis * texel * distance);
+			float turbulence = (noise_val(uv * (9.0 + gold_operator_scale * 4.0) + vec2(clock * gold_operator_speed, -clock * 0.7)) - 0.5) * stride * 0.8;
+			vec2 jitter = tangent * turbulence;
+			vec4 forward = sample_source(uv + axis * texel * distance + jitter * texel);
+			vec4 backward = sample_source(uv - axis * texel * distance + jitter * texel);
 			float forward_key = dot(forward.rgb, vec3(0.299, 0.587, 0.114));
 			float backward_key = dot(backward.rgb, vec3(0.299, 0.587, 0.114));
 			if (forward_key > selected_key) { selected = forward; selected_key = forward_key; }
 			if (backward_key > selected_key) { selected = backward; selected_key = backward_key; }
 		}
-		float gate = smoothstep(gold_operator_threshold - max(gold_operator_softness, 0.001), gold_operator_threshold + max(gold_operator_softness, 0.001), selected_key);
+		float gate = smoothstep(gold_operator_threshold - max(gold_operator_softness, 0.001), gold_operator_threshold + max(gold_operator_softness, 0.001), source_key);
 		float amount = strength * gate;
-		return vec4(mix(source.rgb, selected.rgb, amount), mix(source.a, max(source.a, selected.a), amount));
+		vec4 trail_forward = sample_source(uv + axis * texel * stride * 1.4);
+		vec4 trail_backward = sample_source(uv - axis * texel * stride * 0.65);
+		vec3 directional_trail = mix(trail_forward.rgb, trail_backward.rgb, 0.22);
+		vec3 chroma = mix(gold_operator_color_b.rgb, gold_operator_color_a.rgb, noise_val(uv * 18.0 + vec2(clock * 1.7, -clock * 0.9)));
+		vec3 melted = mix(mix(selected.rgb, directional_trail, 0.58), chroma, 0.28);
+		return vec4(mix(source.rgb, melted, amount), mix(source.a, max(source.a, selected.a), amount));
 	}
 	return source;
 }

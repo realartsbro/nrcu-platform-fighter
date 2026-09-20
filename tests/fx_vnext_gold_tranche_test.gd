@@ -18,6 +18,7 @@ func _init() -> void:
 	_kinetic_rush_is_a_gold_recipe_with_speedlines()
 	_gold_operator_registry_is_complete()
 	_gold_recipe_registry_is_exact_and_categorized()
+	_gold_contract_rejects_wrong_lanes_and_pairs()
 	await _runtime_output_is_observable()
 	print("[FX-GOLD-TRANCHE] done · checks=%d failures=%d" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -82,7 +83,38 @@ func _gold_recipe_registry_is_exact_and_categorized() -> void:
 		if bool(result.get("ok", false)):
 			var look := FxLookScript.new_look("GOLD_%s" % recipe_id, recipe_id)
 			(look["layers"] as Array).append_array(result.get("layers", []))
-			_check(bool(FxLookScript.validate_input(FxLookScript.materialize(look)).get("ok", false)), "%s produces a valid canonical Look" % recipe_id)
+			var canonical := FxLookScript.materialize(look)
+			_check(bool(FxLookScript.validate_input(canonical).get("ok", false)), "%s produces a valid canonical Look" % recipe_id)
+			for layer_index in range((recipe.get("layers", []) as Array).size()):
+				var authored_fields: Dictionary = ((recipe["layers"] as Array)[layer_index] as Dictionary).get("authored_fields", {})
+				var instantiated_fx: Dictionary = ((result["layers"] as Array)[layer_index] as Dictionary).get("fx", {})
+				for field_key in ["fx.operator", "fx.operator_secondary", "fx.operator_center_x", "fx.operator_center_y", "fx.operator_progress", "fx.operator_polarity", "fx.operator_mix_mode", "fx.operator_axis_x", "fx.operator_axis_y", "fx.operator_threshold", "fx.operator_time_source"]:
+					if authored_fields.has(field_key):
+						var fx_key := str(field_key).trim_prefix("fx.")
+						_check(instantiated_fx.get(fx_key, null) == authored_fields[field_key], "%s preserves %s through materialization" % [recipe_id, fx_key])
+
+func _gold_contract_rejects_wrong_lanes_and_pairs() -> void:
+	var wrong_final := FxLookScript.new_look("WRONG_FINAL", "Wrong final lane")
+	var final_layer: Dictionary = FxLookScript.new_layer("FX", "Speedlines local")
+	(final_layer["fx"] as Dictionary)["operator"] = "speedlines_field"
+	final_layer["lane"] = "TARGET_LOCAL"
+	(wrong_final["layers"] as Array).append(final_layer)
+	_check(not bool(FxLookScript.validate_input(FxLookScript.materialize(wrong_final)).get("ok", false)), "Gold final operator cannot silently run on TARGET_LOCAL")
+	var wrong_local := FxLookScript.new_look("WRONG_LOCAL", "Wrong local lane")
+	var local_layer: Dictionary = FxLookScript.new_layer("FX", "Contour final")
+	(local_layer["fx"] as Dictionary)["operator"] = "noise_erosion_border"
+	local_layer["lane"] = "FINAL_COMPOSITE"
+	(wrong_local["layers"] as Array).append(local_layer)
+	_check(not bool(FxLookScript.validate_input(FxLookScript.materialize(wrong_local)).get("ok", false)), "Gold local operator cannot silently run on FINAL_COMPOSITE")
+	var wrong_pair := FxLookScript.new_look("WRONG_PAIR", "Wrong operator pair")
+	var pair_layer: Dictionary = FxLookScript.new_layer("FX", "Unsupported pair")
+	(pair_layer["fx"] as Dictionary)["operator"] = "pattern_transition"
+	(pair_layer["fx"] as Dictionary)["operator_secondary"] = "vacuum_burst"
+	pair_layer["lane"] = "FINAL_COMPOSITE"
+	(wrong_pair["layers"] as Array).append(pair_layer)
+	_check(not bool(FxLookScript.validate_input(FxLookScript.materialize(wrong_pair)).get("ok", false)), "Unsupported Gold operator pair fails closed")
+	var clash := FxRecipesScript.instantiate("CLASH_OVERDRIVE", "gold-contract")
+	_check(bool(clash.get("ok", false)), "CLASH_OVERDRIVE keeps its supported speedlines-plus-vacuum pair")
 
 func _runtime_output_is_observable() -> void:
 	evidence_dir = ProjectSettings.globalize_path(OS.get_environment("FXLAB_EVIDENCE_DIR")) if OS.get_environment("FXLAB_EVIDENCE_DIR") != "" else ProjectSettings.globalize_path("user://fx_evidence/gold_tranche")
@@ -164,15 +196,76 @@ func _runtime_output_is_observable() -> void:
 		else:
 			_check(true, "%s live output readback is opt-in for headless contract runs" % operator_id)
 	if readback_enabled:
+		await _write_gold_operator_semantics(host, renderer)
 		await _write_gold_recipe_evidence(host, runtime, renderer)
 	FxEvidenceScript.write_json(evidence_dir.path_join("gold_tranche_summary.json"), {"checks": checks, "failures": failures, "operators": ["speedlines_field", "pattern_transition", "vacuum_burst", "noise_erosion_border", "pixel_sort_smear"], "readback_enabled": readback_enabled, "mean_abs_diff": diffs})
+
+func _write_gold_operator_semantics(host: Control, renderer) -> void:
+	var semantics_dir := evidence_dir.path_join("operator_semantics")
+	DirAccess.make_dir_recursive_absolute(semantics_dir)
+	var speed_base := {"operator_strength": 1.0, "operator_scale": 1.1, "operator_speed": 1.0, "operator_pattern_mode": 0.0, "operator_mix_mode": 0.0, "operator_distortion": 1.0, "operator_duration": 0.0}
+	var speed_left := await _render_operator_variant(host, renderer, "echo_left", "speedlines_field", speed_base.merged({"operator_center_x": 0.24, "operator_center_y": 0.5}, true), 0.32, semantics_dir.path_join("speed_center_left.png"))
+	var speed_right := await _render_operator_variant(host, renderer, "echo_left", "speedlines_field", speed_base.merged({"operator_center_x": 0.76, "operator_center_y": 0.5}, true), 0.32, semantics_dir.path_join("speed_center_right.png"))
+	_check(_mean_abs_diff(speed_left, speed_right) > 0.001, "speedlines center changes the focal field", "left_vs_right=%.6f" % _mean_abs_diff(speed_left, speed_right))
+	var speed_lines := await _render_operator_variant(host, renderer, "echo_left", "speedlines_field", speed_base.merged({"operator_mix_mode": 0.0}, true), 0.32, semantics_dir.path_join("speed_lines_only.png"))
+	var speed_distortion := await _render_operator_variant(host, renderer, "echo_left", "speedlines_field", speed_base.merged({"operator_mix_mode": 1.0}, true), 0.32, semantics_dir.path_join("speed_distortion_only.png"))
+	var speed_combined := await _render_operator_variant(host, renderer, "echo_left", "speedlines_field", speed_base.merged({"operator_mix_mode": 2.0}, true), 0.32, semantics_dir.path_join("speed_combined.png"))
+	_check(_mean_abs_diff(speed_lines, speed_distortion) > 0.001, "speedlines lines-only and distortion-only are distinct")
+	_check(_mean_abs_diff(speed_combined, speed_lines) > 0.001 and _mean_abs_diff(speed_combined, speed_distortion) > 0.001, "speedlines combined mode composes both mechanisms")
+
+	var pattern_base := {"operator_strength": 1.0, "operator_scale": 1.0, "operator_speed": 1.0, "operator_progress": 0.5, "operator_axis_x": 1.0, "operator_axis_y": 0.2, "operator_softness": 0.08, "operator_duration": 0.0}
+	var pattern_stripes := await _render_operator_variant(host, renderer, "echo_left", "pattern_transition", pattern_base.merged({"operator_pattern_family": 0.0}, true), 0.4, semantics_dir.path_join("pattern_stripes.png"))
+	var pattern_dots := await _render_operator_variant(host, renderer, "echo_left", "pattern_transition", pattern_base.merged({"operator_pattern_family": 1.0}, true), 0.4, semantics_dir.path_join("pattern_dots.png"))
+	var pattern_angular := await _render_operator_variant(host, renderer, "echo_left", "pattern_transition", pattern_base.merged({"operator_pattern_family": 2.0}, true), 0.4, semantics_dir.path_join("pattern_angular.png"))
+	_check(_mean_abs_diff(pattern_stripes, pattern_dots) > 0.001 and _mean_abs_diff(pattern_dots, pattern_angular) > 0.001, "pattern families produce distinct reveal geometry")
+	var pattern_start := await _render_operator_variant(host, renderer, "echo_left", "pattern_transition", pattern_base.merged({"operator_pattern_family": 1.0, "operator_progress": 0.0}, true), 0.4, semantics_dir.path_join("pattern_progress_0.png"))
+	var pattern_end := await _render_operator_variant(host, renderer, "echo_left", "pattern_transition", pattern_base.merged({"operator_pattern_family": 1.0, "operator_progress": 1.0}, true), 0.4, semantics_dir.path_join("pattern_progress_1.png"))
+	_check(_mean_abs_diff(pattern_start, pattern_end) > 0.001, "pattern transition has distinct defined endpoints")
+
+	var vacuum_base := {"operator_strength": 0.92, "operator_scale": 1.0, "operator_speed": 1.2, "operator_duration": 0.0}
+	var vacuum_left := await _render_operator_variant(host, renderer, "echo_left", "vacuum_burst", vacuum_base.merged({"operator_center_x": 0.25, "operator_center_y": 0.5, "operator_polarity": 0.0}, true), 0.36, semantics_dir.path_join("vacuum_center_left_pull.png"))
+	var vacuum_right := await _render_operator_variant(host, renderer, "echo_left", "vacuum_burst", vacuum_base.merged({"operator_center_x": 0.75, "operator_center_y": 0.5, "operator_polarity": 0.0}, true), 0.36, semantics_dir.path_join("vacuum_center_right_pull.png"))
+	var vacuum_push := await _render_operator_variant(host, renderer, "echo_left", "vacuum_burst", vacuum_base.merged({"operator_center_x": 0.5, "operator_center_y": 0.5, "operator_polarity": 1.0}, true), 0.36, semantics_dir.path_join("vacuum_center_push.png"))
+	_check(_mean_abs_diff(vacuum_left, vacuum_right) > 0.001, "vacuum center changes radial origin")
+	_check(_mean_abs_diff(vacuum_left, vacuum_push) > 0.001, "vacuum polarity changes warp geometry")
+
+	var signal_base := {"operator_strength": 0.95, "operator_scale": 2.4, "operator_threshold": 0.46, "operator_softness": 0.12, "operator_speed": 1.0, "operator_duration": 0.0}
+	var signal_horizontal := await _render_operator_variant(host, renderer, "primary_left", "pixel_sort_smear", signal_base.merged({"operator_axis_x": 1.0, "operator_axis_y": 0.0}, true), 0.44, semantics_dir.path_join("signal_horizontal.png"))
+	var signal_vertical := await _render_operator_variant(host, renderer, "primary_left", "pixel_sort_smear", signal_base.merged({"operator_axis_x": 0.0, "operator_axis_y": 1.0}, true), 0.44, semantics_dir.path_join("signal_vertical.png"))
+	var signal_threshold := await _render_operator_variant(host, renderer, "primary_left", "pixel_sort_smear", signal_base.merged({"operator_axis_x": 1.0, "operator_axis_y": 0.0, "operator_threshold": 0.95, "operator_softness": 0.03}, true), 0.44, semantics_dir.path_join("signal_threshold_high.png"))
+	_check(_mean_abs_diff(signal_horizontal, signal_vertical) > 0.001, "pixel sort direction changes smear geometry")
+	_check(_mean_abs_diff(signal_horizontal, signal_threshold) > 0.001, "pixel sort threshold changes selected luminance regions")
+
+func _render_operator_variant(host: Control, renderer, target_key: String, operator_id: String, fields: Dictionary, clock: float, output_path: String) -> Image:
+	var layer := FxLookScript.new_layer("FX", "Semantic %s" % operator_id)
+	var fx: Dictionary = layer["fx"]
+	fx["operator"] = operator_id
+	for key in fields.keys():
+		fx[str(key)] = fields[key]
+	if operator_id in ["speedlines_field", "pattern_transition", "vacuum_burst"]:
+		layer["lane"] = "FINAL_COMPOSITE"
+		layer["plane"] = "TARGET_OVERLAY"
+	else:
+		layer["lane"] = "TARGET_LOCAL"
+		layer["plane"] = "TARGET_OVERLAY"
+	var look := FxLookScript.new_look("SEMANTICS_%s" % operator_id, operator_id)
+	(look["layers"] as Array).append(layer)
+	var canonical := FxLookScript.materialize(look)
+	var result: Dictionary = renderer.apply_composition([{"key": target_key, "look": canonical}])
+	_check(bool(result.get("ok", false)), "%s semantic variant applies" % operator_id, str(result.get("errors", [])))
+	renderer.set_clocks(clock, clock)
+	await process_frame
+	await process_frame
+	var image: Image = host.get_viewport().get_texture().get_image()
+	FxEvidenceScript.save_png(image, output_path)
+	return image
 
 func _write_gold_recipe_evidence(host: Control, runtime, renderer) -> void:
 	var specs := [
 		{"id": "KINETIC_RUSH", "target": "echo_left", "kind": "EVENT"},
 		{"id": "PATTERN_CUT", "target": "echo_left", "kind": "GRAPHIC_TRANSITION"},
 		{"id": "LIVING_CONTOUR", "target": "primary_left", "kind": "TARGET_LOOK"},
-		{"id": "SIGNAL_MELT", "target": "echo_left", "kind": "TARGET_LOOK"},
+		{"id": "SIGNAL_MELT", "target": "primary_left", "kind": "TARGET_LOOK"},
 		{"id": "VACUUM_CLASH", "target": "echo_left", "kind": "EVENT"},
 		{"id": "CLASH_OVERDRIVE", "target": "echo_left", "kind": "SIGNATURE"},
 	]
