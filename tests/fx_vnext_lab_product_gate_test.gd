@@ -4,6 +4,7 @@ extends SceneTree
 ## and checks target-resolution geometry rather than iterating whatever exists.
 
 const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
+const FxRecipesScript := preload("res://scripts/fx_vnext/fx_recipes.gd")
 const FxLabUiTokensScript := preload("res://scripts/fx_vnext_ui/fx_lab_ui_tokens.gd")
 
 var shell: Control
@@ -364,10 +365,14 @@ func _check_recipe_add_paths() -> void:
 				continue
 			_visible_hit(visible_buttons[0] as Control, _window_rect(Vector2i(root.size)), "Recipe ADD - " + shell.recipe_selector.get_item_text(recipe_index))
 			var before := (shell.session.look.get("layers", []) as Array).size()
+			var recipe_id := str(shell.recipe_selector.get_item_metadata(recipe_index))
+			var target_context: Dictionary = shell.runtime.registry.context_for_target(shell.selected_key)
+			var compatible: Dictionary = FxRecipesScript.target_compatibility(recipe_id, target_context)
+			var should_mutate := bool(compatible.get("ok", false))
 			await _click(visible_buttons[0] as Control)
 			await _frames(8)
 			var after := (shell.session.look.get("layers", []) as Array).size()
-			_check(after > before, "Recipe ADD mutates the current draft through public discovery", shell.recipe_selector.get_item_text(recipe_index))
+			_check((after > before) == should_mutate, "Recipe ADD honors target compatibility at mutation boundary", "%s · expected_mutation=%s · result=%s" % [shell.recipe_selector.get_item_text(recipe_index), should_mutate, str(shell.action_status.text)])
 			if after > before:
 				shell.session.undo()
 				await _frames(4)

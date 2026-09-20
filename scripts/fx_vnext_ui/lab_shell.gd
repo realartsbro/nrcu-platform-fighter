@@ -1955,12 +1955,12 @@ func _build_composition_plan() -> Dictionary:
 		plan.append({"key": key_str, "look": prod_look["doc"]})
 		detail[key_str] = "PRODUCTION " + str(prod_look["look_id"])
 	var composition_doc: Dictionary = {}
-	if preview_mode == "WORKING" and session != null and selected == "composition" and not session.look.is_empty():
-		var recipe_id := str((session.look.get("metadata", {}) as Dictionary).get("recipe_id", ""))
-		if FxRecipesScript.is_composition_recipe(recipe_id):
-			var composed := FxRecipesScript.instantiate_composition(recipe_id, "ui-working", session.look.get("layers", []))
-			if bool(composed.get("ok", false)):
-				composition_doc = composed.get("doc", {})
+	if preview_mode == "WORKING" and session != null and selected == "composition" and not session.composition.is_empty():
+		# Composition Session Authority is already the canonical multi-instance
+		# document. Never rebuild Preview from the legacy last recipe_id projection;
+		# that would drop earlier authored instances and recreate the old split-brain
+		# (Inspector/Session versus Preview) boundary.
+		composition_doc = session.composition.duplicate(true)
 	if composition_doc.is_empty() and production != null and production.has_method("load_composition"):
 		var active_composition: Dictionary = production.load_composition()
 		if bool(active_composition.get("ok", false)):
@@ -2191,27 +2191,23 @@ func _action_add_recipe(recipe_id: String) -> void:
 	if not session.is_editable():
 		action_status.text = "✗ Protected shared Look — EDIT SHARED or MAKE UNIQUE first"
 		return
-	var recipe_result: Dictionary = FxRecipesScript.instantiate(recipe_id, _recipe_instance_key(recipe_id))
-	if not bool(recipe_result.get("ok", false)):
-		action_status.text = "✗ " + str(recipe_result.get("errors", []))
+	# Re-read the current registry context at the real UI mutation boundary.
+	# Filtering is only discoverability; this guard is authoritative and runs
+	# before the session snapshot or any canonical document mutation.
+	var current_context: Dictionary = runtime.registry.context_for_target(selected_key)
+	if str(current_context.get("target_key", "")) != selected_key:
+		action_status.text = "✗ Recipe add refused — current target context is unavailable"
 		return
-	# Exactly one snapshot surrounds the entire recipe stack. The recipe action
-	# does not inspect or mutate Assignment Scope; it is an authoring edit only.
-	session.snapshot()
-	var recipe_layers: Array = recipe_result.get("layers", [])
-	var recipe_definition: Dictionary = FxRecipesScript.get_recipe(recipe_id)
-	var result: Dictionary = session.edit(func(doc):
-		doc["layers"].append_array(recipe_layers)
-		if not (doc.get("metadata", {}) is Dictionary):
-			doc["metadata"] = {}
-		(doc["metadata"] as Dictionary)["recipe_id"] = recipe_id
-		(doc["metadata"] as Dictionary)["recipe_macros"] = recipe_definition.get("macros", []).duplicate(true)
-		(doc["metadata"] as Dictionary)["recipe_target_compatibility"] = recipe_definition.get("target_compatibility", {}).duplicate(true)
-		(doc["metadata"] as Dictionary)["source_semantics"] = recipe_definition.get("source_semantics", {}).duplicate(true)
-	)
+	var compatibility: Dictionary = FxRecipesScript.target_compatibility(recipe_id, current_context)
+	if not bool(compatibility.get("ok", false)):
+		action_status.text = "✗ Recipe incompatible with current target: " + str(compatibility.get("errors", []))
+		return
+	var result: Dictionary = session.add_recipe_instance(recipe_id, current_context)
 	if bool(result.get("ok", false)):
-		selected_layer_id = str((recipe_layers[0] as Dictionary).get("layer_id", "")) if not recipe_layers.is_empty() else selected_layer_id
-		action_status.text = "✓ Added Recipe · " + str(recipe_definition.get("name", recipe_id))
+		var selected_ids: Array = result.get("pass_ids", []) if selected_key == "composition" else result.get("layer_ids", [])
+		if not selected_ids.is_empty():
+			selected_layer_id = str(selected_ids[0])
+		action_status.text = "✓ Added Recipe · " + str(FxRecipesScript.get_recipe(recipe_id).get("name", recipe_id))
 		_schedule_stash()
 		_render_current_look()
 		_rebuild_layers_panel()

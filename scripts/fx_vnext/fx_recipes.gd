@@ -66,6 +66,52 @@ static func get_recipe(recipe_id: String) -> Dictionary:
 	var definition := _definition(recipe_id)
 	return definition.duplicate(true)
 
+static func target_compatibility(recipe_id: String, target_context: Dictionary) -> Dictionary:
+	# This is the single fail-closed target authority used by the public Lab add
+	# action. A missing/unknown role is never treated as a wildcard, and the
+	# recipe's declared planes are checked against its own generated canonical
+	# layers before a caller is allowed to mutate a session.
+	var recipe := _definition(recipe_id)
+	if recipe.is_empty():
+		return {"ok": false, "errors": ["unknown recipe: " + recipe_id], "recipe_id": recipe_id}
+	if not (target_context is Dictionary):
+		return {"ok": false, "errors": ["target context is required"], "recipe_id": recipe_id}
+	var compatibility: Dictionary = recipe.get("target_compatibility", {}) if recipe.get("target_compatibility", {}) is Dictionary else {}
+	var role := str(target_context.get("element_role", "")).strip_edges()
+	var errors: Array = []
+	var target_roles: Array = compatibility.get("target_roles", []) if compatibility.get("target_roles", []) is Array else []
+	var element_roles: Array = compatibility.get("element_roles", target_roles) if compatibility.get("element_roles", target_roles) is Array else []
+	if role == "":
+		errors.append("target context has no element_role")
+	else:
+		if not target_roles.has(role):
+			errors.append("recipe %s does not target role %s" % [recipe_id, role])
+		if not element_roles.has(role):
+			errors.append("recipe %s does not support element role %s" % [recipe_id, role])
+	var requires_fighter := bool(compatibility.get("requires_fighter", false))
+	var fighter_id := str(target_context.get("fighter_id", "")).strip_edges()
+	if requires_fighter and fighter_id == "":
+		errors.append("recipe %s requires a fighter target" % recipe_id)
+	var allowed_planes: Array = compatibility.get("allowed_planes", []) if compatibility.get("allowed_planes", []) is Array else []
+	if allowed_planes.is_empty():
+		errors.append("recipe %s declares no allowed planes" % recipe_id)
+	for raw_spec in recipe.get("layers", []):
+		var spec: Dictionary = raw_spec
+		var authored: Dictionary = spec.get("authored_fields", {}) if spec.get("authored_fields", {}) is Dictionary else {}
+		var plane := str(authored.get("layer.plane", ""))
+		if plane == "" or not allowed_planes.has(plane):
+			errors.append("recipe %s layer %s is outside allowed planes" % [recipe_id, str(spec.get("instance_key", "layer"))])
+	return {
+		"ok": errors.is_empty(),
+		"errors": errors,
+		"recipe_id": recipe_id,
+		"target_key": str(target_context.get("target_key", "")),
+		"target_role": role,
+		"fighter_id": fighter_id,
+		"requires_fighter": requires_fighter,
+		"allowed_planes": allowed_planes.duplicate(),
+	}
+
 static func instantiate(recipe_id: String, instance_key: String) -> Dictionary:
 	var recipe := _definition(recipe_id)
 	if recipe.is_empty():

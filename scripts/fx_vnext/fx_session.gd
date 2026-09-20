@@ -57,11 +57,24 @@ func _init(production_ref, drafts_ref) -> void:
 # ================================================================ undo / redo
 
 func snapshot() -> void:
-	# Called before a structural/value edit; keeps the last 60 states.
-	_undo_stack.append(look.duplicate(true))
+	# Called before a structural/value edit; keeps the last 60 states. Composition
+	# is explicit authority, so a history entry must capture it alongside the
+	# editor projection instead of trying to rebuild it from one recipe id.
+	_undo_stack.append({"look": look.duplicate(true), "composition": composition.duplicate(true)})
 	if _undo_stack.size() > 60:
 		_undo_stack.pop_front()
 	_redo_stack.clear()
+
+func _restore_history_state(state) -> void:
+	if state is Dictionary and (state as Dictionary).has("look"):
+		look = (state as Dictionary).get("look", {}).duplicate(true)
+		composition = (state as Dictionary).get("composition", {}).duplicate(true)
+	else:
+		# Read old in-memory histories created before composition became explicit.
+		look = (state as Dictionary).duplicate(true) if state is Dictionary else {}
+	if current_key == "composition" and not composition.is_empty():
+		composition = FxCompositionScript.materialize(composition)
+		look = _composition_editor(composition)
 
 func undo() -> bool:
 	if not is_editable():
@@ -69,8 +82,8 @@ func undo() -> bool:
 		return false
 	if _undo_stack.is_empty():
 		return false
-	_redo_stack.append(look.duplicate(true))
-	look = _undo_stack.pop_back()
+	_redo_stack.append({"look": look.duplicate(true), "composition": composition.duplicate(true)})
+	_restore_history_state(_undo_stack.pop_back())
 	dirty = true
 	return true
 
@@ -80,8 +93,8 @@ func redo() -> bool:
 		return false
 	if _redo_stack.is_empty():
 		return false
-	_undo_stack.append(look.duplicate(true))
-	look = _redo_stack.pop_back()
+	_undo_stack.append({"look": look.duplicate(true), "composition": composition.duplicate(true)})
+	_restore_history_state(_redo_stack.pop_back())
 	dirty = true
 	return true
 
@@ -344,9 +357,9 @@ func _composition_editor(doc: Dictionary) -> Dictionary:
 	var metadata: Dictionary = composition_doc.get("metadata", {}) if composition_doc.get("metadata", {}) is Dictionary else {}
 	metadata = metadata.duplicate(true)
 	metadata["composition_authority"] = true
-	var recipe_id := _composition_recipe_id(composition_doc)
-	if recipe_id != "":
-		metadata["recipe_id"] = recipe_id
+	# recipe_instances is the authoritative composition provenance. The legacy
+	# recipe_id projection may remain for older readers, but is never used to
+	# reconstruct the pass list.
 	editor["metadata"] = metadata
 	var layers := FxCompositionScript.to_layers(composition_doc)
 	if not layers.is_empty():
@@ -541,23 +554,145 @@ func edit(mutator: Callable) -> Dictionary:
 func _sync_composition_from_editor() -> void:
 	if current_key != "composition":
 		return
-	var recipe_id := _composition_recipe_id(look)
-	if not FxRecipesScript.is_composition_recipe(recipe_id):
-		return
-	var built := FxRecipesScript.instantiate_composition(recipe_id, "active", look.get("layers", []))
-	if not bool(built.get("ok", false)):
-		return
-	var doc: Dictionary = built.get("doc", {})
-	doc["composition_id"] = str(composition.get("composition_id", doc.get("composition_id", "COMP_%s_active" % recipe_id)))
-	doc["name"] = str(look.get("name", composition.get("name", "Scene Composition")))
+	# The Look shown by the inspector is a deterministic projection of the
+	# explicit composition document. Copy edits back by pass identity, preserving
+	# every membership and every pass that is currently disabled/hidden.
+	var doc: Dictionary = FxCompositionScript.materialize(composition)
+	doc["name"] = str(look.get("name", doc.get("name", "Scene Composition")))
+	var passes: Array = (doc.get("final_passes", []) as Array).duplicate(true)
+	for raw_layer in look.get("layers", []):
+		if not (raw_layer is Dictionary):
+			continue
+		var layer: Dictionary = raw_layer
+		var layer_id := str(layer.get("layer_id", ""))
+		if layer_id == "":
+			continue
+		for index in range(passes.size()):
+			if not (passes[index] is Dictionary):
+				continue
+			var composition_pass: Dictionary = passes[index]
+			if str(composition_pass.get("pass_id", "")) != layer_id:
+				continue
+			composition_pass["name"] = str(layer.get("name", composition_pass.get("name", "Final Pass")))
+			composition_pass["enabled"] = bool(layer.get("enabled", composition_pass.get("enabled", true)))
+			composition_pass["operator"] = str((layer.get("fx", {}) as Dictionary).get("operator", composition_pass.get("operator", "NONE")))
+			var fx: Dictionary = layer.get("fx", {}) if layer.get("fx", {}) is Dictionary else {}
+			composition_pass["fx"] = fx.duplicate(true)
+			composition_pass["event_start"] = float(fx.get("operator_event_start", composition_pass.get("event_start", 0.0)))
+			composition_pass["duration"] = float(fx.get("operator_duration", composition_pass.get("duration", 0.0)))
+			passes[index] = composition_pass
+			break
+	doc["final_passes"] = passes
 	var metadata: Dictionary = composition.get("metadata", {}) if composition.get("metadata", {}) is Dictionary else {}
 	metadata = metadata.duplicate(true)
 	metadata["composition_authority"] = true
-	metadata["recipe_id"] = recipe_id
 	doc["metadata"] = metadata
 	doc["revision"] = int(base.get("revision", composition.get("revision", 1)))
 	doc["status"] = "DRAFT"
 	composition = FxCompositionScript.materialize(doc)
+
+func _recipe_memberships(doc: Dictionary) -> Array:
+	var metadata: Dictionary = doc.get("metadata", {}) if doc.get("metadata", {}) is Dictionary else {}
+	var raw: Variant = metadata.get("recipe_instances", [])
+	return (raw as Array).duplicate(true) if raw is Array else []
+
+func _next_recipe_instance_id(recipe_id: String) -> String:
+	var doc := composition if current_key == "composition" else look
+	var memberships := _recipe_memberships(doc)
+	var ordinal := 0
+	for raw_entry in memberships:
+		if raw_entry is Dictionary and str((raw_entry as Dictionary).get("recipe_id", "")) == recipe_id:
+			ordinal += 1
+	return "%s:%s:%d" % [current_key, recipe_id, ordinal]
+
+func add_recipe_instance(recipe_id: String, target_context: Dictionary = {}, requested_instance_id := "") -> Dictionary:
+	# This is the canonical public Recipe mutation seam. Revalidate the live
+	# target context before snapshotting or changing either authority document.
+	if mode == "NONE":
+		return {"ok": false, "errors": ["no target open"]}
+	if not is_editable():
+		return {"ok": false, "errors": ["shared production Look opens protected — choose Edit Shared Look or Make Unique first"]}
+	var live_context: Dictionary = target_context.duplicate(true) if not target_context.is_empty() else context.duplicate(true)
+	if str(live_context.get("target_key", "")) != current_key:
+		return {"ok": false, "errors": ["recipe target context is stale or does not match the open target"]}
+	var compatibility: Dictionary = FxRecipesScript.target_compatibility(recipe_id, live_context)
+	if not bool(compatibility.get("ok", false)):
+		last_errors = compatibility.get("errors", [])
+		return {"ok": false, "errors": last_errors.duplicate(), "compatibility": compatibility}
+	var instance_id := str(requested_instance_id).strip_edges() if str(requested_instance_id) != "" else _next_recipe_instance_id(recipe_id)
+	if instance_id == "":
+		return {"ok": false, "errors": ["recipe instance id must not be empty"]}
+	var recipe_result: Dictionary = FxRecipesScript.instantiate(recipe_id, instance_id)
+	if not bool(recipe_result.get("ok", false)):
+		last_errors = recipe_result.get("errors", [])
+		return {"ok": false, "errors": last_errors.duplicate()}
+	var recipe_definition: Dictionary = FxRecipesScript.get_recipe(recipe_id)
+	var membership: Dictionary = (recipe_result.get("membership", {}) as Dictionary).duplicate(true)
+	membership["instance_id"] = instance_id
+	membership["recipe_instance_id"] = instance_id
+	var target_doc := composition if current_key == "composition" else look
+	var prior_memberships := _recipe_memberships(target_doc)
+	membership["created_order"] = prior_memberships.size()
+	# Every successful authoring mutation has exactly one history entry, and the
+	# snapshot is taken only after all fail-closed checks above have passed.
+	snapshot()
+	if current_key == "composition":
+		var composition_result: Dictionary = recipe_result.get("composition", {})
+		if not bool(composition_result.get("ok", false)):
+			_restore_history_state(_undo_stack.pop_back())
+			last_errors = composition_result.get("errors", ["composition Recipe has no composition document"])
+			return {"ok": false, "errors": last_errors.duplicate()}
+		var doc: Dictionary = FxCompositionScript.materialize(composition)
+		var added_doc: Dictionary = FxCompositionScript.materialize(composition_result.get("doc", {}))
+		var passes: Array = (doc.get("final_passes", []) as Array).duplicate(true)
+		passes.append_array((added_doc.get("final_passes", []) as Array).duplicate(true))
+		doc["final_passes"] = passes
+		var metadata: Dictionary = doc.get("metadata", {}) if doc.get("metadata", {}) is Dictionary else {}
+		metadata = metadata.duplicate(true)
+		metadata["composition_authority"] = true
+		var all_memberships: Array = _recipe_memberships(doc)
+		all_memberships.append(membership.duplicate(true))
+		metadata["recipe_instances"] = all_memberships
+		# Legacy projections stay readable, while composition logic uses only the
+		# membership list and canonical passes above.
+		metadata["recipe_id"] = recipe_id
+		metadata["recipe_macros"] = recipe_definition.get("macros", []).duplicate(true)
+		metadata["recipe_target_compatibility"] = recipe_definition.get("target_compatibility", {}).duplicate(true)
+		metadata["source_semantics"] = recipe_definition.get("source_semantics", {}).duplicate(true)
+		doc["metadata"] = metadata
+		doc["status"] = "DRAFT"
+		composition = FxCompositionScript.materialize(doc)
+		look = _composition_editor(composition)
+		dirty = true
+	else:
+		var result: Dictionary = edit(func(editor_doc):
+			(editor_doc["layers"] as Array).append_array((recipe_result.get("layers", []) as Array).duplicate(true))
+			var metadata: Dictionary = editor_doc.get("metadata", {}) if editor_doc.get("metadata", {}) is Dictionary else {}
+			metadata = metadata.duplicate(true)
+			var all_memberships: Array = _recipe_memberships(editor_doc)
+			all_memberships.append(membership.duplicate(true))
+			metadata["recipe_instances"] = all_memberships
+			# Compatibility projections for existing target-local readers.
+			metadata["recipe_id"] = recipe_id
+			metadata["recipe_macros"] = recipe_definition.get("macros", []).duplicate(true)
+			metadata["recipe_target_compatibility"] = recipe_definition.get("target_compatibility", {}).duplicate(true)
+			metadata["source_semantics"] = recipe_definition.get("source_semantics", {}).duplicate(true)
+			editor_doc["metadata"] = metadata
+		)
+		if not bool(result.get("ok", false)):
+			_restore_history_state(_undo_stack.pop_back())
+			return result
+	return {
+		"ok": true,
+		"errors": [],
+		"recipe_id": recipe_id,
+		"recipe_instance_id": instance_id,
+		"instance_id": instance_id,
+		"layer_ids": (membership.get("layer_ids", []) as Array).duplicate(),
+		"pass_ids": (membership.get("pass_ids", []) as Array).duplicate(),
+		"membership": membership.duplicate(true),
+		"compatibility": compatibility,
+	}
 
 func stash() -> Dictionary:
 	if stash_override.is_valid():
@@ -640,19 +775,13 @@ func apply(look_id_override := "") -> Dictionary:
 	# Composition authority has no fighter assignment selector. Its Production
 	# transaction writes the explicit composition document, never a target Look.
 	if current_key == "composition":
-		var composition_recipe_id := _composition_recipe_id(look)
-		if not FxRecipesScript.is_composition_recipe(composition_recipe_id):
-			return {"ok": false, "errors": ["composition target requires a composition-owned recipe"]}
-		var built_composition := FxRecipesScript.instantiate_composition(composition_recipe_id, "active", look.get("layers", []))
-		if not bool(built_composition.get("ok", false)):
-			return {"ok": false, "errors": built_composition.get("errors", [])}
-		var composition_doc: Dictionary = built_composition.get("doc", {})
-		composition_doc["composition_id"] = str(composition.get("composition_id", composition_doc.get("composition_id", "COMP_%s_active" % composition_recipe_id)))
-		composition_doc["name"] = str(composition.get("name", composition_doc.get("name", "Scene Composition")))
-		var composition_metadata: Dictionary = composition.get("metadata", {}) if composition.get("metadata", {}) is Dictionary else {}
+		# composition is the canonical working document. Never reconstruct it from
+		# the legacy last-recipe projection in the editor metadata.
+		_sync_composition_from_editor()
+		var composition_doc: Dictionary = FxCompositionScript.materialize(composition)
+		var composition_metadata: Dictionary = composition_doc.get("metadata", {}) if composition_doc.get("metadata", {}) is Dictionary else {}
 		composition_metadata = composition_metadata.duplicate(true)
 		composition_metadata["composition_authority"] = true
-		composition_metadata["recipe_id"] = composition_recipe_id
 		composition_doc["metadata"] = composition_metadata
 		var existing_composition: Dictionary = production.load_composition()
 		var composition_revision := 1
