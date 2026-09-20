@@ -122,7 +122,7 @@ static func neutral_fx() -> Dictionary:
 		# branches and keeps the supplied clock contract intact.
 		"operator": "NONE", "operator_secondary": "NONE", "operator_strength": 0.0, "operator_scale": 1.0,
 		"operator_speed": 1.0, "operator_threshold": 0.5,
-		"operator_axis_x": 1.0, "operator_axis_y": 0.0, "operator_center_x": 0.5, "operator_center_y": 0.5, "operator_anchor": "CUSTOM", "operator_progress": 0.5, "operator_progress_start": 0.0, "operator_progress_end": 1.0, "operator_progress_mode": "STATIC", "operator_polarity": 0.0, "operator_pattern_mode": 0.0, "operator_pattern_family": 0.0, "operator_distortion": 0.0,
+		"operator_axis_x": 1.0, "operator_axis_y": 0.0, "operator_center_x": 0.5, "operator_center_y": 0.5, "operator_anchor": "CUSTOM", "operator_progress": 0.5, "operator_progress_start": 0.0, "operator_progress_end": 1.0, "operator_progress_mode": "STATIC", "operator_polarity": 0.0, "operator_pattern_mode": 0.0, "operator_pattern_family": 0.0, "operator_distortion": 0.0, "operator_mix_mode": 0.0,
 		"operator_time_source": "PRESENTATION_TIME", "operator_event_start": 0.0, "operator_duration": 0.5,
 		"operator_color_a": [0.25, 0.95, 1.0, 1.0], "operator_color_b": [1.0, 0.35, 0.82, 1.0],
 		"time_source": "PRESENTATION_TIME",

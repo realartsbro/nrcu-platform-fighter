@@ -35,10 +35,16 @@ func _init() -> void:
 		await settle(5)
 		_check((shell.session.look.get("layers", []) as Array).size() == before_layers.size(), "one undo removes the complete recipe stack")
 
+		# ORGANIC_SIDE_FIELD is intentionally fail-closed for fighter targets;
+		# continue the real UI flow on the declared side-field target instead of
+		# weakening the compatibility authority to satisfy this shell fixture.
+		shell._select_key("field_left_fx_proxy", false)
+		await settle(15)
+		var organic_before_layers: Array = shell.session.look.get("layers", []).duplicate(true)
 		shell._action_add_recipe(FxRecipesScript.ORGANIC_SIDE_FIELD)
 		await settle(12)
 		var organic_layers: Array = shell.session.look.get("layers", [])
-		_check(organic_layers.size() == before_layers.size() + 2, "ORGANIC_SIDE_FIELD instantiates its complete layer stack", str(organic_layers.size()))
+		_check(organic_layers.size() == organic_before_layers.size() + 2, "ORGANIC_SIDE_FIELD instantiates its complete layer stack", str(organic_layers.size()))
 		_check(shell.session._undo_stack.size() == 1, "ORGANIC_SIDE_FIELD creates one undo transaction", "stack=%d" % shell.session._undo_stack.size())
 		var canonical: Dictionary = shell.session.look.duplicate(true)
 		canonical["look_id"] = "P7_SHELL"

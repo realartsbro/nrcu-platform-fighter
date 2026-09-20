@@ -5,6 +5,7 @@ extends SceneTree
 const FxOperatorsScript := preload("res://scripts/fx_vnext/fx_operators.gd")
 const FxRecipesScript := preload("res://scripts/fx_vnext/fx_recipes.gd")
 const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
+const FxCompositionScript := preload("res://scripts/fx_vnext/fx_composition.gd")
 const FxScreenRuntimeScript := preload("res://scripts/fx_vnext/fx_screen_runtime.gd")
 const FxLayerRendererScript := preload("res://scripts/fx_vnext/fx_layer_renderer.gd")
 const FxEvidenceScript := preload("res://scripts/fx_vnext/fx_evidence.gd")
@@ -17,6 +18,7 @@ func _init() -> void:
 	_speedlines_field_is_a_real_supported_operator()
 	_kinetic_rush_is_a_gold_recipe_with_speedlines()
 	_gold_operator_registry_is_complete()
+	_gold_canonical_surface_preserves_mix_mode()
 	_gold_recipe_registry_is_exact_and_categorized()
 	_gold_contract_rejects_wrong_lanes_and_pairs()
 	await _runtime_output_is_observable()
@@ -67,6 +69,21 @@ func _gold_operator_registry_is_complete() -> void:
 	}
 	for operator_id in expected_lanes.keys():
 		_check(str(FxOperatorsScript.operator_entry(str(operator_id)).get("lane", "")) == str(expected_lanes[operator_id]), "%s has its normative lane" % operator_id)
+
+func _gold_canonical_surface_preserves_mix_mode() -> void:
+	var layer := FxLookScript.new_layer("FX", "Mix mode probe")
+	layer["lane"] = "FINAL_COMPOSITE"
+	layer["plane"] = "COMPOSITION_FOREGROUND"
+	layer["authority"] = "COMPOSITION"
+	var fx: Dictionary = layer["fx"]
+	fx["operator"] = "speedlines_field"
+	fx["operator_mix_mode"] = 2.0
+	layer["fx"] = fx
+	var canonical := FxLookScript.materialize({"layers": [layer]})
+	var canonical_layers: Array = canonical.get("layers", [])
+	var canonical_fx: Dictionary = canonical_layers[0].get("fx", {}) if not canonical_layers.is_empty() else {}
+	_check(canonical_fx.has("operator_mix_mode"), "canonical FX exposes operator_mix_mode")
+	_check(float(canonical_fx.get("operator_mix_mode", -1.0)) == 2.0, "canonical FX preserves operator_mix_mode")
 
 func _gold_recipe_registry_is_exact_and_categorized() -> void:
 	var expected := ["KINETIC_RUSH", "PATTERN_CUT", "LIVING_CONTOUR", "SIGNAL_MELT", "VACUUM_CLASH", "CLASH_OVERDRIVE"]
@@ -168,12 +185,22 @@ func _runtime_output_is_observable() -> void:
 		fx["operator_scale"] = 1.0
 		fx["operator_speed"] = 1.2
 		fx["operator_time_source"] = "PRESENTATION_TIME"
+		layer["fx"] = fx
 		if operator_id in ["speedlines_field", "pattern_transition", "vacuum_burst"]:
 			layer["lane"] = "FINAL_COMPOSITE"
 			layer["plane"] = "TARGET_OVERLAY"
 		var look := FxLookScript.new_look("GOLD_%s" % operator_id, operator_id)
 		(look["layers"] as Array).append(layer)
-		var result: Dictionary = renderer.apply_composition([{"key": target_key, "look": FxLookScript.materialize(look)}])
+		look = FxLookScript.materialize(look)
+		var apply_plan := [{"key": target_key, "look": look}]
+		var apply_options := {}
+		if operator_id in ["speedlines_field", "pattern_transition", "vacuum_burst"]:
+			# FINAL_COMPOSITE is composition-owned. Exercise the live renderer through
+			# its explicit composition document rather than smuggling a global pass in
+			# a target Look.
+			apply_plan = [{"key": target_key, "look": neutral}]
+			apply_options["composition"] = _composition_for_layer((look["layers"] as Array)[1], "GOLD_%s" % operator_id)
+		var result: Dictionary = renderer.apply_composition(apply_plan, apply_options)
 		_check(bool(result.get("ok", false)), "%s commits through the live renderer" % operator_id, str(result.get("errors", [])))
 		_renderer_set_operator_time(renderer, target_key)
 		if readback_enabled:
@@ -236,12 +263,33 @@ func _write_gold_operator_semantics(host: Control, renderer) -> void:
 	_check(_mean_abs_diff(signal_horizontal, signal_vertical) > 0.001, "pixel sort direction changes smear geometry")
 	_check(_mean_abs_diff(signal_horizontal, signal_threshold) > 0.001, "pixel sort threshold changes selected luminance regions")
 
+func _composition_for_layer(layer: Dictionary, composition_id: String) -> Dictionary:
+	var fx: Dictionary = layer.get("fx", {}) if layer.get("fx", {}) is Dictionary else {}
+	var operator_id := str(fx.get("operator", "NONE"))
+	var pass_id := "pass-" + composition_id.md5_text().substr(0, 12)
+	var doc := FxCompositionScript.new_document(composition_id, composition_id)
+	doc["final_passes"] = [{
+		"pass_id": pass_id,
+		"name": str(layer.get("name", operator_id)),
+		"operator": operator_id,
+		"enabled": bool(layer.get("enabled", true)),
+		"event_start": float(fx.get("operator_event_start", 0.0)),
+		"duration": float(fx.get("operator_duration", 0.0)),
+		"lane": "FINAL_COMPOSITE",
+		"plane": "COMPOSITION_FOREGROUND",
+		"authority": "COMPOSITION",
+		"fx": fx.duplicate(true),
+	}]
+	var check := FxCompositionScript.validate(doc)
+	return check.get("doc", FxCompositionScript.materialize(doc))
+
 func _render_operator_variant(host: Control, renderer, target_key: String, operator_id: String, fields: Dictionary, clock: float, output_path: String) -> Image:
 	var layer := FxLookScript.new_layer("FX", "Semantic %s" % operator_id)
 	var fx: Dictionary = layer["fx"]
 	fx["operator"] = operator_id
 	for key in fields.keys():
 		fx[str(key)] = fields[key]
+	layer["fx"] = fx
 	if operator_id in ["speedlines_field", "pattern_transition", "vacuum_burst"]:
 		layer["lane"] = "FINAL_COMPOSITE"
 		layer["plane"] = "TARGET_OVERLAY"
@@ -251,7 +299,12 @@ func _render_operator_variant(host: Control, renderer, target_key: String, opera
 	var look := FxLookScript.new_look("SEMANTICS_%s" % operator_id, operator_id)
 	(look["layers"] as Array).append(layer)
 	var canonical := FxLookScript.materialize(look)
-	var result: Dictionary = renderer.apply_composition([{"key": target_key, "look": canonical}])
+	var apply_plan := [{"key": target_key, "look": canonical}]
+	var apply_options := {}
+	if operator_id in ["speedlines_field", "pattern_transition", "vacuum_burst"]:
+		apply_plan = [{"key": target_key, "look": FxLookScript.materialize(FxLookScript.new_look("SEMANTICS_NEUTRAL", "Semantic neutral"))}]
+		apply_options["composition"] = _composition_for_layer((canonical["layers"] as Array)[1], "SEMANTICS_%s" % operator_id)
+	var result: Dictionary = renderer.apply_composition(apply_plan, apply_options)
 	_check(bool(result.get("ok", false)), "%s semantic variant applies" % operator_id, str(result.get("errors", [])))
 	renderer.set_clocks(clock, clock)
 	await process_frame
@@ -283,6 +336,14 @@ func _write_gold_recipe_evidence(host: Control, runtime, renderer) -> void:
 		var look := FxLookScript.new_look("GOLD_EVIDENCE_%s" % recipe_id, str(recipe.get("name", recipe_id)))
 		(look["layers"] as Array).append_array(result.get("layers", []))
 		look = FxLookScript.materialize(look)
+		var evidence_look := look
+		var evidence_options := {}
+		if FxRecipesScript.is_composition_recipe(recipe_id):
+			# Composition recipes own their FINAL_COMPOSITE passes in an explicit
+			# document; the target Look must remain free of global layers.
+			evidence_look = FxLookScript.materialize(FxLookScript.new_look("GOLD_EVIDENCE_NEUTRAL_%s" % recipe_id, "Gold evidence neutral"))
+			var composition_result: Dictionary = result.get("composition", {}) if result.get("composition", {}) is Dictionary else {}
+			evidence_options["composition"] = composition_result.get("doc", {})
 		var recipe_dir := evidence_dir.path_join("gold_recipe_review").path_join(recipe_id.to_lower())
 		DirAccess.make_dir_recursive_absolute(recipe_dir)
 		var is_event := str(spec["kind"]) in ["EVENT", "GRAPHIC_TRANSITION", "SIGNATURE"]
@@ -292,7 +353,7 @@ func _write_gold_recipe_evidence(host: Control, runtime, renderer) -> void:
 		var names := ["before", "phase_a", "peak", "phase_b", "after"]
 		var frames: Array = []
 		for i in range(times.size()):
-			var apply_result: Dictionary = renderer.apply_composition([{"key": target_key, "look": look}])
+			var apply_result: Dictionary = renderer.apply_composition([{"key": target_key, "look": evidence_look}], evidence_options)
 			_check(bool(apply_result.get("ok", false)), "%s evidence applies at %s" % [recipe_id, names[i]], str(apply_result.get("errors", [])))
 			renderer.set_clocks(float(times[i]), float(times[i]))
 			await process_frame
@@ -325,7 +386,7 @@ func _write_gold_recipe_evidence(host: Control, runtime, renderer) -> void:
 		# Exercise the opposite side/character anchor at the peak without pretending
 		# that this is a second approval package.
 		var right_key := "primary_right" if target_key == "primary_left" else "echo_right"
-		var right_apply: Dictionary = renderer.apply_composition([{"key": right_key, "look": look}])
+		var right_apply: Dictionary = renderer.apply_composition([{"key": right_key, "look": evidence_look}], evidence_options)
 		_check(bool(right_apply.get("ok", false)), "%s cross-character/right target applies" % recipe_id, str(right_apply.get("errors", [])))
 		renderer.set_clocks(float(times[2]), float(times[2]))
 		await process_frame

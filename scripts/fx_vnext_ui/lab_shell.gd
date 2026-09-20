@@ -4227,7 +4227,7 @@ func _build_expert_fx(page: VBoxContainer, layer: Dictionary, layer_id: String, 
 		["PIXEL GRIDS", ["source_pixel_size", "source_pixel_units"]],
 		["PALETTE DETAIL", ["palette_strategy", "palette_lock_a", "palette_lock_b", "palette_swap", "palette_hue_offset", "palette_saturation", "palette_value"]],
 		["FINAL COMPOSITE", ["final_tint_amount", "final_tint_color"]],
-		["GOLD OPERATORS", ["operator", "operator_secondary", "operator_strength", "operator_scale", "operator_speed", "operator_threshold", "operator_softness", "operator_mix", "operator_axis_x", "operator_axis_y", "operator_pattern_mode", "operator_pattern_family", "operator_distortion", "operator_time_source", "operator_color_a", "operator_color_b"]],
+		["GOLD OPERATORS", ["operator", "operator_secondary", "operator_strength", "operator_scale", "operator_speed", "operator_threshold", "operator_softness", "operator_mix", "operator_mix_mode", "operator_center_x", "operator_center_y", "operator_progress", "operator_progress_start", "operator_progress_end", "operator_polarity", "operator_axis_x", "operator_axis_y", "operator_pattern_mode", "operator_pattern_family", "operator_distortion", "operator_time_source", "operator_event_start", "operator_duration", "operator_color_a", "operator_color_b"]],
 	]
 	var pending_checks: Array = []
 	for group in groups:
