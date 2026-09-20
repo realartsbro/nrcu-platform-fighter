@@ -180,19 +180,24 @@ func _check_primary_controls(size: Vector2i) -> void:
 		(effect_labels if effect_header_seen else layer_labels).append(text)
 	_check(layer_labels == ["Source Copy", "Custom FX Layer"] and effect_labels == ["Outer Halo", "Edge Treatment", "RGB Tear", "Dither Treatment"], "+ ADD leaves belong to semantic categories", str([layer_labels, effect_labels]))
 	_check(add_popup.get_item_text(0) == "LAYERS" and effect_header_seen, "+ ADD menu has explicit LAYERS/EFFECTS headers")
-	_check(shell.recipe_add_buttons.size() >= 5, "Hero Recipes and curated preset ADD buttons are built")
-	# Recipes are secondary access, so enter the real Recipes tab before checking
-	# their actual hit geometry; presence in an off-screen page is not enough.
+	_check(shell.recipe_add_buttons.size() >= 11, "Gold and Basic Recipe entries are built")
+	_check(shell.recipe_filter != null and shell.recipe_filter.get_item_count() >= 6, "Recipe discovery exposes role categories")
+	# The Recipe surface is intentionally browseable: filter to a role, then
+	# only the cards in that role must be pointer-reachable in the viewport.
 	var prior_tab: int = shell.authoring_tabs.current_tab
 	if shell.recipes_tab != null:
 		shell.authoring_tabs.current_tab = shell.recipes_tab.get_index()
-		await _frames(2)
-	for index in shell.recipe_add_buttons.size():
-		var add_button: Button = shell.recipe_add_buttons[index]
-		if shell.recipes_tab != null:
-			shell.recipes_tab.ensure_control_visible(add_button)
-			await _frames(2)
-		_visible_hit(add_button, bounds, "Hero Recipe ADD #%d" % (index + 1))
+		await _frames(4)
+	for group_index in range(1, shell.recipe_filter.get_item_count()):
+		shell.recipe_filter.select(group_index)
+		shell.recipe_filter.item_selected.emit(group_index)
+		await _frames(4)
+		var visible_buttons: Array = shell._visible_recipe_add_buttons()
+		_check(not visible_buttons.is_empty(), "Recipe category has visible cards", shell.recipe_filter.get_item_text(group_index))
+		for add_button in visible_buttons:
+			_visible_hit(add_button as Button, bounds, "Recipe ADD - " + shell.recipe_filter.get_item_text(group_index))
+	shell.recipe_filter.select(0)
+	shell.recipe_filter.item_selected.emit(0)
 	if shell.authoring_tabs != null:
 		shell.authoring_tabs.current_tab = prior_tab
 		await _frames(2)
@@ -344,18 +349,30 @@ func _check_recipe_add_paths() -> void:
 	var prior_tab: int = shell.authoring_tabs.current_tab
 	if shell.recipes_tab != null:
 		shell.authoring_tabs.current_tab = shell.recipes_tab.get_index()
-		await _frames(2)
-	var buttons: Array = shell.recipe_add_buttons.duplicate()
-	for index in buttons.size():
-		var button: Button = buttons[index]
-		if shell.recipes_tab != null:
-			shell.recipes_tab.ensure_control_visible(button)
-			await _frames(2)
-		var before := (shell.session.look.get("layers", []) as Array).size()
-		await _click(button)
-		await _frames(8)
-		var after := (shell.session.look.get("layers", []) as Array).size()
-		_check(after > before, "Hero Recipe ADD #%d mutates the current draft through its button" % (index + 1), "before=%d after=%d" % [before, after])
+		await _frames(4)
+	for group_index in range(1, shell.recipe_filter.get_item_count()):
+		shell.recipe_filter.select(group_index)
+		shell.recipe_filter.item_selected.emit(group_index)
+		await _frames(4)
+		for recipe_index in shell.recipe_selector.item_count:
+			shell.recipe_selector.select(recipe_index)
+			shell.recipe_selector.item_selected.emit(recipe_index)
+			await _frames(4)
+			var visible_buttons: Array = shell._visible_recipe_add_buttons()
+			_check(visible_buttons.size() == 1, "Recipe selector exposes exactly one public ADD action", shell.recipe_selector.get_item_text(recipe_index))
+			if visible_buttons.size() != 1:
+				continue
+			_visible_hit(visible_buttons[0] as Control, _window_rect(Vector2i(root.size)), "Recipe ADD - " + shell.recipe_selector.get_item_text(recipe_index))
+			var before := (shell.session.look.get("layers", []) as Array).size()
+			await _click(visible_buttons[0] as Control)
+			await _frames(8)
+			var after := (shell.session.look.get("layers", []) as Array).size()
+			_check(after > before, "Recipe ADD mutates the current draft through public discovery", shell.recipe_selector.get_item_text(recipe_index))
+			if after > before:
+				shell.session.undo()
+				await _frames(4)
+	shell.recipe_filter.select(0)
+	shell.recipe_filter.item_selected.emit(0)
 	if shell.authoring_tabs != null:
 		shell.authoring_tabs.current_tab = prior_tab
 		await _frames(2)

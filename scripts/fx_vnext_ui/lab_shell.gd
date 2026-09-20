@@ -185,6 +185,12 @@ var add_menu: MenuButton
 var add_layer_menu: MenuButton
 var add_effect_menu: MenuButton
 var recipe_add_buttons: Array = []
+var recipe_filter: OptionButton
+var recipe_selector: OptionButton
+var recipe_group_labels: Dictionary = {}
+var recipe_cards: Dictionary = {}
+var recipe_ids_by_group: Dictionary = {}
+var recipe_names: Dictionary = {}
 var inspector_content: VBoxContainer
 var inspector_empty: Label
 var selected_layer_id := ""
@@ -810,6 +816,21 @@ func _build_dock() -> void:
 	recipe_intro.add_theme_color_override("font_color", FxLabUiTokensScript.TEXT_DIM)
 	recipe_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	recipes_inner.add_child(recipe_intro)
+	recipe_filter = OptionButton.new()
+	recipe_filter.name = "RecipeCategoryFilter"
+	recipe_filter.tooltip_text = "Filter the Recipe Library by creative role."
+	recipe_filter.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	recipe_filter.add_item("ALL RECIPES")
+	for group in ["CHARACTER", "MOTION / IMPACT", "GRAPHIC TRANSITION", "SIGNATURE", "BASIC PRESETS"]:
+		recipe_filter.add_item(group)
+	recipe_filter.item_selected.connect(_on_recipe_filter_selected)
+	recipes_inner.add_child(recipe_filter)
+	recipe_selector = OptionButton.new()
+	recipe_selector.name = "RecipeSelector"
+	recipe_selector.tooltip_text = "Choose a recipe to inspect before adding it to the draft."
+	recipe_selector.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	recipe_selector.item_selected.connect(_on_recipe_selected)
+	recipes_inner.add_child(recipe_selector)
 	recipe_rows = VBoxContainer.new()
 	recipe_rows.name = "RecipeRows"
 	recipe_rows.add_theme_constant_override("separation", 6)
@@ -826,10 +847,16 @@ func _build_dock() -> void:
 			group_label.add_theme_color_override("font_color", FxLabUiTokensScript.TEXT_MUTED)
 			group_label.custom_minimum_size.y = 22.0
 			recipe_rows.add_child(group_label)
+			recipe_group_labels[library_group] = group_label
 			last_library_group = library_group
 		var recipe_id := str(recipe_data.get("stable_id", ""))
+		recipe_names[recipe_id] = str(recipe_data.get("name", recipe_id))
+		if not recipe_ids_by_group.has(library_group):
+			recipe_ids_by_group[library_group] = []
+		recipe_ids_by_group[library_group].append(recipe_id)
 		var recipe_card := PanelContainer.new()
 		recipe_card.name = "RecipeCard_%s" % recipe_id
+		recipe_card.set_meta("recipe_library_group", library_group)
 		FxLabUiTokensScript.apply_tool_style(recipe_card)
 		recipe_rows.add_child(recipe_card)
 		var recipe_box := VBoxContainer.new()
@@ -850,6 +877,7 @@ func _build_dock() -> void:
 		recipe_add.custom_minimum_size = Vector2(64, FxLabUiTokensScript.HIT_HEIGHT)
 		recipe_add.tooltip_text = "Add %s to the current draft. Defaults are canonical and editable." % recipe_id
 		recipe_add_buttons.append(recipe_add)
+		recipe_cards[recipe_id] = recipe_card
 		recipe_head.add_child(recipe_add)
 		var intent_label := Label.new()
 		intent_label.name = "RecipeIntent"
@@ -888,6 +916,7 @@ func _build_dock() -> void:
 		compatible.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		compatible.custom_minimum_size.x = 0.0
 		recipe_box.add_child(compatible)
+	_refresh_recipe_discovery()
 
 	production_tab = ScrollContainer.new()
 	production_tab.name = "PRODUCTION"
@@ -2056,6 +2085,59 @@ func _recipe_instance_key(recipe_id: String) -> String:
 	var ordinal := int(matching_layers / layer_count)
 
 	return "%s:%s:%d" % [selected_key, recipe_id, ordinal]
+
+func _refresh_recipe_discovery() -> void:
+	if recipe_filter == null or recipe_selector == null:
+		return
+	_on_recipe_filter_selected(recipe_filter.selected)
+
+func _on_recipe_filter_selected(index: int) -> void:
+	if recipe_filter == null or recipe_selector == null:
+		return
+	var selected_group := recipe_filter.get_item_text(index)
+	recipe_selector.clear()
+	var candidate_ids: Array = []
+	if selected_group == "ALL RECIPES":
+		for raw_group in recipe_ids_by_group.keys():
+			candidate_ids.append_array(recipe_ids_by_group[raw_group])
+	else:
+		candidate_ids = (recipe_ids_by_group.get(selected_group, []) as Array).duplicate()
+	for raw_id in candidate_ids:
+		var recipe_id := str(raw_id)
+		recipe_selector.add_item(str(recipe_names.get(recipe_id, recipe_id)))
+		recipe_selector.set_item_metadata(recipe_selector.item_count - 1, recipe_id)
+	if not candidate_ids.is_empty():
+		recipe_selector.select(0)
+		_on_recipe_selected(0)
+	else:
+		for card in recipe_cards.values():
+			(card as Control).visible = false
+		for group_label in recipe_group_labels.values():
+			(group_label as Control).visible = false
+
+func _on_recipe_selected(index: int) -> void:
+	if recipe_selector == null or index < 0 or index >= recipe_selector.item_count:
+		return
+	var selected_id := str(recipe_selector.get_item_metadata(index))
+	for raw_id in recipe_cards.keys():
+		(recipe_cards[raw_id] as Control).visible = str(raw_id) == selected_id
+	for raw_group in recipe_group_labels.keys():
+		var show_group := false
+		for group_id in recipe_ids_by_group.get(raw_group, []):
+			if str(group_id) == selected_id:
+				show_group = true
+				break
+		(recipe_group_labels[raw_group] as Control).visible = show_group
+	if recipes_tab != null:
+		recipes_tab.scroll_vertical = 0
+
+func _visible_recipe_add_buttons() -> Array:
+	var visible: Array = []
+	for raw_button in recipe_add_buttons:
+		var button: Control = raw_button
+		if button.is_visible_in_tree():
+			visible.append(button)
+	return visible
 
 func _action_add_recipe(recipe_id: String) -> void:
 	if not _session_ready():
