@@ -37,20 +37,26 @@ static func materialize(raw: Dictionary) -> Dictionary:
 		seed["plane"] = str(source.get("plane", ""))
 		seed["authority"] = str(source.get("authority", ""))
 		seed["layer_id"] = str(source.get("pass_id", ""))
+		# FxLook.materialize is the canonical FX sanitizer: only schema fields and
+		# valid x_* extensions survive. Feed raw FX into it before reading the
+		# canonical result; merging after materialization would leak unknown keys.
+		seed["fx"] = fx.duplicate(true)
 		var materialized: Dictionary = FxLookScript.materialize({"layers": [seed]})
 		var canonical: Dictionary = materialized.get("layers", [seed])[0]
 		var canonical_fx: Dictionary = canonical.get("fx", {})
-		for key in fx.keys():
-			canonical_fx[str(key)] = fx[key]
 		canonical_fx["operator"] = operator_id
+		var event_start := float(source.get("event_start", canonical_fx.get("operator_event_start", 0.0)))
+		var duration := float(source.get("duration", canonical_fx.get("operator_duration", 0.0)))
+		canonical_fx["operator_event_start"] = event_start
+		canonical_fx["operator_duration"] = duration
 		canonical["fx"] = canonical_fx
 		passes.append({
 			"pass_id": str(source.get("pass_id", "")),
 			"name": str(source.get("name", operator_id)),
 			"operator": operator_id,
 			"enabled": bool(source.get("enabled", true)),
-			"event_start": float(source.get("event_start", canonical_fx.get("operator_event_start", 0.0))),
-			"duration": float(source.get("duration", canonical_fx.get("operator_duration", 0.0))),
+			"event_start": event_start,
+			"duration": duration,
 			"lane": str(source.get("lane", "")),
 			"plane": str(source.get("plane", "")),
 			"authority": str(source.get("authority", "")),
@@ -87,6 +93,8 @@ static func validate(raw: Dictionary) -> Dictionary:
 		if float(composition_pass.get("event_start", 0.0)) < 0.0 or float(composition_pass.get("duration", 0.0)) < 0.0:
 			errors.append("composition pass %s has negative timing" % pass_id)
 		var fx: Dictionary = composition_pass.get("fx", {})
+		var fx_errors: Array = FxLookScript._validate_fx(fx, pass_id, str(composition_pass.get("lane", "")))
+		errors.append_array(fx_errors)
 		if operator_id != "NONE":
 			var layer := _pass_to_layer(composition_pass)
 			var lane_check := FxOperatorsScript.validate_layer_lane(layer)
@@ -110,13 +118,15 @@ static func _pass_to_layer(composition_pass: Dictionary) -> Dictionary:
 	layer["lane"] = "FINAL_COMPOSITE"
 	layer["plane"] = "COMPOSITION_FOREGROUND"
 	layer["authority"] = "COMPOSITION"
-	var fx: Dictionary = layer.get("fx", {})
-	for key in (composition_pass.get("fx", {}) as Dictionary).keys():
-		fx[str(key)] = (composition_pass.get("fx", {}) as Dictionary)[key]
+	var raw_fx = composition_pass.get("fx", {})
+	layer["fx"] = (raw_fx as Dictionary).duplicate(true) if raw_fx is Dictionary else {}
+	var fx: Dictionary = layer["fx"]
 	fx["operator"] = str(composition_pass.get("operator", "NONE"))
 	fx["operator_event_start"] = float(composition_pass.get("event_start", fx.get("operator_event_start", 0.0)))
 	fx["operator_duration"] = float(composition_pass.get("duration", fx.get("operator_duration", 0.0)))
 	layer["fx"] = fx
+	# Re-materialize after adding composition-owned operator/timing fields so
+	# runtime layers use the exact same canonical FX surface as persistence.
 	return FxLookScript.materialize({"layers": [layer]}).get("layers", [layer])[0]
 
 static func save_text(raw: Dictionary) -> String:
