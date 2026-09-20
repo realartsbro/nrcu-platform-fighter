@@ -15,6 +15,7 @@ const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
 const FxResolverScript := preload("res://scripts/fx_vnext/fx_resolver.gd")
 const FxAssetsScript := preload("res://scripts/fx_vnext/fx_assets.gd")
 const FxCompositionScript := preload("res://scripts/fx_vnext/fx_composition.gd")
+const FxOperatorsScript := preload("res://scripts/fx_vnext/fx_operators.gd")
 
 var data_dir: String = "res://nrcu_fx_data"
 
@@ -129,12 +130,19 @@ func production_state() -> Dictionary:
 	errors.append_array(assignments.get("errors", []))
 	errors.append_array(composition.get("errors", []))
 	var look_errors: Array = []
+	var conflict_diagnostics: Array = []
 	var known: Dictionary = {}
+	var composition_doc: Dictionary = composition.get("doc", {}) if composition.get("doc", {}) is Dictionary else {}
+	var composition_active := bool(composition.get("ok", false)) and not composition_doc.is_empty()
 	for look_id in list_look_ids():
 		known[str(look_id)] = true
 		var loaded := load_look(str(look_id))
+		var raw_look := _read_json(look_path(str(look_id)))
 		if not bool(loaded["ok"]):
 			look_errors.append(str(look_id))
+		if composition_active:
+			var conflict_doc: Dictionary = raw_look if not raw_look.is_empty() else loaded.get("doc", {})
+			conflict_diagnostics.append_array(_legacy_final_conflicts(str(look_id), conflict_doc))
 	# R3 §23 fix: a binding whose Look file is gone is a broken state, not a
 	# silently-valid production.
 	if bool(assignments.get("ok", false)):
@@ -144,12 +152,36 @@ func production_state() -> Dictionary:
 				if bound_id != "" and not known.has(bound_id):
 					look_errors.append("binding references missing look: " + bound_id)
 	errors.append_array(look_errors)
+	for conflict in conflict_diagnostics:
+		errors.append("MIGRATION_REVIEW_REQUIRED: legacy target-owned FINAL_COMPOSITE conflicts with composition.json (%s layer=%s operator=%s)" % [str(conflict.get("look_id", "")), str(conflict.get("layer_id", "")), str(conflict.get("operator", ""))])
 	return {
 		"ok": errors.is_empty(),
-		"recovery_required": bool(assignments.get("recovery_required", false)) or bool(composition.get("recovery_required", false)) or not look_errors.is_empty(),
+		"recovery_required": bool(assignments.get("recovery_required", false)) or bool(composition.get("recovery_required", false)) or not look_errors.is_empty() or not conflict_diagnostics.is_empty(),
 		"errors": errors,
+		"composition_conflicts": conflict_diagnostics,
 	}
 
+func _legacy_final_conflicts(look_id: String, look: Dictionary) -> Array:
+	var conflicts: Array = []
+	for raw_layer in look.get("layers", []):
+		if not (raw_layer is Dictionary):
+			continue
+		var layer: Dictionary = raw_layer
+		if not bool(layer.get("enabled", true)):
+			continue
+		if FxOperatorsScript.lane_for_layer(layer) != "FINAL_COMPOSITE":
+			continue
+		if str(layer.get("authority", "")) == "COMPOSITION":
+			continue
+		var fx: Dictionary = layer.get("fx", {}) if layer.get("fx", {}) is Dictionary else {}
+		conflicts.append({
+			"look_id": look_id,
+			"layer_id": str(layer.get("layer_id", "")),
+			"operator": str(fx.get("operator", "NONE")),
+			"authority": str(layer.get("authority", "")),
+			"recommended_action": "remove the legacy final layer or migrate it into composition.json",
+		})
+	return conflicts
 # ---------------------------------------------------------------- usage
 
 func usage(look_id: String) -> Dictionary:

@@ -82,7 +82,7 @@ func apply_final_composite(plan: Array, options := {}) -> Dictionary:
 		return {"ok": false, "lane": "FINAL_COMPOSITE", "errors": built.get("errors", [])}
 	clear_final_composite()
 	var root := screen.get_node_or_null("Root") if screen != null else null
-	if root == null or not _attach_final_entry(root, built["entry"]):
+	if root == null or not _attach_final_entry(root, built["entry"], str(options.get("inject_failure", ""))):
 		_cleanup_final_entry(built.get("entry", {}))
 		return {"ok": false, "lane": "FINAL_COMPOSITE", "errors": ["FINAL_COMPOSITE setup failed"]}
 	_final_composite = built["entry"]
@@ -118,6 +118,7 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 	var by_key: Dictionary = {}
 	var composition_looks: Array = []
 	var explicit_composition: Dictionary = options.get("composition", {}) if options.get("composition", {}) is Dictionary else {}
+	var inject_failure := str(options.get("inject_failure", ""))
 	for entry_raw in plan:
 		if entry_raw is Dictionary:
 			var entry: Dictionary = entry_raw
@@ -133,6 +134,10 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 		if not by_key.has(key):
 			continue
 		var stack := _construct_stack(key, by_key[key])
+		if inject_failure == "target_stack_build" and stacks.is_empty():
+			_cleanup_stack(stack.get("entry", {}))
+			errors.append("injected failure: target stack build")
+			break
 		if not bool(stack.get("ok", false)):
 			errors.append_array(stack.get("errors", []))
 			_cleanup_stack(stack.get("entry", {}))
@@ -230,7 +235,7 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 
 	# ---- pass 5: one explicit full-canvas final pass before impact/cover ---------
 	if not final_entry.is_empty():
-		if not _attach_final_entry(root, final_entry):
+		if not _attach_final_entry(root, final_entry, inject_failure):
 			_cleanup_final_entry(final_entry)
 			for stack in stacks:
 				_cleanup_stack((stack as Dictionary).get("entry", {}))
@@ -348,7 +353,7 @@ func _build_final_pass(layer: Dictionary, options := {}) -> Dictionary:
 	bbc.copy_mode = BackBufferCopy.COPY_MODE_VIEWPORT
 	return {"ok": true, "errors": [], "pass": {"node": quad, "backbuffer_copy": bbc, "layer_id": str(layer.get("layer_id", ""))}}
 
-func _attach_final_entry(root: Node, entry: Dictionary) -> bool:
+func _attach_final_entry(root: Node, entry: Dictionary, inject_failure := "") -> bool:
 	if root == null or entry.is_empty():
 		return false
 	var anchor := _foreground_anchor_index(root)
@@ -357,6 +362,10 @@ func _attach_final_entry(root: Node, entry: Dictionary) -> bool:
 		return false
 	for index in range(passes.size()):
 		var final_pass: Dictionary = passes[index]
+		if inject_failure == "attach_pass_1" and index == 0:
+			return false
+		if inject_failure == "attach_after_pass_2" and index == 2:
+			return false
 		var bbc = final_pass.get("backbuffer_copy", null)
 		var quad = final_pass.get("node", null)
 		if not (bbc is BackBufferCopy) or not (quad is ColorRect) or not is_instance_valid(bbc) or not is_instance_valid(quad):
