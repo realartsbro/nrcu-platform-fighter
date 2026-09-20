@@ -14,6 +14,7 @@ extends RefCounted
 const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
 const FxResolverScript := preload("res://scripts/fx_vnext/fx_resolver.gd")
 const FxAssetsScript := preload("res://scripts/fx_vnext/fx_assets.gd")
+const FxCompositionScript := preload("res://scripts/fx_vnext/fx_composition.gd")
 
 var data_dir: String = "res://nrcu_fx_data"
 
@@ -30,6 +31,9 @@ func assignments_path() -> String:
 
 func look_path(look_id: String) -> String:
 	return looks_dir().path_join(look_id + ".json")
+
+func composition_path() -> String:
+	return data_dir.path_join("composition.json")
 
 func ensure_dirs() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(data_dir))
@@ -92,6 +96,19 @@ func load_look(look_id: String) -> Dictionary:
 	var check: Dictionary = FxLookScript.validate_input(doc)
 	return {"ok": bool(check["ok"]), "doc": doc, "errors": check["errors"], "recovery_required": not bool(check["ok"]) or from_prev_look, "recovered_from_prev": from_prev_look}
 
+func load_composition() -> Dictionary:
+	var main := composition_path()
+	var raw := _read_json(main)
+	if raw.is_empty():
+		if not FileAccess.file_exists(main) and not FileAccess.file_exists(main + ".prev"):
+			return {"ok": true, "doc": {}, "errors": [], "recovery_required": false}
+		return {"ok": false, "doc": {}, "errors": ["composition.json unreadable"], "recovery_required": true}
+	var from_prev := bool(raw.get("_recovered_from_prev", false))
+	raw.erase("_recovered_from_prev")
+	var doc := FxCompositionScript.materialize(raw)
+	var check := FxCompositionScript.validate(doc)
+	return {"ok": bool(check.get("ok", false)), "doc": doc, "errors": check.get("errors", []), "recovery_required": not bool(check.get("ok", false)) or from_prev, "recovered_from_prev": from_prev}
+
 func list_look_ids() -> Array:
 	var out: Array = []
 	var abs_dir := ProjectSettings.globalize_path(looks_dir())
@@ -107,8 +124,10 @@ func list_look_ids() -> Array:
 func production_state() -> Dictionary:
 	# Startup diagnostic per specs/10 §5: valid production / recovery required.
 	var assignments := load_assignments()
+	var composition := load_composition()
 	var errors: Array = []
 	errors.append_array(assignments.get("errors", []))
+	errors.append_array(composition.get("errors", []))
 	var look_errors: Array = []
 	var known: Dictionary = {}
 	for look_id in list_look_ids():
@@ -127,7 +146,7 @@ func production_state() -> Dictionary:
 	errors.append_array(look_errors)
 	return {
 		"ok": errors.is_empty(),
-		"recovery_required": bool(assignments.get("recovery_required", false)) or not look_errors.is_empty(),
+		"recovery_required": bool(assignments.get("recovery_required", false)) or bool(composition.get("recovery_required", false)) or not look_errors.is_empty(),
 		"errors": errors,
 	}
 
@@ -235,14 +254,16 @@ func _replace(path: String) -> Dictionary:
 	return {"ok": true, "errors": []}
 
 func apply(plan: Dictionary) -> Dictionary:
-	# plan: {"look": <doc|null>, "assignments": <doc|null>, "check_context": <ctx|null>}
-	# Returns {ok, errors, look_revision?, verified_look_id?}
+	# plan: {"look": <doc|null>, "assignments": <doc|null>, "composition": <doc|null>, "check_context": <ctx|null>}
+	# Returns transactional verification for every supplied authority document.
 	ensure_dirs()
 	var errors: Array = []
 	var look = plan.get("look", null)
 	var assignments = plan.get("assignments", null)
+	var composition = plan.get("composition", null)
 	var look_id := ""
 	var revision := 0
+	var composition_revision := 0
 
 	if look != null:
 		if not (look is Dictionary):
@@ -274,6 +295,24 @@ func apply(plan: Dictionary) -> Dictionary:
 			return {"ok": false, "errors": ["new look must start at revision 1"], "stage": "revision"}
 		look = normalized
 
+	if composition != null:
+		if not (composition is Dictionary):
+			return {"ok": false, "errors": ["composition: not a dictionary"]}
+		var composition_check := FxCompositionScript.validate(composition)
+		if not bool(composition_check.get("ok", false)):
+			return {"ok": false, "errors": composition_check.get("errors", []), "stage": "validate-composition"}
+		composition = composition_check.get("doc", FxCompositionScript.materialize(composition))
+		var existing_composition := load_composition()
+		composition_revision = int((composition as Dictionary).get("revision", 0))
+		if bool(existing_composition.get("ok", false)) and not (existing_composition.get("doc", {}) as Dictionary).is_empty():
+			var expected_composition_revision := int((existing_composition["doc"] as Dictionary).get("revision", 0)) + 1
+			if composition_revision != expected_composition_revision:
+				return {"ok": false, "errors": ["composition revision must increment by exactly 1 (got %d, expected %d)" % [composition_revision, expected_composition_revision]], "stage": "composition-revision"}
+		elif FileAccess.file_exists(composition_path()):
+			return {"ok": false, "errors": ["existing composition unreadable; fix Production before updating"], "stage": "composition-revision"}
+		elif composition_revision != 1:
+			return {"ok": false, "errors": ["new composition must start at revision 1"], "stage": "composition-revision"}
+
 	if assignments != null:
 		if not (assignments is Dictionary):
 			return {"ok": false, "errors": ["assignments: not a dictionary"]}
@@ -294,6 +333,9 @@ func apply(plan: Dictionary) -> Dictionary:
 	if assignments != null:
 		if not _write_text(assignments_path() + ".tmp", _json_text(assignments)):
 			return {"ok": false, "errors": ["cannot write assignments candidate"], "stage": "write"}
+	if composition != null:
+		if not _write_text(composition_path() + ".tmp", FxCompositionScript.save_text(composition)):
+			return {"ok": false, "errors": ["cannot write composition candidate"], "stage": "write"}
 
 	if look != null:
 		var reread := _read_json(look_path(look_id) + ".tmp")
@@ -308,7 +350,17 @@ func apply(plan: Dictionary) -> Dictionary:
 		var rac: Dictionary = FxResolverScript.validate_assignments(reread_asg)
 		if not bool(rac["ok"]):
 			_remove_leftovers(assignments_path())
+			if composition != null:
+				_remove_leftovers(composition_path())
 			return {"ok": false, "errors": ["assignments candidate re-read invalid: %s" % str(rac["errors"])], "stage": "reread"}
+
+	if composition != null:
+		var reread_composition := _read_json(composition_path() + ".tmp")
+		reread_composition.erase("_recovered_from_prev")
+		var rcc := FxCompositionScript.validate(reread_composition)
+		if not bool(rcc.get("ok", false)):
+			_remove_leftovers(composition_path())
+			return {"ok": false, "errors": ["composition candidate re-read invalid: %s" % str(rcc.get("errors", []))], "stage": "reread"}
 
 	# ---- transactional commit with rollback (specs/10 §1; Round-2 Finding 5) ----
 	# Every persisted file affected by this apply is journaled with its exact
@@ -320,10 +372,14 @@ func apply(plan: Dictionary) -> Dictionary:
 		writes.append({"path": look_path(look_id), "label": "look"})
 	if assignments != null:
 		writes.append({"path": assignments_path(), "label": "assignments"})
+	if composition != null:
+		writes.append({"path": composition_path(), "label": "composition"})
 
 	if inject == "before_first_commit":
 		_remove_leftovers(look_path(look_id))
 		_remove_leftovers(assignments_path())
+		if composition != null:
+			_remove_leftovers(composition_path())
 		return {"ok": false, "errors": ["injected failure: before first commit"], "stage": "inject", "rolled_back": true}
 
 	# R3 §8 hardening: crash-safe commit. A transaction marker plus deterministic
@@ -335,6 +391,8 @@ func apply(plan: Dictionary) -> Dictionary:
 	if not marker_ok:
 		_remove_leftovers(look_path(look_id))
 		_remove_leftovers(assignments_path())
+		if composition != null:
+			_remove_leftovers(composition_path())
 		return {"ok": false, "errors": ["transaction marker not writable"], "stage": "replace"}
 
 	var journal: Array = []
@@ -355,6 +413,8 @@ func apply(plan: Dictionary) -> Dictionary:
 			_rollback(journal)
 			_remove_leftovers(look_path(look_id))
 			_remove_leftovers(assignments_path())
+			if composition != null:
+				_remove_leftovers(composition_path())
 			return {"ok": false, "errors": swap["errors"], "stage": "replace", "rolled_back": true}
 		if i == 1 and inject == "during_second_replace":
 			commit_failed = "injected failure: during second file replacement"
@@ -367,6 +427,8 @@ func apply(plan: Dictionary) -> Dictionary:
 		_rollback(journal)
 		_remove_leftovers(look_path(look_id))
 		_remove_leftovers(assignments_path())
+		if composition != null:
+			_remove_leftovers(composition_path())
 		var msg := commit_failed if commit_failed != "" else "injected failure: before final commit marker"
 		return {"ok": false, "errors": [msg], "stage": "inject", "rolled_back": true}
 
@@ -384,8 +446,13 @@ func apply(plan: Dictionary) -> Dictionary:
 		if not bool(final_asg["ok"]):
 			_rollback(journal)
 			return {"ok": false, "errors": final_asg["errors"], "stage": "verify", "rolled_back": true}
+	if composition != null:
+		var final_composition := load_composition()
+		if not bool(final_composition.get("ok", false)) or int((final_composition.get("doc", {}) as Dictionary).get("revision", 0)) != composition_revision:
+			_rollback(journal)
+			return {"ok": false, "errors": ["final verification failed for composition"], "stage": "verify", "rolled_back": true}
 	_clear_txn_marker()
-	return {"ok": true, "errors": [], "look_revision": revision, "verified_look_id": verified_look_id}
+	return {"ok": true, "errors": [], "look_revision": revision, "composition_revision": composition_revision, "verified_look_id": verified_look_id}
 
 func _harvest_external_assets(look: Dictionary) -> Dictionary:
 	# Rewrites every REQUIRED external asset reference to its imported

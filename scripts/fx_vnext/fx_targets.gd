@@ -83,6 +83,50 @@ func order_index(key: String) -> int:
 func target_node(key: String) -> Node:
 	return slot_nodes.get(key)
 
+func composition_context() -> Dictionary:
+	# Scene/Event Looks resolve against this synthetic authority instead of a
+	# fighter texture. It is deliberately stable across remounts and carries
+	# only the fields the assignment resolver is allowed to use.
+	return {
+		"target_key": "composition",
+		"element_id": "composition",
+		"element_role": "composition",
+		"mode_family": mode_format,
+		"stage_id": stage_id,
+	}
+
+func resolve_anchor(anchor: String, target_key := "") -> Vector2:
+	# Return a canvas-normalized point. Custom points stay authored in the FX
+	# fields; named anchors always resolve from live scene geometry.
+	var requested := anchor if anchor in ["VS_MARK", "TARGET_CENTER", "LEFT_FIGHTER", "RIGHT_FIGHTER"] else "CUSTOM"
+	var key := ""
+	match requested:
+		"VS_MARK":
+			key = _first_key_for_role("VS MARK")
+		"TARGET_CENTER":
+			key = target_key if slot_nodes.has(target_key) else _first_key_for_role("PRIMARIES")
+		"LEFT_FIGHTER":
+			key = _first_key_for_side("left")
+		"RIGHT_FIGHTER":
+			key = _first_key_for_side("right")
+	if key == "" or not slot_nodes.has(key) or not (slot_nodes[key] is TextureRect):
+		return Vector2(0.5, 0.5)
+	var rect := presentation_rect(slot_nodes[key] as TextureRect)
+	return Vector2(clampf(rect.get_center().x / 1280.0, 0.0, 1.0), clampf(rect.get_center().y / 720.0, 0.0, 1.0))
+
+func _first_key_for_role(role: String) -> String:
+	for key in ordered_keys():
+		if str(slot_roles.get(str(key), "")) == role:
+			return str(key)
+	return ""
+
+func _first_key_for_side(side: String) -> String:
+	for key in ordered_keys():
+		var candidate := str(key)
+		if visual_side_for_slot(presentation_slot_for_key(candidate)) == side and role_for_key(candidate) in ["PRIMARIES", "ECHOES"]:
+			return candidate
+	return ""
+
 # ---------------------------------------------------------------- roles
 
 func role_for_key(key: String) -> String:

@@ -22,6 +22,8 @@ const CANVAS := Vector2(1280.0, 720.0)
 const FxTargetsScript := preload("res://scripts/fx_vnext/fx_targets.gd")
 const FxAssetsScript := preload("res://scripts/fx_vnext/fx_assets.gd")
 const FxOperatorsScript := preload("res://scripts/fx_vnext/fx_operators.gd")
+const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
+const FxCompositionScript := preload("res://scripts/fx_vnext/fx_composition.gd")
 
 const OFFSET_INPUTS := ["LAYER_BELOW", "COMPOSITE_BELOW"]
 const SUPPORTED_INPUTS := ["ORIGINAL_SOURCE", "TRANSFORMED_SOURCE", "LAYER_BELOW", "COMPOSITE_BELOW"]
@@ -85,7 +87,7 @@ func apply_final_composite(plan: Array, options := {}) -> Dictionary:
 		return {"ok": false, "lane": "FINAL_COMPOSITE", "errors": ["FINAL_COMPOSITE setup failed"]}
 	_final_composite = built["entry"]
 	_push_final_time()
-	return {"ok": true, "lane": "FINAL_COMPOSITE", "errors": [], "final_composite": 1}
+	return {"ok": true, "lane": "FINAL_COMPOSITE", "errors": [], "final_composite": final_layers.size(), "final_layers": final_layers.size()}
 
 func apply_composition(plan: Array, options := {}) -> Dictionary:
 	# ONE pass for the whole visible composition (Round-2 Finding 1). plan is a
@@ -114,9 +116,17 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 		for key in registry.keys():
 			canonical_keys.append(str(key))
 	var by_key: Dictionary = {}
+	var composition_looks: Array = []
+	var explicit_composition: Dictionary = options.get("composition", {}) if options.get("composition", {}) is Dictionary else {}
 	for entry_raw in plan:
 		if entry_raw is Dictionary:
-			by_key[str((entry_raw as Dictionary).get("key", ""))] = (entry_raw as Dictionary).get("look", {})
+			var entry: Dictionary = entry_raw
+			var key := str(entry.get("key", ""))
+			var scope := str(entry.get("scope", ""))
+			if scope == "COMPOSITION" or key in ["composition", "__composition__"]:
+				composition_looks.append(entry.get("look", {}))
+			else:
+				by_key[key] = entry.get("look", {})
 
 	var stacks: Array = []
 	for key in canonical_keys:
@@ -131,16 +141,43 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 	if not errors.is_empty():
 		for stack in stacks:
 			_cleanup_stack((stack as Dictionary).get("entry", {}))
-		clear_all()
 		return {"ok": false, "targets": 0, "background": 0, "foreground": 0, "errors": errors, "rolled_back": true}
 	var final_layers := _collect_final_layers(stacks)
+	if not explicit_composition.is_empty():
+		var composition_check := FxCompositionScript.validate(explicit_composition)
+		if not bool(composition_check.get("ok", false)):
+			errors.append_array(composition_check.get("errors", []))
+		elif not final_layers.is_empty():
+			errors.append("mixed FINAL_COMPOSITE ownership: explicit composition cannot coexist with target-owned final layers")
+		else:
+			final_layers = FxCompositionScript.to_layers(composition_check.get("doc", explicit_composition))
+	for raw_look in composition_looks:
+		var composition_look: Dictionary = FxLookScript.materialize(raw_look if raw_look is Dictionary else {})
+		var look_validation := FxLookScript.validate_input(composition_look)
+		if not bool(look_validation.get("ok", false)):
+			errors.append_array(look_validation.get("errors", []))
+			continue
+		for raw_layer in composition_look.get("layers", []):
+			if not (raw_layer is Dictionary) or not bool((raw_layer as Dictionary).get("enabled", true)):
+				continue
+			var layer: Dictionary = raw_layer
+			var lane := FxOperatorsScript.lane_for_layer(layer)
+			if str(layer.get("type", "")) == "SOURCE":
+				continue
+			if lane != "FINAL_COMPOSITE" or str(layer.get("authority", "")) != "COMPOSITION":
+				errors.append("composition authority only accepts COMPOSITION-owned FINAL_COMPOSITE FX layers (%s)" % str(layer.get("layer_id", "")))
+				continue
+			final_layers.append(layer.duplicate(true))
+	if not errors.is_empty():
+		for stack in stacks:
+			_cleanup_stack((stack as Dictionary).get("entry", {}))
+		return {"ok": false, "targets": 0, "background": 0, "foreground": 0, "final_composite": 0, "errors": errors, "rolled_back": true}
 	var final_entry: Dictionary = {}
 	if not final_layers.is_empty():
 		var final_build := _build_final_entry(final_layers, options)
 		if not bool(final_build.get("ok", false)):
 			for stack in stacks:
 				_cleanup_stack((stack as Dictionary).get("entry", {}))
-			clear_all()
 			return {"ok": false, "targets": 0, "background": 0, "foreground": 0, "final_composite": 0, "errors": final_build.get("errors", []), "rolled_back": true}
 		final_entry = final_build["entry"]
 	clear_all()
@@ -212,7 +249,7 @@ func apply_composition(plan: Array, options := {}) -> Dictionary:
 		_push_final_time()
 	for key in _stacks.keys():
 		_update_stack(str(key))
-	return {"ok": errors.is_empty(), "targets": stacks.size(), "background": bg_index, "foreground": fg_index, "final_composite": 1 if not final_entry.is_empty() else 0, "final_layers": final_layers.size(), "errors": errors}
+	return {"ok": errors.is_empty(), "targets": stacks.size(), "background": bg_index, "foreground": fg_index, "final_composite": final_layers.size() if not final_entry.is_empty() else 0, "final_layers": final_layers.size(), "errors": errors}
 
 func _collect_final_layers(stacks: Array) -> Array:
 	var out: Array = []
@@ -229,16 +266,32 @@ func _build_final_entry(final_layers: Array, _options := {}) -> Dictionary:
 		return {"ok": false, "errors": ["FINAL_COMPOSITE unsupported: dedicated shader path is unavailable"]}
 	if final_layers.is_empty():
 		return {"ok": false, "errors": ["FINAL_COMPOSITE requires an explicit layer"]}
-	if final_layers.size() != 1:
-		return {"ok": false, "errors": ["only one explicit FINAL_COMPOSITE layer is supported per composition"]}
-	var layer: Dictionary = final_layers[0] if final_layers[0] is Dictionary else {}
-	if layer.is_empty() or str(layer.get("lane", "")) != "FINAL_COMPOSITE":
-		return {"ok": false, "errors": ["FINAL_COMPOSITE setup received a non-explicit layer"]}
-	var lane_result: Dictionary = FxOperatorsScript.validate_layer_lane(layer)
-	if not bool(lane_result.get("ok", false)):
-		return {"ok": false, "errors": lane_result.get("errors", [])}
-	if str(layer.get("type", "")) != "FX":
-		return {"ok": false, "errors": ["FINAL_COMPOSITE lane requires an FX layer"]}
+	var passes: Array = []
+	var errors: Array = []
+	for raw_layer in final_layers:
+		var layer: Dictionary = raw_layer if raw_layer is Dictionary else {}
+		if layer.is_empty() or str(layer.get("lane", "")) != "FINAL_COMPOSITE":
+			errors.append("FINAL_COMPOSITE setup received a non-explicit layer")
+			continue
+		var lane_result: Dictionary = FxOperatorsScript.validate_layer_lane(layer)
+		if not bool(lane_result.get("ok", false)):
+			errors.append_array(lane_result.get("errors", []))
+			continue
+		if str(layer.get("type", "")) != "FX" or str(layer.get("authority", "")) != "COMPOSITION":
+			errors.append("FINAL_COMPOSITE requires a COMPOSITION-owned FX layer")
+			continue
+		var built_pass := _build_final_pass(layer, _options)
+		if not bool(built_pass.get("ok", false)):
+			errors.append_array(built_pass.get("errors", []))
+		else:
+			passes.append(built_pass.get("pass", {}))
+	if not errors.is_empty() or passes.is_empty():
+		for final_pass in passes:
+			_cleanup_final_pass(final_pass)
+		return {"ok": false, "errors": errors if not errors.is_empty() else ["FINAL_COMPOSITE requires an explicit layer"]}
+	return {"ok": true, "errors": [], "entry": {"passes": passes, "layer_ids": passes.map(func(final_pass): return str((final_pass as Dictionary).get("layer_id", "")))} }
+
+func _build_final_pass(layer: Dictionary, options := {}) -> Dictionary:
 	var fx: Dictionary = layer.get("fx", {}) if layer.get("fx", {}) is Dictionary else {}
 	var amount := float(fx.get("final_tint_amount", 0.0))
 	if not is_finite(amount):
@@ -258,12 +311,11 @@ func _build_final_entry(final_layers: Array, _options := {}) -> Dictionary:
 	material.set_shader_parameter("final_tint_amount", clampf(amount, 0.0, 1.0) * clampf(opacity, 0.0, 1.0))
 	material.set_shader_parameter("final_tint_color", _color(fx.get("final_tint_color", [1.0, 1.0, 1.0, 1.0])))
 	var final_operator := str(fx.get("operator", "NONE"))
-	var secondary_operator := str(fx.get("operator_secondary", "NONE"))
 	var final_mode := _final_operator_index(final_operator)
-	if secondary_operator != "NONE":
-		final_mode = 4.0 # CLASH_OVERDRIVE: dedicated speedlines + vacuum composition
 	material.set_shader_parameter("final_operator_mode", final_mode)
-	material.set_shader_parameter("final_operator_secondary_mode", float(_final_operator_index(secondary_operator)))
+	# Composition is now an ordered list of explicit passes. The old secondary
+	# Secondary operators are legacy input only; ordered composition passes own
+	# execution order and no hidden mode-4 shortcut remains in the runtime path.
 	material.set_shader_parameter("final_operator_strength", clampf(float(fx.get("operator_strength", 0.0)), 0.0, 1.0))
 	material.set_shader_parameter("final_operator_scale", maxf(float(fx.get("operator_scale", 1.0)), 0.25))
 	material.set_shader_parameter("final_operator_speed", maxf(float(fx.get("operator_speed", 1.0)), 0.0))
@@ -271,9 +323,16 @@ func _build_final_entry(final_layers: Array, _options := {}) -> Dictionary:
 	material.set_shader_parameter("final_operator_pattern_mode", clampf(float(fx.get("operator_pattern_mode", 0.0)), 0.0, 1.0))
 	material.set_shader_parameter("final_operator_pattern_family", clampf(float(fx.get("operator_pattern_family", 0.0)), 0.0, 2.0))
 	material.set_shader_parameter("final_operator_distortion", clampf(float(fx.get("operator_distortion", 0.0)), 0.0, 1.0))
-	material.set_shader_parameter("final_operator_center", Vector2(float(fx.get("operator_center_x", 0.5)), float(fx.get("operator_center_y", 0.5))))
+	var resolved_center := Vector2(float(fx.get("operator_center_x", 0.5)), float(fx.get("operator_center_y", 0.5)))
+	var anchor := str(fx.get("operator_anchor", "CUSTOM"))
+	if anchor != "CUSTOM" and registry != null and registry.has_method("resolve_anchor"):
+		resolved_center = registry.resolve_anchor(anchor, str(options.get("anchor_target_key", "")))
+	material.set_shader_parameter("final_operator_center", resolved_center)
 	material.set_shader_parameter("final_operator_axis", Vector2(float(fx.get("operator_axis_x", 1.0)), float(fx.get("operator_axis_y", 0.0))))
 	material.set_shader_parameter("final_operator_progress", clampf(float(fx.get("operator_progress", 0.5)), 0.0, 1.0))
+	material.set_shader_parameter("final_operator_progress_start", clampf(float(fx.get("operator_progress_start", fx.get("operator_progress", 0.5))), 0.0, 1.0))
+	material.set_shader_parameter("final_operator_progress_end", clampf(float(fx.get("operator_progress_end", fx.get("operator_progress", 0.5))), 0.0, 1.0))
+	material.set_shader_parameter("final_operator_progress_animated", 1.0 if str(fx.get("operator_progress_mode", "STATIC")) == "EVENT_LINEAR" else 0.0)
 	material.set_shader_parameter("final_operator_polarity", clampf(float(fx.get("operator_polarity", 0.0)), 0.0, 1.0))
 	material.set_shader_parameter("final_operator_mix_mode", clampf(float(fx.get("operator_mix_mode", 0.0)), 0.0, 2.0))
 	material.set_shader_parameter("final_operator_color_a", _color(fx.get("operator_color_a", [0.25, 0.95, 1.0, 1.0])))
@@ -287,28 +346,37 @@ func _build_final_entry(final_layers: Array, _options := {}) -> Dictionary:
 	var bbc := BackBufferCopy.new()
 	bbc.name = "vnext_final_bbc"
 	bbc.copy_mode = BackBufferCopy.COPY_MODE_VIEWPORT
-	return {"ok": true, "errors": [], "entry": {"node": quad, "backbuffer_copy": bbc, "layer_id": str(layer.get("layer_id", ""))}}
+	return {"ok": true, "errors": [], "pass": {"node": quad, "backbuffer_copy": bbc, "layer_id": str(layer.get("layer_id", ""))}}
 
 func _attach_final_entry(root: Node, entry: Dictionary) -> bool:
 	if root == null or entry.is_empty():
 		return false
-	var bbc = entry.get("backbuffer_copy", null)
-	var quad = entry.get("node", null)
-	if not (bbc is BackBufferCopy) or not (quad is ColorRect) or not is_instance_valid(bbc) or not is_instance_valid(quad):
-		return false
 	var anchor := _foreground_anchor_index(root)
-	root.add_child(bbc)
-	root.move_child(bbc, clampi(anchor, 0, root.get_child_count() - 1))
-	root.add_child(quad)
-	_fit_quad_global(quad, root)
-	root.move_child(quad, clampi(bbc.get_index() + 1, 0, root.get_child_count() - 1))
+	var passes: Array = entry.get("passes", [])
+	if passes.is_empty():
+		return false
+	for index in range(passes.size()):
+		var final_pass: Dictionary = passes[index]
+		var bbc = final_pass.get("backbuffer_copy", null)
+		var quad = final_pass.get("node", null)
+		if not (bbc is BackBufferCopy) or not (quad is ColorRect) or not is_instance_valid(bbc) or not is_instance_valid(quad):
+			return false
+		root.add_child(bbc)
+		root.move_child(bbc, clampi(anchor + index * 2, 0, root.get_child_count() - 1))
+		root.add_child(quad)
+		_fit_quad_global(quad, root)
+		root.move_child(quad, clampi(bbc.get_index() + 1, 0, root.get_child_count() - 1))
 	return true
 
 func _cleanup_final_entry(entry: Dictionary) -> void:
 	if entry.is_empty():
 		return
+	for final_pass in entry.get("passes", []):
+		_cleanup_final_pass(final_pass)
+
+func _cleanup_final_pass(final_pass: Dictionary) -> void:
 	for key in ["node", "backbuffer_copy"]:
-		var node = entry.get(key, null)
+		var node = final_pass.get(key, null)
 		if is_instance_valid(node):
 			node.free()
 
@@ -335,14 +403,14 @@ func _construct_stack(target_key: String, look: Dictionary) -> Dictionary:
 			var candidate: Dictionary = raw
 			var candidate_lane := FxOperatorsScript.lane_for_layer(candidate)
 			if candidate_lane == "FINAL_COMPOSITE":
-				var final_result: Dictionary = FxOperatorsScript.validate_layer_lane(candidate)
-				if not bool(final_result.get("ok", false)):
-					errors.append_array(final_result.get("errors", []))
+				if str(candidate.get("authority", "")) != "COMPOSITION":
+					errors.append("FINAL_COMPOSITE layer is not composition-owned (%s)" % str(candidate.get("layer_id", "")))
 					continue
-				if str(candidate.get("type", "")) != "FX":
-					errors.append("FINAL_COMPOSITE lane requires an FX layer (%s)" % str(candidate.get("layer_id", "")))
-					continue
-				(entry["final_layers"] as Array).append(candidate)
+				# A target Look may contain a stale final layer from an older schema,
+				# but global passes are only admitted through the explicit composition
+				# plan entry. Never let a fighter-owned Look smuggle a screen effect in.
+				errors.append("FINAL_COMPOSITE layer requires an explicit composition plan entry (%s)" % str(candidate.get("layer_id", "")))
+				continue
 			else:
 				enabled_layers.append(candidate)
 	var viewport_consumers := 0
@@ -1077,8 +1145,9 @@ func _vec2(value) -> Vector2:
 	return Vector2.ZERO
 
 func _push_final_time() -> void:
-	var node = _final_composite.get("node", null)
-	if is_instance_valid(node) and node.material is ShaderMaterial:
-		var material: ShaderMaterial = node.material
-		material.set_shader_parameter("presentation_time", _last_time)
-		material.set_shader_parameter("free_run_time", _last_free)
+	for final_pass in _final_composite.get("passes", []):
+		var node = (final_pass as Dictionary).get("node", null)
+		if is_instance_valid(node) and node.material is ShaderMaterial:
+			var material: ShaderMaterial = node.material
+			material.set_shader_parameter("presentation_time", _last_time)
+			material.set_shader_parameter("free_run_time", _last_free)

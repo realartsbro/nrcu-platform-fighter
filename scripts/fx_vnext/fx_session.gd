@@ -10,6 +10,8 @@ extends RefCounted
 
 const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
 const FxResolverScript := preload("res://scripts/fx_vnext/fx_resolver.gd")
+const FxCompositionScript := preload("res://scripts/fx_vnext/fx_composition.gd")
+const FxRecipesScript := preload("res://scripts/fx_vnext/fx_recipes.gd")
 
 const FIGHTER_ROLES := ["primary", "echo", "name"]
 const ASSIGNMENT_SCOPE_MODES := [
@@ -514,6 +516,31 @@ func apply(look_id_override := "") -> Dictionary:
 			if int(usage_now.get("count", 0)) > 1:
 				last_errors = ["shared Look is protected — Edit Shared Look or Make Unique before applying"]
 				return {"ok": false, "errors": last_errors.duplicate()}
+	# Composition authority has no fighter assignment selector. Its Production
+	# transaction writes the explicit composition document, never a target Look.
+	if current_key == "composition":
+		var composition_recipe_id := str((look.get("metadata", {}) as Dictionary).get("recipe_id", ""))
+		if not FxRecipesScript.is_composition_recipe(composition_recipe_id):
+			return {"ok": false, "errors": ["composition target requires a composition-owned recipe"]}
+		var built_composition := FxRecipesScript.instantiate_composition(composition_recipe_id, "active", look.get("layers", []))
+		if not bool(built_composition.get("ok", false)):
+			return {"ok": false, "errors": built_composition.get("errors", [])}
+		var composition_doc: Dictionary = built_composition.get("doc", {})
+		var existing_composition: Dictionary = production.load_composition()
+		var composition_revision := 1
+		if bool(existing_composition.get("ok", false)) and not (existing_composition.get("doc", {}) as Dictionary).is_empty():
+			composition_revision = int((existing_composition["doc"] as Dictionary).get("revision", 0)) + 1
+		composition_doc["status"] = "PRODUCTION"
+		composition_doc["revision"] = composition_revision
+		var composition_apply: Dictionary = production.apply({"composition": composition_doc})
+		if not bool(composition_apply.get("ok", false)):
+			last_errors = composition_apply.get("errors", [])
+			return composition_apply
+		look = FxLookScript.materialize(look)
+		last_errors = []
+		dirty = false
+		mode = "EDIT_PRODUCTION_UNIQUE"
+		return {"ok": true, "errors": [], "composition_revision": composition_revision, "revision": composition_revision}
 	# R3 §9: if an intentionally disabled binding still covers this scope, say so
 	# — applying will create an active binding that takes precedence over it.
 	var disabled_notice := _disabled_binding_notice()

@@ -1834,13 +1834,13 @@ func _spatial_readout(key: String) -> String:
 # ================================================================ authoring session
 
 func _session_ready() -> bool:
-	return session != null and runtime != null and runtime.registry != null and runtime.registry.slot_nodes.has(selected_key) and str(session.current_key) == selected_key and str(session.mode) != "NONE"
+	return session != null and runtime != null and runtime.registry != null and (selected_key == "composition" or runtime.registry.slot_nodes.has(selected_key)) and str(session.current_key) == selected_key and str(session.mode) != "NONE"
 
 func _open_session_for(key: String) -> void:
 	var registry = runtime.registry
-	if registry == null or not registry.slot_nodes.has(key):
+	if registry == null or (key != "composition" and not registry.slot_nodes.has(key)):
 		return
-	var ctx: Dictionary = registry.context_for_key(key)
+	var ctx: Dictionary = registry.composition_context() if key == "composition" and registry.has_method("composition_context") else registry.context_for_key(key)
 	# The session's scope builder keys off the canonical element_role id
 	# ("echo"/"primary"/"name"/"stage"/...), not the display role label.
 	var role := str(ctx.get("element_role", ""))
@@ -1869,7 +1869,10 @@ func _render_current_look() -> void:
 	# so named anchors fire at deterministic flow times (manual = triggered).
 	renderer.set_event_marks(_compute_event_marks())
 	var built := _build_composition_plan()
-	var result: Dictionary = renderer.apply_composition(built["plan"])
+	var render_options: Dictionary = {}
+	if not (built.get("composition", {}) as Dictionary).is_empty():
+		render_options["composition"] = built["composition"]
+	var result: Dictionary = renderer.apply_composition(built["plan"], render_options)
 	# UI-04: fresh quads inherit COMPOSITE — re-assert the selected view so a
 	# rebuild/switch/remount can neither leak nor silently drop debug state.
 	renderer.set_debug_view(debug_view)
@@ -1927,7 +1930,26 @@ func _build_composition_plan() -> Dictionary:
 			continue
 		plan.append({"key": key_str, "look": prod_look["doc"]})
 		detail[key_str] = "PRODUCTION " + str(prod_look["look_id"])
-	return {"plan": plan, "detail": detail}
+	var composition_doc: Dictionary = {}
+	if preview_mode == "WORKING" and session != null and selected == "composition" and not session.look.is_empty():
+		var recipe_id := str((session.look.get("metadata", {}) as Dictionary).get("recipe_id", ""))
+		if FxRecipesScript.is_composition_recipe(recipe_id):
+			var composed := FxRecipesScript.instantiate_composition(recipe_id, "ui-working", session.look.get("layers", []))
+			if bool(composed.get("ok", false)):
+				composition_doc = composed.get("doc", {})
+	if composition_doc.is_empty() and production != null and production.has_method("load_composition"):
+		var active_composition: Dictionary = production.load_composition()
+		if bool(active_composition.get("ok", false)):
+			composition_doc = active_composition.get("doc", {})
+	if not composition_doc.is_empty():
+		detail["composition"] = "DRAFT" if preview_mode == "WORKING" and selected == "composition" else "PRODUCTION"
+		return {"plan": plan, "detail": detail, "composition": composition_doc}
+	if runtime.registry.has_method("composition_context"):
+		var composition_look: Dictionary = session.look if preview_mode == "WORKING" and session != null and selected == "composition" and not session.look.is_empty() else _production_look_for("composition").get("doc", {})
+		if not composition_look.is_empty():
+			plan.append({"key": "composition", "scope": "COMPOSITION", "look": composition_look})
+			detail["composition"] = "DRAFT" if preview_mode == "WORKING" and selected == "composition" else "PRODUCTION"
+	return {"plan": plan, "detail": detail, "composition": {}}
 
 func _schedule_stash() -> void:
 	_stash_at = Time.get_ticks_msec() / 1000.0 + 0.5
@@ -2153,11 +2175,19 @@ func _action_add_recipe(recipe_id: String) -> void:
 	# does not inspect or mutate Assignment Scope; it is an authoring edit only.
 	session.snapshot()
 	var recipe_layers: Array = recipe_result.get("layers", [])
-	var result: Dictionary = session.edit(func(doc): doc["layers"].append_array(recipe_layers))
+	var recipe_definition: Dictionary = FxRecipesScript.get_recipe(recipe_id)
+	var result: Dictionary = session.edit(func(doc):
+		doc["layers"].append_array(recipe_layers)
+		if not (doc.get("metadata", {}) is Dictionary):
+			doc["metadata"] = {}
+		(doc["metadata"] as Dictionary)["recipe_id"] = recipe_id
+		(doc["metadata"] as Dictionary)["recipe_macros"] = recipe_definition.get("macros", []).duplicate(true)
+		(doc["metadata"] as Dictionary)["recipe_target_compatibility"] = recipe_definition.get("target_compatibility", {}).duplicate(true)
+		(doc["metadata"] as Dictionary)["source_semantics"] = recipe_definition.get("source_semantics", {}).duplicate(true)
+	)
 	if bool(result.get("ok", false)):
 		selected_layer_id = str((recipe_layers[0] as Dictionary).get("layer_id", "")) if not recipe_layers.is_empty() else selected_layer_id
-		var recipe: Dictionary = FxRecipesScript.get_recipe(recipe_id)
-		action_status.text = "✓ Added Recipe · " + str(recipe.get("name", recipe_id))
+		action_status.text = "✓ Added Recipe · " + str(recipe_definition.get("name", recipe_id))
 		_schedule_stash()
 		_render_current_look()
 		_rebuild_layers_panel()
@@ -4030,9 +4060,123 @@ func _build_advanced_page(tab_pages: Dictionary, layer: Dictionary, layer_id: St
 # plus FIELD/DRIVER catalogues; palette colors live on PALETTE while final
 # composite color remains authorable in ADVANCED; assets have dedicated rows;
 # compat/rejected fields are listed, never controlled.
+func _build_recipe_macros(page: VBoxContainer, layer: Dictionary, layer_id: String, protected: bool) -> void:
+	if session == null or not (session.look is Dictionary):
+		return
+	var metadata: Dictionary = (session.look as Dictionary).get("metadata", {})
+	var recipe_id := str(metadata.get("recipe_id", ""))
+	if recipe_id == "" or not FxRecipesScript.has_recipe(recipe_id):
+		return
+	var recipe := FxRecipesScript.get_recipe(recipe_id)
+	var macros: Array = recipe.get("macros", [])
+	if macros.is_empty():
+		return
+	page.add_child(_fx_group_header("RECIPE MACROS · INTENT CONTROLS"))
+	var note := Label.new()
+	note.text = "Artist intent controls · maps to the same canonical fields shown below in Advanced"
+	note.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	note.add_theme_color_override("font_color", FxLabUiTokensScript.TEXT_DIM)
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	page.add_child(note)
+	for raw_macro in macros:
+		var macro: Dictionary = raw_macro
+		var macro_id := str(macro.get("id", ""))
+		var mapping: Dictionary = macro.get("mapping", {})
+		var source := "value"
+		for raw_rule in mapping.values():
+			if raw_rule is Dictionary and str((raw_rule as Dictionary).get("source", "value")) != "value":
+				source = str((raw_rule as Dictionary).get("source", "value"))
+				break
+		if source in ["anchor", "clock", "option", "mode"]:
+			var option := OptionButton.new()
+			var items: Array = _recipe_macro_options(macro_id, source)
+			for item in items:
+				option.add_item(str(item))
+			var current := _recipe_macro_current_token(layer, macro, items)
+			option.selected = maxi(0, items.find(current))
+			option.disabled = protected
+			option.tooltip_text = "Intent macro → canonical fields: " + ", ".join((macro.get("fields", []) as Array).map(func(path): return str(path)))
+			option.item_selected.connect(func(index: int) -> void:
+				_edit_recipe_macro(recipe_id, macro_id, items[index], layer_id)
+			)
+			page.add_child(_macro_row(str(macro.get("label", macro_id)), option))
+		else:
+			var spin := SpinBox.new()
+			spin.min_value = 0.0
+			spin.max_value = 1.0
+			spin.step = 0.01
+			spin.value = _recipe_macro_current_normalized(layer, macro)
+			spin.custom_minimum_size.x = 88.0
+			spin.editable = not protected
+			spin.tooltip_text = "Normalized intent macro → canonical fields: " + ", ".join((macro.get("fields", []) as Array).map(func(path): return str(path)))
+			spin.value_changed.connect(func(value: float) -> void:
+				_edit_recipe_macro(recipe_id, macro_id, value, layer_id)
+			)
+			page.add_child(_macro_row(str(macro.get("label", macro_id)), spin))
+
+func _macro_row(label_text: String, control: Control) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	var label := Label.new()
+	label.text = label_text
+	label.custom_minimum_size.x = 112.0
+	label.add_theme_font_size_override("font_size", UiTokens.T_HELP)
+	label.add_theme_color_override("font_color", UiTokens.CREAM_DIM)
+	row.add_child(label)
+	control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(control)
+	return row
+
+func _recipe_macro_options(macro_id: String, source: String) -> Array:
+	if source == "anchor":
+		return ["CUSTOM", "TARGET_CENTER", "VS_MARK", "LEFT_FIGHTER", "RIGHT_FIGHTER"]
+	if source == "clock":
+		return ["PRESENTATION_TIME", "FREE_RUN"]
+	if source == "mode":
+		return ["LINES", "DISTORTION", "COMBINED"]
+	if macro_id in ["POLARITY"]:
+		return ["PULL", "PUSH"]
+	return ["GRID", "DIAGONAL", "ANGULAR"]
+
+func _recipe_macro_current_token(layer: Dictionary, macro: Dictionary, items: Array) -> String:
+	var mapping: Dictionary = macro.get("mapping", {})
+	for raw_path in mapping.keys():
+		var path := str(raw_path)
+		var rule: Dictionary = mapping[raw_path] if mapping[raw_path] is Dictionary else {}
+		var source := str(rule.get("source", "value"))
+		if source == "anchor":
+			return str((layer.get("fx", {}) as Dictionary).get("operator_anchor", items[0]))
+		if source == "clock":
+			return str((layer.get("fx", {}) as Dictionary).get("operator_time_source", items[0]))
+		if source == "mode":
+			var mode := int((layer.get("fx", {}) as Dictionary).get("operator_mix_mode", 0))
+			return str(items[clampi(mode, 0, items.size() - 1)])
+		if source == "option":
+			var option := int((layer.get("fx", {}) as Dictionary).get(path.get_slice(".", path.get_slice_count(".") - 1), 0))
+			return str(items[clampi(option, 0, items.size() - 1)])
+	return str(items[0])
+
+func _recipe_macro_current_normalized(layer: Dictionary, macro: Dictionary) -> float:
+	var mapping: Dictionary = macro.get("mapping", {})
+	for raw_path in mapping.keys():
+		var path := str(raw_path)
+		var rule: Dictionary = mapping[raw_path] if mapping[raw_path] is Dictionary else {}
+		if str(rule.get("source", "value")) != "value":
+			continue
+		var leaf := path.get_slice(".", path.get_slice_count(".") - 1)
+		var raw_value = (layer.get("fx", {}) as Dictionary).get(leaf, 0.0)
+		var min_value := float(rule.get("min", FxLookScript.field_meta_all().get(leaf, {}).get("min", 0.0)))
+		var max_value := float(rule.get("max", FxLookScript.field_meta_all().get(leaf, {}).get("max", 1.0)))
+		return inverse_lerp(min_value, max_value, float(raw_value)) if not is_equal_approx(min_value, max_value) else 0.0
+	return 0.0
+
+func _edit_recipe_macro(recipe_id: String, macro_id: String, value, layer_id: String) -> void:
+	_edit_layer(layer_id, func(doc): FxRecipesScript.apply_macro(doc, recipe_id, macro_id, value), false, true)
+
 func _build_expert_fx(page: VBoxContainer, layer: Dictionary, layer_id: String, protected: bool) -> void:
 	var fx: Dictionary = layer.get("fx", {})
 	var meta_all: Dictionary = FxLookScript.field_meta_all()
+	_build_recipe_macros(page, layer, layer_id, protected)
 	var header := Label.new()
 	header.text = "EXPERT · DIRECT CANONICAL FX FIELDS"
 	header.add_theme_font_size_override("font_size", UiTokens.T_HELP)

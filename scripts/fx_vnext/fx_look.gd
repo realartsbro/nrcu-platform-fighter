@@ -23,6 +23,7 @@ const DISPLACEMENT_DRIVERS := ["NOISE", "DIRECTIONAL", "WAVE", "CELLULAR", "FRIN
 const EDGE_MODES := ["TRANSPARENT", "CLAMP", "MIRROR", "REPEAT"]
 const TIME_SOURCES := ["PRESENTATION_TIME", "FREE_RUN"]
 const LANES := ["TARGET_LOCAL", "FINAL_COMPOSITE", "DEFERRED_3D"]
+const AUTHORITIES := ["TARGET", "COMPOSITION"]
 const MASK_SOURCES := ["NONE", "ORIGINAL_SOURCE_ALPHA", "POST_DISPLACEMENT_ALPHA", "CUSTOM_MASK"]
 const MASK_REGIONS := ["FULL", "EDGE_BAND", "OUTER_BAND", "INNER_BAND"]
 const MASK_SPACES := ["SOURCE_SPACE", "LAYER_SPACE", "PRESENTATION_SPACE"]
@@ -121,7 +122,7 @@ static func neutral_fx() -> Dictionary:
 		# branches and keeps the supplied clock contract intact.
 		"operator": "NONE", "operator_secondary": "NONE", "operator_strength": 0.0, "operator_scale": 1.0,
 		"operator_speed": 1.0, "operator_threshold": 0.5,
-		"operator_softness": 0.1, "operator_mix": 0.75, "operator_mix_mode": 0.0, "operator_axis_x": 1.0, "operator_axis_y": 0.0, "operator_center_x": 0.5, "operator_center_y": 0.5, "operator_progress": 0.5, "operator_polarity": 0.0, "operator_pattern_mode": 0.0, "operator_pattern_family": 0.0, "operator_distortion": 0.0,
+		"operator_axis_x": 1.0, "operator_axis_y": 0.0, "operator_center_x": 0.5, "operator_center_y": 0.5, "operator_anchor": "CUSTOM", "operator_progress": 0.5, "operator_progress_start": 0.0, "operator_progress_end": 1.0, "operator_progress_mode": "STATIC", "operator_polarity": 0.0, "operator_pattern_mode": 0.0, "operator_pattern_family": 0.0, "operator_distortion": 0.0,
 		"operator_time_source": "PRESENTATION_TIME", "operator_event_start": 0.0, "operator_duration": 0.5,
 		"operator_color_a": [0.25, 0.95, 1.0, 1.0], "operator_color_b": [1.0, 0.35, 0.82, 1.0],
 		"time_source": "PRESENTATION_TIME",
@@ -151,6 +152,7 @@ static func new_layer(type: String, name: String) -> Dictionary:
 		"opacity": 1.0,
 		"blend_mode": "NORMAL",
 		"plane": "TARGET_SOURCE" if type == TYPE_SOURCE else "TARGET_OVERLAY",
+		"authority": "TARGET",
 		# Lane is explicit metadata. Existing planes remain on the target-local
 		# renderer path; FINAL_COMPOSITE is not inferred from plane names.
 		"lane": "TARGET_LOCAL",
@@ -195,6 +197,10 @@ static func materialize(doc: Dictionary) -> Dictionary:
 		layer["blend_mode"] = str(layer.get("blend_mode", "NORMAL"))
 		layer["plane"] = str(layer.get("plane", "TARGET_SOURCE" if layer["type"] == TYPE_SOURCE else "TARGET_OVERLAY"))
 		layer["lane"] = str(layer.get("lane", FxOperatorsScript.lane_for_plane(str(layer["plane"]))))
+		# FINAL_COMPOSITE is a composition-owned pass. Preserve an explicit
+		# authority when present, but make sparse historical Gold documents
+		# canonical without silently turning target-local layers global.
+		layer["authority"] = str(layer.get("authority", "COMPOSITION" if layer["lane"] == "FINAL_COMPOSITE" else "TARGET"))
 		layer["transform"] = _coerce_transform(_materialize_into(neutral_transform(), layer.get("transform", {})))
 		layer["displacement"] = _coerce_displacement(_materialize_into(neutral_displacement(), layer.get("displacement", {})))
 		layer["mask"] = _coerce_mask(_materialize_into(neutral_mask(), layer.get("mask", {})))
@@ -477,6 +483,13 @@ static func validate(doc: Dictionary) -> Dictionary:
 			errors.append("non-FX layer must not carry input (layer %s)" % layer_id)
 		if str(layer.get("plane", "")) not in PLANES:
 			errors.append("plane: invalid %s (layer %s)" % [str(layer.get("plane", "")), layer_id])
+		var authority := str(layer.get("authority", "TARGET"))
+		if authority not in AUTHORITIES:
+			errors.append("authority: invalid %s (layer %s)" % [authority, layer_id])
+		elif str(layer.get("lane", "")) == "FINAL_COMPOSITE" and authority != "COMPOSITION":
+			errors.append("FINAL_COMPOSITE layer must use COMPOSITION authority (layer %s)" % layer_id)
+		elif str(layer.get("lane", "")) != "FINAL_COMPOSITE" and authority != "TARGET":
+			errors.append("target-local layer must use TARGET authority (layer %s)" % layer_id)
 		var lane_result: Dictionary = FxOperatorsScript.validate_layer_lane(layer)
 		errors.append_array(lane_result.get("errors", []))
 		if not bool(lane_result.get("ok", false)) and lane_result.get("errors", []).is_empty():
@@ -557,12 +570,16 @@ static func _validate_fx(fx, layer_id: String, lane: String = "") -> Array:
 		"rgb_shift_units", "rgb_shift_alpha", "temporal_hold", "palette_strategy", "palette_hue_offset",
 		"palette_saturation", "palette_value", "final_tint_amount",
 		"operator_strength", "operator_scale", "operator_speed", "operator_threshold", "operator_softness", "operator_mix",
-		"operator_axis_x", "operator_axis_y", "operator_center_x", "operator_center_y", "operator_progress", "operator_polarity", "operator_pattern_mode", "operator_pattern_family", "operator_distortion", "operator_mix_mode", "operator_event_start", "operator_duration"]:
+		"operator_axis_x", "operator_axis_y", "operator_center_x", "operator_center_y", "operator_progress", "operator_progress_start", "operator_progress_end", "operator_polarity", "operator_pattern_mode", "operator_pattern_family", "operator_distortion", "operator_mix_mode", "operator_event_start", "operator_duration"]:
 		if f.has(key) and not _finite_number(f.get(key, null)):
 			errors.append("fx.%s: non-finite (layer %s)" % [key, layer_id])
 	for key in ["palette_lock_a", "palette_lock_b", "palette_swap"]:
 		if f.has(key) and not (f.get(key) is bool):
 			errors.append("fx.%s: expected bool (layer %s)" % [key, layer_id])
+	if str(f.get("operator_anchor", "CUSTOM")) not in ["VS_MARK", "TARGET_CENTER", "LEFT_FIGHTER", "RIGHT_FIGHTER", "CUSTOM"]:
+		errors.append("fx.operator_anchor: invalid (layer %s)" % layer_id)
+	if str(f.get("operator_progress_mode", "STATIC")) not in ["STATIC", "EVENT_LINEAR"]:
+		errors.append("fx.operator_progress_mode: invalid (layer %s)" % layer_id)
 	if f.has("palette_source_color"):
 		var source_color = f.get("palette_source_color", null)
 		if not (source_color is Array) or (source_color as Array).size() < 3 or not _finite_numbers(source_color as Array):

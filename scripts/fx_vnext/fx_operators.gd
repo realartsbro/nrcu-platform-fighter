@@ -12,9 +12,10 @@ const FINAL_COMPOSITE_SHADER_PATH := "res://shaders/nrcu_fx_vnext_final_composit
 const SCOPES := ["LOCAL", "FINAL_COMPOSITE", "DEFERRED_3D"]
 const LANES := ["TARGET_LOCAL", "FINAL_COMPOSITE", "DEFERRED_3D"]
 const TIME_SOURCES := ["PRESENTATION_TIME", "FREE_RUN"]
+const GOLD_ROUNDTRIP_EVIDENCE := "tests/fx_vnext_gold_production_roundtrip_test.gd"
+const GOLD_OPERATOR_IDS := ["speedlines_field", "pattern_transition", "vacuum_burst", "noise_erosion_border", "pixel_sort_smear"]
 const COST_CLASSES := ["NONE", "LOW", "MEDIUM", "HIGH", "DEFERRED"]
 const STATUSES := ["ADAPTER_ONLY", "SUPPORTED", "UNSUPPORTED", "DEFERRED"]
-const GOLD_OPERATOR_IDS := ["speedlines_field", "pattern_transition", "noise_erosion_border", "pixel_sort_smear", "vacuum_burst"]
 
 # Stable order is part of the contract. Do not derive this from Dictionary
 # iteration or from the order in which a shader happens to expose uniforms.
@@ -146,6 +147,10 @@ static func validate_registry() -> Dictionary:
 			errors.append("missing semantic notes: %s" % str(operator_id))
 		if str(row.get("test_evidence_reference", "")).strip_edges() == "":
 			errors.append("missing evidence reference: %s" % str(operator_id))
+		if GOLD_OPERATOR_IDS.has(str(operator_id)) and bool(row.get("persistence_proven", false)):
+			var evidence := str(row.get("test_evidence_reference", ""))
+			if not evidence.contains(GOLD_ROUNDTRIP_EVIDENCE):
+				errors.append("gold persistence flag lacks production roundtrip evidence: %s" % str(operator_id))
 	return {"ok": errors.is_empty(), "errors": errors}
 
 static func cost_for_operator(operator_id: String) -> float:
@@ -207,12 +212,16 @@ static func validate_layer_lane(layer: Dictionary) -> Dictionary:
 	elif lane not in LANES:
 		errors.append("lane: invalid %s" % lane)
 		supported = false
-	# COMPOSITION_BACKGROUND/FOREGROUND are existing source-local placement
-	# planes. They are deliberately not aliases for a post-composition pass.
-	if plane in ["COMPOSITION_BACKGROUND", "COMPOSITION_FOREGROUND"] and lane == "FINAL_COMPOSITE":
+	# COMPOSITION_BACKGROUND remains a source-local placement plane and cannot
+	# masquerade as a post-composition pass. COMPOSITION_FOREGROUND is the
+	# explicit ownership plane for full-frame FINAL_COMPOSITE authority.
+	if plane == "COMPOSITION_BACKGROUND" and lane == "FINAL_COMPOSITE":
 		errors.append("plane %s cannot be represented as FINAL_COMPOSITE" % plane)
 		supported = false
 	if lane == "FINAL_COMPOSITE":
+		if str(layer.get("authority", "")) != "COMPOSITION":
+			errors.append("FINAL_COMPOSITE requires COMPOSITION authority")
+			supported = false
 		if not final_composite_supported():
 			errors.append("FINAL_COMPOSITE lane is unsupported: dedicated full-frame shader path is unavailable")
 			supported = false
@@ -304,12 +313,12 @@ static func _build_registry() -> Dictionary:
 		_row("flow", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", "tests/fx_vnext_capability_parity_test.gd", "Flow/driver motion is local and clocked by supplied uniforms."),
 		_row("motion_envelope", "LOCAL", ["PRESENTATION_TIME"], true, true, true, true, "LOW", "tests/fx_vnext_temporal_model_test.gd#TM-03", "Motion envelopes modulate local adapter amounts; event authority remains presentation-owned."),
 		_row("manga_impact", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Global final-frame manga impact candidate; no dedicated implementation or runtime evidence exists in this repository.", "UNSUPPORTED"),
-		_row("speedlines_field", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", "tests/fx_vnext_gold_tranche_test.gd#speedlines_field", "Dedicated radial speedlines field in the FINAL_COMPOSITE shader; driven by supplied presentation/free-run clocks.", "SUPPORTED"),
-		_row("pattern_transition", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", "tests/fx_vnext_gold_tranche_test.gd#pattern_transition", "Dedicated geometric pattern transition over the captured final frame; driven by supplied clocks.", "SUPPORTED"),
-		_row("vacuum_burst", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "HIGH", "tests/fx_vnext_gold_tranche_test.gd#vacuum_burst", "Dedicated radial screen-space vacuum warp and burst ring in FINAL_COMPOSITE.", "SUPPORTED"),
+		_row("speedlines_field", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", GOLD_ROUNDTRIP_EVIDENCE + "#KINETIC_RUSH", "Dedicated radial speedlines field in the FINAL_COMPOSITE shader; driven by supplied presentation/free-run clocks and production roundtrip evidence.", "SUPPORTED"),
+		_row("pattern_transition", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", GOLD_ROUNDTRIP_EVIDENCE + "#PATTERN_CUT", "Dedicated geometric pattern transition over the captured final frame; driven by supplied clocks and production roundtrip evidence.", "SUPPORTED"),
+		_row("vacuum_burst", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "HIGH", GOLD_ROUNDTRIP_EVIDENCE + "#VACUUM_CLASH", "Dedicated radial screen-space vacuum warp and burst ring in FINAL_COMPOSITE with production roundtrip evidence.", "SUPPORTED"),
 		_row("perimeter_flux", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Frame/UV/circle-distance graphic candidate on a local input; it is not a source-silhouette perimeter solution.", "UNSUPPORTED"),
-		_row("noise_erosion_border", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", "tests/fx_vnext_gold_tranche_test.gd#noise_erosion_border", "Dedicated local alpha-silhouette distance border with supplied-clock noise erosion; no rectangle/radial fallback.", "ADAPTER_ONLY"),
-		_row("pixel_sort_smear", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", "tests/fx_vnext_gold_tranche_test.gd#pixel_sort_smear", "Dedicated local-input directional luminance-run smear; it samples the resolved layer input rather than RGB separation or dither.", "ADAPTER_ONLY"),
+		_row("noise_erosion_border", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", GOLD_ROUNDTRIP_EVIDENCE + "#LIVING_CONTOUR", "Dedicated local alpha-silhouette distance border with supplied-clock noise erosion; no rectangle/radial fallback; production roundtrip is proven while visual status remains adapter-only.", "ADAPTER_ONLY"),
+		_row("pixel_sort_smear", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", GOLD_ROUNDTRIP_EVIDENCE + "#SIGNAL_MELT", "Dedicated local-input directional luminance-run smear; it samples the resolved layer input rather than RGB separation or dither; production roundtrip is proven while visual status remains adapter-only.", "ADAPTER_ONLY"),
 		_row("contour_pulse", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Local source-alpha contour pulse candidate; no implemented contour-aware pass or evidence exists here.", "UNSUPPORTED"),
 		_row("silhouette_extrude", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Local source-alpha silhouette extrusion candidate; no implemented contour-aware pass or evidence exists here.", "UNSUPPORTED"),
 		_row("print_misregistration", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Global final-frame print misregistration candidate; no dedicated implementation or runtime evidence exists in this repository.", "UNSUPPORTED"),

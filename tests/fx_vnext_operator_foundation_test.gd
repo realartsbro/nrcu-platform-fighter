@@ -217,6 +217,8 @@ func _lanes_are_explicit_and_fail_closed() -> void:
 		var rejected: Dictionary = FxOperatorsScript.validate_layer_lane(forged)
 		_check(not bool(rejected.get("ok", false)), "%s cannot masquerade as FINAL_COMPOSITE" % plane)
 	var final_layer := FxLookScript.new_layer("FX", "Final")
+	final_layer["plane"] = "COMPOSITION_FOREGROUND"
+	final_layer["authority"] = "COMPOSITION"
 	final_layer["lane"] = "FINAL_COMPOSITE"
 	var final_result: Dictionary = FxOperatorsScript.validate_layer_lane(final_layer)
 	_check(bool(final_result.get("supported", false)), "FINAL_COMPOSITE is supported by the dedicated path")
@@ -257,6 +259,8 @@ func _cost_fields_are_truthful_and_deterministic() -> void:
 	_check((look_cost.get("operator_costs", {}) as Dictionary).has("dither"), "look cost aggregates dither deterministically")
 	_check(is_equal_approx(float(look_cost.get("operator_cost_total", 0.0)), 1.0), "look operator total is deterministic", str(look_cost.get("operator_cost_total", "")))
 	var forged := layer.duplicate(true)
+	forged["authority"] = "COMPOSITION"
+	forged["plane"] = "COMPOSITION_FOREGROUND"
 	forged["lane"] = "FINAL_COMPOSITE"
 	var supported_final: Dictionary = FxCostScript.layer_cost(forged)
 	_check(bool(supported_final.get("lane_supported", false)), "supported final lane cost is reported as renderable")

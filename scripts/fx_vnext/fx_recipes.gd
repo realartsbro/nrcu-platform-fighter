@@ -25,6 +25,8 @@ const HERO_RECIPE_IDS := [PRIMARY_FLAME_ENERGY, ORGANIC_SIDE_FIELD]
 const CURATED_RECIPE_IDS := [EDGE_HALO, RGB_TEAR, DITHER_TREATMENT]
 const GOLD_RECIPE_IDS := [LIVING_CONTOUR, SIGNAL_MELT, KINETIC_RUSH, VACUUM_CLASH, PATTERN_CUT, CLASH_OVERDRIVE]
 const RECIPE_IDS := HERO_RECIPE_IDS + GOLD_RECIPE_IDS + CURATED_RECIPE_IDS
+const FxCompositionScript := preload("res://scripts/fx_vnext/fx_composition.gd")
+const COMPOSITION_RECIPE_IDS := [KINETIC_RUSH, PATTERN_CUT, VACUUM_CLASH, CLASH_OVERDRIVE]
 
 static func recipe_ids() -> Array:
 	return RECIPE_IDS.duplicate()
@@ -70,7 +72,7 @@ static func instantiate(recipe_id: String, instance_key: String) -> Dictionary:
 			layers.append(fixed_layers[0])
 	if not errors.is_empty():
 		return {"ok": false, "errors": errors, "layers": layers}
-	return {
+	var result := {
 		"ok": true,
 		"errors": [],
 		"recipe_id": recipe_id,
@@ -78,19 +80,121 @@ static func instantiate(recipe_id: String, instance_key: String) -> Dictionary:
 		"layers": layers,
 		"layer_ids": layers.map(func(layer): return str((layer as Dictionary).get("layer_id", ""))),
 	}
+	if COMPOSITION_RECIPE_IDS.has(recipe_id):
+		result["composition"] = instantiate_composition(recipe_id, key, layers)
+	return result
+
+static func is_composition_recipe(recipe_id: String) -> bool:
+	return COMPOSITION_RECIPE_IDS.has(recipe_id)
+
+static func instantiate_composition(recipe_id: String, instance_key: String, canonical_layers := []) -> Dictionary:
+	if not COMPOSITION_RECIPE_IDS.has(recipe_id):
+		return {"ok": false, "errors": ["recipe is not composition-owned: " + recipe_id], "doc": {}}
+	var layers: Array = canonical_layers
+	if layers.is_empty():
+		var result := instantiate(recipe_id, instance_key)
+		if not bool(result.get("ok", false)):
+			return {"ok": false, "errors": result.get("errors", []), "doc": {}}
+		layers = result.get("layers", [])
+	var doc := FxCompositionScript.new_document("COMP_%s_%s" % [recipe_id, instance_key], str(_definition(recipe_id).get("name", recipe_id)))
+	var passes: Array = []
+	for index in range(layers.size()):
+		var layer: Dictionary = layers[index]
+		var fx: Dictionary = (layer.get("fx", {}) as Dictionary).duplicate(true)
+		var operator_id := str(fx.get("operator", "NONE"))
+		passes.append({
+			"pass_id": deterministic_layer_id(recipe_id, instance_key, "composition_pass_%d" % index),
+			"name": str(layer.get("name", operator_id)),
+			"operator": operator_id,
+			"enabled": bool(layer.get("enabled", true)),
+			"event_start": float(fx.get("operator_event_start", 0.0)),
+			"duration": float(fx.get("operator_duration", 0.0)),
+			"lane": "FINAL_COMPOSITE",
+			"plane": "COMPOSITION_FOREGROUND",
+			"authority": "COMPOSITION",
+			"fx": fx,
+		})
+	# Explicit terminal identity keeps the authored sequence inspectable while
+	# the renderer skips it as a no-op; creative passes own their neutral return.
+	passes.append({"pass_id": deterministic_layer_id(recipe_id, instance_key, "composition_neutral"), "name": "Neutral Release", "operator": "NONE", "enabled": true, "event_start": 0.0, "duration": 0.0, "lane": "FINAL_COMPOSITE", "plane": "COMPOSITION_FOREGROUND", "authority": "COMPOSITION", "fx": {}})
+	doc["final_passes"] = passes
+	var check := FxCompositionScript.validate(doc)
+	return {"ok": bool(check.get("ok", false)), "errors": check.get("errors", []), "doc": check.get("doc", doc), "pass_ids": passes.map(func(final_pass): return str((final_pass as Dictionary).get("pass_id", "")))}
 
 static func instantiate_look(recipe_id: String, look_id: String, look_name: String, instance_key: String) -> Dictionary:
 	var result := instantiate(recipe_id, instance_key)
+	var recipe := _definition(recipe_id)
 	if not bool(result.get("ok", false)):
 		return result
 	var look := FxLookScript.new_look(look_id, look_name)
 	look["layers"].append_array(result["layers"])
+	# Keep the Recipe contract beside the canonical Look. Macros are intent
+	# controls over these same fields; they are not a hidden second state store.
+	look["metadata"]["recipe_id"] = recipe_id
+	look["metadata"]["recipe_macros"] = recipe.get("macros", []).duplicate(true)
+	look["metadata"]["recipe_target_compatibility"] = recipe.get("target_compatibility", {}).duplicate(true)
+	look["metadata"]["source_semantics"] = recipe.get("source_semantics", {}).duplicate(true)
 	look = FxLookScript.materialize(look)
 	var validation := FxLookScript.validate_input(look)
 	if not bool(validation.get("ok", false)):
 		return {"ok": false, "errors": validation.get("errors", []), "layers": result["layers"], "look": look}
 	result["look"] = look
 	return result
+
+static func apply_macro(doc: Dictionary, recipe_id: String, macro_id: String, value) -> bool:
+	# Apply an intent value to the authored canonical fields of every matching
+	# recipe layer. Advanced fields remain the sole source of truth after this
+	# mapping and therefore round-trip through the normal session transaction.
+	var recipe := _definition(recipe_id)
+	if recipe.is_empty():
+		return false
+	var macro: Dictionary = {}
+	for raw_macro in recipe.get("macros", []):
+		if str((raw_macro as Dictionary).get("id", "")) == macro_id:
+			macro = raw_macro
+			break
+	if macro.is_empty():
+		return false
+	var mapping: Dictionary = macro.get("mapping", {})
+	for raw_layer in doc.get("layers", []):
+		if not (raw_layer is Dictionary):
+			continue
+		var layer: Dictionary = raw_layer
+		for raw_path in mapping.keys():
+			var path := str(raw_path)
+			var rule: Dictionary = mapping[raw_path] if mapping[raw_path] is Dictionary else {}
+			var source := str(rule.get("source", "value"))
+			var mapped = _macro_mapped_value(layer, path, rule, source, value)
+			if mapped != null:
+				_set_field(layer, path, mapped)
+	return true
+
+static func _macro_mapped_value(layer: Dictionary, path: String, rule: Dictionary, source: String, value):
+	if source == "anchor":
+		return str(value)
+	if source == "clock":
+		return str(value)
+	if source == "mode":
+		if value is String:
+			return ["LINES", "DISTORTION", "COMBINED"].find(str(value)) if ["LINES", "DISTORTION", "COMBINED"].has(str(value)) else 0.0
+		return roundi(clampf(float(value), 0.0, 1.0) * 2.0)
+	if source == "option":
+		if value is String:
+			var options := ["GRID", "DIAGONAL", "ANGULAR", "PULL", "PUSH"]
+			var found := options.find(str(value))
+			return float(maxi(found, 0))
+		return roundi(clampf(float(value), 0.0, 1.0) * 2.0)
+	if rule.get("axis", "") != "":
+		var angle := clampf(float(value), 0.0, 1.0) * TAU
+		return cos(angle) if str(rule.get("axis", "")) == "x" else sin(angle)
+	var number := clampf(float(value), 0.0, 1.0)
+	if rule.has("min") or rule.has("max"):
+		return lerpf(float(rule.get("min", 0.0)), float(rule.get("max", 1.0)), number)
+	var leaf := path.get_slice(".", path.get_slice_count(".") - 1)
+	var meta: Dictionary = FxLookScript.field_meta_all().get(leaf, {})
+	if meta.has("min") or meta.has("max"):
+		return lerpf(float(meta.get("min", 0.0)), float(meta.get("max", 1.0)), number)
+	return number
 
 static func deterministic_layer_id(recipe_id: String, instance_key: String, layer_key: String) -> String:
 	# Slugs remain readable in the layer panel. The bounded digest prevents
@@ -197,13 +301,20 @@ static func _definition(recipe_id: String) -> Dictionary:
 				"description": "A full-frame radial speedline field for forward motion and clash escalation, authored as a real final-composite operator.",
 				"intent": "Kinetic final-frame acceleration",
 				"operator_ids": ["speedlines_field"],
-				"target_compatibility": {"target_roles": ["primary", "secondary", "side_field"], "element_roles": ["primary", "secondary", "side_field"], "allowed_planes": ["TARGET_OVERLAY"], "requires_fighter": false},
+				"target_compatibility": {"target_roles": ["composition"], "element_roles": ["composition"], "allowed_planes": ["COMPOSITION_FOREGROUND"], "requires_fighter": false},
 				"advanced_access": true,
-				"macros": [{"id": "KINETIC_FIELD", "label": "Kinetic Field", "fields": ["fx.operator_strength", "fx.operator_scale", "fx.operator_speed", "fx.operator_pattern_mode", "fx.operator_mix_mode", "fx.operator_distortion", "fx.operator_center_x", "fx.operator_center_y", "fx.operator_axis_x", "fx.operator_axis_y", "fx.operator_time_source"]}],
+				"macros": [
+					{"id": "ENERGY", "label": "Energy", "fields": ["fx.operator_strength", "fx.operator_distortion"], "mapping": {"fx.operator_strength": {"source": "value"}, "fx.operator_distortion": {"source": "value", "scale": 0.45}}},
+					{"id": "DENSITY", "label": "Density", "fields": ["fx.operator_scale", "fx.operator_pattern_mode"], "mapping": {"fx.operator_scale": {"source": "value", "min": 0.5, "max": 2.5}, "fx.operator_pattern_mode": {"source": "value", "threshold": 0.72}}},
+					{"id": "FOCUS", "label": "Focus", "fields": ["fx.operator_center_x", "fx.operator_center_y"], "mapping": {"fx.operator_anchor": {"source": "anchor"}}},
+					{"id": "DIRECTION", "label": "Direction", "fields": ["fx.operator_axis_x", "fx.operator_axis_y"], "mapping": {"fx.operator_axis_x": {"source": "value", "axis": "x"}, "fx.operator_axis_y": {"source": "value", "axis": "y"}}},
+					{"id": "DISTORTION", "label": "Distortion", "fields": ["fx.operator_distortion", "fx.operator_mix_mode"], "mapping": {"fx.operator_distortion": {"source": "value"}, "fx.operator_mix_mode": {"source": "mode"}}},
+					{"id": "MOTION", "label": "Motion", "fields": ["fx.operator_speed", "fx.operator_time_source"], "mapping": {"fx.operator_speed": {"source": "value", "min": 0.0, "max": 3.0}, "fx.operator_time_source": {"source": "clock"}}},
+				],
 				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "approximation": "NONE"},
 				"layers": [{"instance_key": "kinetic_speedlines", "name": "Kinetic Speedlines", "type": "FX", "authored_fields": {
-					"layer.plane": "TARGET_OVERLAY", "layer.lane": "FINAL_COMPOSITE", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
-					"fx.operator": "speedlines_field", "fx.operator_strength": 0.72, "fx.operator_scale": 1.0, "fx.operator_speed": 1.25, "fx.operator_pattern_mode": 0.0, "fx.operator_mix_mode": 2.0, "fx.operator_distortion": 0.24, "fx.operator_center_x": 0.5, "fx.operator_center_y": 0.5, "fx.operator_axis_x": 1.0, "fx.operator_axis_y": 0.0, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.final_tint_amount": 0.0,
+					"layer.plane": "COMPOSITION_FOREGROUND", "layer.lane": "FINAL_COMPOSITE", "layer.authority": "COMPOSITION", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
+					"fx.operator": "speedlines_field", "fx.operator_anchor": "TARGET_CENTER", "fx.operator_strength": 0.72, "fx.operator_scale": 1.0, "fx.operator_speed": 1.25, "fx.operator_pattern_mode": 0.0, "fx.operator_mix_mode": 2.0, "fx.operator_distortion": 0.24, "fx.operator_center_x": 0.5, "fx.operator_center_y": 0.5, "fx.operator_axis_x": 1.0, "fx.operator_axis_y": 0.0, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.final_tint_amount": 0.0,
 				}}],
 			})
 		PATTERN_CUT:
@@ -214,13 +325,20 @@ static func _definition(recipe_id: String) -> Dictionary:
 				"description": "A clocked geometric cut that replaces frame-wide transition guesswork with a readable captured-frame pattern.",
 				"intent": "Patterned transition cut",
 				"operator_ids": ["pattern_transition"],
-				"target_compatibility": {"target_roles": ["primary", "secondary", "side_field"], "element_roles": ["primary", "secondary", "side_field"], "allowed_planes": ["TARGET_OVERLAY"], "requires_fighter": false},
+				"target_compatibility": {"target_roles": ["composition"], "element_roles": ["composition"], "allowed_planes": ["COMPOSITION_FOREGROUND"], "requires_fighter": false},
 				"advanced_access": true,
-				"macros": [{"id": "PATTERN_CUT", "label": "Pattern Cut", "fields": ["fx.operator_strength", "fx.operator_scale", "fx.operator_speed", "fx.operator_pattern_family", "fx.operator_progress", "fx.operator_axis_x", "fx.operator_axis_y", "fx.operator_time_source", "fx.operator_color_a", "fx.operator_color_b"]}],
+				"macros": [
+					{"id": "PROGRESS", "label": "Progress", "fields": ["fx.operator_progress_start", "fx.operator_progress_end"], "mapping": {"fx.operator_progress_start": {"source": "value", "min": 0.0, "max": 1.0}, "fx.operator_progress_end": {"source": "value", "min": 0.0, "max": 1.0}}},
+					{"id": "PATTERN", "label": "Pattern", "fields": ["fx.operator_pattern_family", "fx.operator_pattern_mode"], "mapping": {"fx.operator_pattern_family": {"source": "option"}, "fx.operator_pattern_mode": {"source": "value"}}},
+					{"id": "DIRECTION", "label": "Direction", "fields": ["fx.operator_axis_x", "fx.operator_axis_y"], "mapping": {"fx.operator_axis_x": {"source": "value"}, "fx.operator_axis_y": {"source": "value"}}},
+					{"id": "SCALE", "label": "Scale", "fields": ["fx.operator_scale"], "mapping": {"fx.operator_scale": {"source": "value", "min": 0.5, "max": 3.0}}},
+					{"id": "FEATHER", "label": "Feather", "fields": ["fx.operator_softness"], "mapping": {"fx.operator_softness": {"source": "value", "min": 0.01, "max": 0.5}}},
+					{"id": "MOTION", "label": "Motion", "fields": ["fx.operator_speed", "fx.operator_time_source"], "mapping": {"fx.operator_speed": {"source": "value", "min": 0.0, "max": 3.0}, "fx.operator_time_source": {"source": "clock"}}},
+				],
 				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "approximation": "NONE"},
 				"layers": [{"instance_key": "pattern_cut", "name": "Pattern Cut", "type": "FX", "authored_fields": {
-					"layer.plane": "TARGET_OVERLAY", "layer.lane": "FINAL_COMPOSITE", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
-					"fx.operator": "pattern_transition", "fx.operator_strength": 0.78, "fx.operator_scale": 1.0, "fx.operator_speed": 1.0, "fx.operator_pattern_family": 1.0, "fx.operator_progress": 0.5, "fx.operator_axis_x": 1.0, "fx.operator_axis_y": 0.18, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.operator_color_a": [0.25, 0.95, 1.0, 1.0], "fx.operator_color_b": [1.0, 0.35, 0.82, 1.0], "fx.final_tint_amount": 0.0,
+					"layer.plane": "COMPOSITION_FOREGROUND", "layer.lane": "FINAL_COMPOSITE", "layer.authority": "COMPOSITION", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
+					"fx.operator": "pattern_transition", "fx.operator_strength": 0.78, "fx.operator_scale": 1.0, "fx.operator_speed": 1.0, "fx.operator_pattern_family": 1.0, "fx.operator_progress": 0.0, "fx.operator_progress_start": 0.0, "fx.operator_progress_end": 1.0, "fx.operator_progress_mode": "EVENT_LINEAR", "fx.operator_axis_x": 1.0, "fx.operator_axis_y": 0.18, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.operator_color_a": [0.25, 0.95, 1.0, 1.0], "fx.operator_color_b": [1.0, 0.35, 0.82, 1.0], "fx.final_tint_amount": 0.0,
 				}}],
 			})
 		LIVING_CONTOUR:
@@ -233,7 +351,14 @@ static func _definition(recipe_id: String) -> Dictionary:
 				"operator_ids": ["noise_erosion_border"],
 				"target_compatibility": {"target_roles": ["primary", "secondary", "side_field"], "element_roles": ["primary", "secondary", "side_field"], "allowed_planes": ["TARGET_OVERLAY", "TARGET_SOURCE"], "requires_fighter": false},
 				"advanced_access": true,
-				"macros": [{"id": "LIVING_CONTOUR", "label": "Living Contour", "fields": ["fx.operator_strength", "fx.operator_scale", "fx.operator_speed", "fx.operator_threshold", "fx.operator_time_source"]}],
+				"macros": [
+					{"id": "LIFE", "label": "Life", "fields": ["fx.operator_strength"], "mapping": {"fx.operator_strength": {"source": "value"}}},
+					{"id": "EDGE_DEPTH", "label": "Edge Depth", "fields": ["mask.width_px", "mask.feather_px"], "mapping": {"mask.width_px": {"source": "value"}, "mask.feather_px": {"source": "value", "scale": 0.25}}},
+					{"id": "BREAKUP", "label": "Breakup", "fields": ["fx.operator_threshold"], "mapping": {"fx.operator_threshold": {"source": "value"}}},
+					{"id": "TURBULENCE", "label": "Turbulence", "fields": ["fx.operator_scale", "fx.operator_speed"], "mapping": {"fx.operator_scale": {"source": "value"}, "fx.operator_speed": {"source": "value"}}},
+					{"id": "DRIFT", "label": "Drift", "fields": ["fx.operator_axis_x", "fx.operator_axis_y"], "mapping": {"fx.operator_axis_x": {"source": "value"}, "fx.operator_axis_y": {"source": "value"}}},
+					{"id": "INTENSITY", "label": "Intensity", "fields": ["fx.operator_strength", "fx.operator_time_source"], "mapping": {"fx.operator_strength": {"source": "value"}, "fx.operator_time_source": {"source": "clock"}}},
+				],
 				"source_semantics": {"input": "ORIGINAL_SOURCE_ALPHA", "mask_source": "ORIGINAL_SOURCE_ALPHA", "approximation": "NONE"},
 				"layers": [{"instance_key": "living_contour", "name": "Living Contour", "type": "FX", "authored_fields": {
 					"layer.plane": "TARGET_OVERLAY", "layer.lane": "TARGET_LOCAL", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "ADD",
@@ -249,9 +374,16 @@ static func _definition(recipe_id: String) -> Dictionary:
 				"description": "A directional luminance-run smear that selects from the resolved local input instead of faking motion with RGB separation or dither.",
 				"intent": "Directional signal smear",
 				"operator_ids": ["pixel_sort_smear"],
-				"target_compatibility": {"target_roles": ["primary", "secondary", "side_field"], "element_roles": ["primary", "secondary", "side_field"], "allowed_planes": ["TARGET_OVERLAY", "TARGET_SOURCE"], "requires_fighter": false},
+				"target_compatibility": {"target_roles": ["echo"], "element_roles": ["echo"], "allowed_planes": ["TARGET_OVERLAY", "TARGET_SOURCE"], "requires_fighter": false, "primary_intent": "ECHO"},
 				"advanced_access": true,
-				"macros": [{"id": "SIGNAL_MELT", "label": "Signal Melt", "fields": ["fx.operator_strength", "fx.operator_scale", "fx.operator_threshold", "fx.operator_axis_x", "fx.operator_axis_y", "fx.operator_time_source"]}],
+				"macros": [
+					{"id": "MELT", "label": "Melt", "fields": ["fx.operator_strength", "fx.operator_scale"], "mapping": {"fx.operator_strength": {"source": "value"}, "fx.operator_scale": {"source": "value", "min": 0.5, "max": 4.0}}},
+					{"id": "THRESHOLD", "label": "Threshold", "fields": ["fx.operator_threshold"], "mapping": {"fx.operator_threshold": {"source": "value"}}},
+					{"id": "SOFTNESS", "label": "Softness", "fields": ["fx.operator_softness"], "mapping": {"fx.operator_softness": {"source": "value", "min": 0.01, "max": 0.5}}},
+					{"id": "DIRECTION", "label": "Direction", "fields": ["fx.operator_axis_x", "fx.operator_axis_y"], "mapping": {"fx.operator_axis_x": {"source": "value"}, "fx.operator_axis_y": {"source": "value"}}},
+					{"id": "TURBULENCE", "label": "Turbulence", "fields": ["fx.operator_speed"], "mapping": {"fx.operator_speed": {"source": "value", "min": 0.0, "max": 3.0}}},
+					{"id": "CHROMATIC_SPLIT", "label": "Chromatic Split", "fields": ["fx.operator_mix_mode"], "mapping": {"fx.operator_mix_mode": {"source": "mode"}}},
+				],
 				"source_semantics": {"input": "LOCAL_RESOLVED_INPUT", "approximation": "NONE"},
 				"layers": [{"instance_key": "signal_melt", "name": "Signal Melt", "type": "FX", "authored_fields": {
 					"layer.plane": "TARGET_OVERLAY", "layer.lane": "TARGET_LOCAL", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
@@ -266,13 +398,19 @@ static func _definition(recipe_id: String) -> Dictionary:
 				"description": "A radial inward pull and moving burst ring over the captured final frame for clash punctuation.",
 				"intent": "Radial clash vacuum",
 				"operator_ids": ["vacuum_burst"],
-				"target_compatibility": {"target_roles": ["primary", "secondary"], "element_roles": ["primary", "secondary"], "allowed_planes": ["TARGET_OVERLAY"], "requires_fighter": false},
+				"target_compatibility": {"target_roles": ["composition"], "element_roles": ["composition"], "allowed_planes": ["COMPOSITION_FOREGROUND"], "requires_fighter": false},
 				"advanced_access": true,
-				"macros": [{"id": "VACUUM_CLASH", "label": "Vacuum Clash", "fields": ["fx.operator_strength", "fx.operator_scale", "fx.operator_speed", "fx.operator_center_x", "fx.operator_center_y", "fx.operator_polarity", "fx.operator_time_source", "fx.operator_color_a", "fx.operator_color_b"]}],
+				"macros": [
+					{"id": "STRENGTH", "label": "Strength", "fields": ["fx.operator_strength"], "mapping": {"fx.operator_strength": {"source": "value"}}},
+					{"id": "POLARITY", "label": "Pull / Push", "fields": ["fx.operator_polarity"], "mapping": {"fx.operator_polarity": {"source": "option"}}},
+					{"id": "RADIUS", "label": "Radius", "fields": ["fx.operator_scale"], "mapping": {"fx.operator_scale": {"source": "value", "min": 0.5, "max": 3.0}}},
+					{"id": "WOBBLE", "label": "Wobble", "fields": ["fx.operator_speed", "fx.operator_distortion"], "mapping": {"fx.operator_speed": {"source": "value"}, "fx.operator_distortion": {"source": "value", "scale": 0.4}}},
+					{"id": "DURATION", "label": "Duration", "fields": ["fx.operator_duration"], "mapping": {"fx.operator_duration": {"source": "value", "min": 0.05, "max": 3.0}}},
+				],
 				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "approximation": "NONE"},
 				"layers": [{"instance_key": "vacuum_clash", "name": "Vacuum Clash", "type": "FX", "authored_fields": {
-					"layer.plane": "TARGET_OVERLAY", "layer.lane": "FINAL_COMPOSITE", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
-					"fx.operator": "vacuum_burst", "fx.operator_strength": 0.86, "fx.operator_scale": 1.0, "fx.operator_speed": 1.3, "fx.operator_center_x": 0.5, "fx.operator_center_y": 0.5, "fx.operator_polarity": 0.0, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.operator_color_a": [0.25, 0.95, 1.0, 1.0], "fx.operator_color_b": [1.0, 0.35, 0.82, 1.0], "fx.final_tint_amount": 0.0,
+					"layer.plane": "COMPOSITION_FOREGROUND", "layer.lane": "FINAL_COMPOSITE", "layer.authority": "COMPOSITION", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
+					"fx.operator": "vacuum_burst", "fx.operator_anchor": "VS_MARK", "fx.operator_strength": 0.86, "fx.operator_scale": 1.0, "fx.operator_speed": 1.3, "fx.operator_center_x": 0.5, "fx.operator_center_y": 0.5, "fx.operator_polarity": 0.0, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.operator_color_a": [0.25, 0.95, 1.0, 1.0], "fx.operator_color_b": [1.0, 0.35, 0.82, 1.0], "fx.final_tint_amount": 0.0,
 				}}],
 			})
 		CLASH_OVERDRIVE:
@@ -280,17 +418,33 @@ static func _definition(recipe_id: String) -> Dictionary:
 				"stable_id": CLASH_OVERDRIVE,
 				"name": "Clash Overdrive",
 				"category": "Gold Recipe",
-				"description": "A deliberate final-composite combination of vacuum pull and radial speedline energy, kept as one authored lane.",
+				"description": "A deliberate ordered final-composite choreography: vacuum anticipation, speedline burst, then patterned breakup and release.",
 				"intent": "Full-frame clash overdrive",
-				"operator_ids": ["speedlines_field", "vacuum_burst"],
-				"target_compatibility": {"target_roles": ["primary", "secondary"], "element_roles": ["primary", "secondary"], "allowed_planes": ["TARGET_OVERLAY"], "requires_fighter": false},
+				"operator_ids": ["vacuum_burst", "speedlines_field", "pattern_transition"],
+				"target_compatibility": {"target_roles": ["composition"], "element_roles": ["composition"], "allowed_planes": ["COMPOSITION_FOREGROUND"], "requires_fighter": false},
 				"advanced_access": true,
-				"macros": [{"id": "CLASH_OVERDRIVE", "label": "Clash Overdrive", "fields": ["fx.operator", "fx.operator_secondary", "fx.operator_strength", "fx.operator_scale", "fx.operator_speed", "fx.operator_time_source"]}],
-				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "composition": "SPEEDLINES_PLUS_VACUUM", "approximation": "NONE"},
-				"layers": [{"instance_key": "clash_overdrive", "name": "Clash Overdrive", "type": "FX", "authored_fields": {
-					"layer.plane": "TARGET_OVERLAY", "layer.lane": "FINAL_COMPOSITE", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
-					"fx.operator": "speedlines_field", "fx.operator_secondary": "vacuum_burst", "fx.operator_strength": 0.92, "fx.operator_scale": 1.1, "fx.operator_speed": 1.5, "fx.operator_pattern_mode": 0.0, "fx.operator_mix_mode": 2.0, "fx.operator_distortion": 0.28, "fx.operator_center_x": 0.5, "fx.operator_center_y": 0.5, "fx.operator_polarity": 0.0, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.final_tint_amount": 0.0,
-				}}],
+				"macros": [
+					{"id": "IMPACT", "label": "Impact", "fields": ["fx.operator_strength"], "mapping": {"fx.operator_strength": {"source": "value"}}},
+					{"id": "DIRECTION", "label": "Direction", "fields": ["fx.operator_axis_x", "fx.operator_axis_y"], "mapping": {"fx.operator_axis_x": {"source": "value"}, "fx.operator_axis_y": {"source": "value"}}},
+					{"id": "GRAPHIC_BREAKUP", "label": "Graphic Breakup", "fields": ["fx.operator_pattern_family", "fx.operator_progress_start", "fx.operator_progress_end"], "mapping": {"fx.operator_pattern_family": {"source": "option"}, "fx.operator_progress_start": {"source": "value"}, "fx.operator_progress_end": {"source": "value"}}},
+					{"id": "DISTORTION", "label": "Distortion", "fields": ["fx.operator_distortion", "fx.operator_mix_mode"], "mapping": {"fx.operator_distortion": {"source": "value"}, "fx.operator_mix_mode": {"source": "mode"}}},
+					{"id": "DURATION", "label": "Duration", "fields": ["fx.operator_duration"], "mapping": {"fx.operator_duration": {"source": "value", "min": 0.1, "max": 3.0}}},
+				],
+				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "composition": "VACUUM_SPEEDLINES_PATTERN", "approximation": "NONE"},
+				"layers": [
+					{"instance_key": "clash_vacuum", "name": "Clash Vacuum Anticipation", "type": "FX", "authored_fields": {
+						"layer.plane": "COMPOSITION_FOREGROUND", "layer.lane": "FINAL_COMPOSITE", "layer.authority": "COMPOSITION", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
+						"fx.operator": "vacuum_burst", "fx.operator_anchor": "VS_MARK", "fx.operator_strength": 0.86, "fx.operator_scale": 1.0, "fx.operator_speed": 1.3, "fx.operator_center_x": 0.5, "fx.operator_center_y": 0.5, "fx.operator_polarity": 0.0, "fx.operator_event_start": 0.0, "fx.operator_duration": 0.42, "fx.operator_time_source": "PRESENTATION_TIME", "fx.final_tint_amount": 0.0,
+					}},
+					{"instance_key": "clash_speedlines", "name": "Clash Speedline Burst", "type": "FX", "authored_fields": {
+						"layer.plane": "COMPOSITION_FOREGROUND", "layer.lane": "FINAL_COMPOSITE", "layer.authority": "COMPOSITION", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
+						"fx.operator": "speedlines_field", "fx.operator_anchor": "VS_MARK", "fx.operator_strength": 0.92, "fx.operator_scale": 1.1, "fx.operator_speed": 1.5, "fx.operator_pattern_mode": 0.0, "fx.operator_mix_mode": 2.0, "fx.operator_distortion": 0.28, "fx.operator_center_x": 0.5, "fx.operator_center_y": 0.5, "fx.operator_axis_x": 1.0, "fx.operator_axis_y": 0.0, "fx.operator_event_start": 0.16, "fx.operator_duration": 0.62, "fx.operator_time_source": "PRESENTATION_TIME", "fx.final_tint_amount": 0.0,
+					}},
+					{"instance_key": "clash_pattern", "name": "Clash Pattern Breakup", "type": "FX", "authored_fields": {
+						"layer.plane": "COMPOSITION_FOREGROUND", "layer.lane": "FINAL_COMPOSITE", "layer.authority": "COMPOSITION", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
+						"fx.operator": "pattern_transition", "fx.operator_anchor": "VS_MARK", "fx.operator_strength": 0.78, "fx.operator_scale": 1.0, "fx.operator_speed": 1.0, "fx.operator_pattern_family": 2.0, "fx.operator_progress": 0.0, "fx.operator_progress_start": 0.0, "fx.operator_progress_end": 1.0, "fx.operator_progress_mode": "EVENT_LINEAR", "fx.operator_axis_x": 1.0, "fx.operator_axis_y": 0.18, "fx.operator_event_start": 0.42, "fx.operator_duration": 0.78, "fx.operator_time_source": "PRESENTATION_TIME", "fx.final_tint_amount": 0.0,
+					}},
+				],
 			})
 		PRIMARY_FLAME_ENERGY:
 			return _decorate({
@@ -470,6 +624,11 @@ static func _decorate(recipe: Dictionary) -> Dictionary:
 	out["authored_fields"] = all_fields
 	out["canonical_fields"] = authored_field_paths_from_recipe(out)
 	out["macro_metadata"] = out.get("macros", []).duplicate(true)
+	if COMPOSITION_RECIPE_IDS.has(str(out.get("stable_id", ""))):
+		out["ownership"] = "COMPOSITION"
+		out["composition_passes"] = out.get("layers", []).duplicate(true)
+	else:
+		out["ownership"] = "TARGET_LOOK"
 	return out
 
 static func authored_field_paths_from_recipe(recipe: Dictionary) -> Array:
@@ -524,7 +683,7 @@ static func _is_supported_field_path(path: String) -> bool:
 	if parts.size() < 2:
 		return false
 	if str(parts[0]) == "layer":
-		return parts.size() == 2 and str(parts[1]) in ["plane", "lane", "input", "blend_mode"]
+		return parts.size() == 2 and str(parts[1]) in ["plane", "lane", "authority", "input", "blend_mode"]
 	return str(parts[0]) in ["transform", "displacement", "mask", "fx", "motion"]
 
 static func _diff_paths(neutral: Dictionary, actual: Dictionary, prefix := "") -> Array:
@@ -536,7 +695,7 @@ static func _diff_paths(neutral: Dictionary, actual: Dictionary, prefix := "") -
 		if not actual.has(key):
 			continue
 		var path := key if prefix == "" else prefix + "." + key
-		if prefix == "" and key in ["plane", "lane", "input", "blend_mode"]:
+		if prefix == "" and key in ["plane", "lane", "authority", "input", "blend_mode"]:
 			path = "layer." + key
 		var before = neutral[key]
 		var after = actual[key]

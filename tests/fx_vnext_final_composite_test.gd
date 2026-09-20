@@ -47,11 +47,14 @@ func _static_contract() -> void:
 	_check(bool(accepted.get("ok", false)), "explicit FINAL_COMPOSITE lane is accepted")
 	_check(bool(accepted.get("supported", false)), "explicit FINAL_COMPOSITE lane is supported")
 	_check(FxOperatorsScript.operator_ids_for_layer(final_layer).has("final_composite"), "final lane reports the final_composite operator")
-	for plane in ["COMPOSITION_BACKGROUND", "COMPOSITION_FOREGROUND"]:
+	for plane in ["COMPOSITION_BACKGROUND"]:
 		var forged: Dictionary = final_layer.duplicate(true)
 		forged["plane"] = plane
 		var rejected: Dictionary = FxOperatorsScript.validate_layer_lane(forged)
 		_check(not bool(rejected.get("ok", false)), "%s cannot masquerade as FINAL_COMPOSITE" % plane)
+	var explicit_foreground: Dictionary = final_layer.duplicate(true)
+	explicit_foreground["plane"] = "COMPOSITION_FOREGROUND"
+	_check(bool(FxOperatorsScript.validate_layer_lane(explicit_foreground).get("ok", false)), "COMPOSITION_FOREGROUND is the explicit final ownership plane")
 
 	var doc := FxLookScript.new_look("FINAL_SCHEMA", "Final schema")
 	doc["layers"].append(final_layer)
@@ -76,7 +79,7 @@ func _runtime_contract() -> void:
 	renderer = FxLayerRendererScript.new(runtime.screen, runtime.registry)
 
 	var neutral: Dictionary = _look("FINAL_NEUTRAL", _final_layer(0.0))
-	var neutral_result: Dictionary = renderer.apply_composition([{"key": "echo_left", "look": neutral}])
+	var neutral_result: Dictionary = renderer.apply_composition([{"key": "composition", "scope": "COMPOSITION", "look": neutral}])
 	_check(bool(neutral_result.get("ok", false)), "neutral final composition commits", str(neutral_result.get("errors", [])))
 	_check(int(neutral_result.get("final_composite", 0)) == 1, "one explicit final layer produces one final pass")
 	var final_node: Node = runtime.screen.get_node_or_null("Root/vnext_final_composite")
@@ -105,7 +108,7 @@ func _runtime_contract() -> void:
 		neutral_readback = await _capture()
 	var active_fx: Dictionary = _final_layer(1.0)
 	(active_fx["fx"] as Dictionary)["final_tint_color"] = [0.0, 0.0, 0.0, 1.0]
-	var active_result: Dictionary = renderer.apply_composition([{"key": "echo_left", "look": _look("FINAL_ACTIVE", active_fx)}])
+	var active_result: Dictionary = renderer.apply_composition([{"key": "composition", "scope": "COMPOSITION", "look": _look("FINAL_ACTIVE", active_fx)}])
 	_check(bool(active_result.get("ok", false)), "non-neutral final composition commits", str(active_result.get("errors", [])))
 	await _settle(4)
 	var active_node: Node = runtime.screen.get_node_or_null("Root/vnext_final_composite")
@@ -152,7 +155,8 @@ func _write_evidence_summary() -> void:
 
 func _final_layer(amount: float):
 	var layer: Dictionary = FxLookScript.new_layer("FX", "Final")
-	layer["plane"] = "TARGET_OVERLAY"
+	layer["plane"] = "COMPOSITION_FOREGROUND"
+	layer["authority"] = "COMPOSITION"
 	layer["lane"] = "FINAL_COMPOSITE"
 	(layer["fx"] as Dictionary)["final_tint_amount"] = amount
 	return layer

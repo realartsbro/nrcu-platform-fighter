@@ -110,7 +110,20 @@ func reload_production() -> Dictionary:
 			continue
 		plan.append({"key": key_str, "look": loaded["doc"]})
 		plan_ids.append("%s:%s:r%d" % [key_str, look_id, int((loaded["doc"] as Dictionary).get("revision", 0))])
-	var applied: Dictionary = renderer.apply_composition(plan)
+	var render_options: Dictionary = {}
+	var active_composition: Dictionary = production.load_composition()
+	if bool(active_composition.get("ok", false)) and not (active_composition.get("doc", {}) as Dictionary).is_empty():
+		render_options["composition"] = active_composition["doc"]
+		plan_ids.append("composition:%s:r%d" % [str((active_composition["doc"] as Dictionary).get("composition_id", "active")), int((active_composition["doc"] as Dictionary).get("revision", 0))])
+	elif runtime.registry.has_method("composition_context"):
+		var composition_result: Dictionary = FxResolverScript.resolve(doc, runtime.registry.composition_context())
+		if str(composition_result.get("status", "")) in ["ASSIGNED", "AMBIGUOUS"]:
+			var composition_look_id := str(composition_result.get("look_id", ""))
+			var composition_loaded: Dictionary = production.load_look(composition_look_id)
+			if bool(composition_loaded.get("ok", false)) and str((composition_loaded["doc"] as Dictionary).get("status", "")) == "PRODUCTION":
+				plan.append({"key": "composition", "scope": "COMPOSITION", "look": composition_loaded["doc"]})
+				plan_ids.append("composition:%s:r%d" % [composition_look_id, int((composition_loaded["doc"] as Dictionary).get("revision", 0))])
+	var applied: Dictionary = renderer.apply_composition(plan, render_options)
 	# P0: freshly committed stacks inherit the current canonical event table
 	# (remount/reload can never silently drop back to fixed-anchor fallback).
 	renderer.set_event_marks(runtime.event_marks())

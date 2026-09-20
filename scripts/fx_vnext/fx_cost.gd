@@ -8,6 +8,7 @@ extends RefCounted
 
 const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
 const FxOperatorsScript := preload("res://scripts/fx_vnext/fx_operators.gd")
+const FxCompositionScript := preload("res://scripts/fx_vnext/fx_composition.gd")
 
 static func layer_cost(layer: Dictionary) -> Dictionary:
 	var factors: Array = []
@@ -150,6 +151,34 @@ static func look_cost(doc: Dictionary) -> Dictionary:
 		"lane_costs": lane_costs,
 		"unsupported_lanes": unsupported_lanes,
 	}
+
+static func composition_cost(doc: Dictionary) -> Dictionary:
+	var check := FxCompositionScript.validate(doc)
+	if not bool(check.get("ok", false)):
+		return {"passes": [], "total": 0.0, "level": "INVALID", "operator_costs": {}, "errors": check.get("errors", [])}
+	var passes: Array = []
+	var total := 0.0
+	var operator_costs: Dictionary = {}
+	for raw_pass in (check.get("doc", {}) as Dictionary).get("final_passes", []):
+		var composition_pass: Dictionary = raw_pass
+		if not bool(composition_pass.get("enabled", true)) or str(composition_pass.get("operator", "NONE")) == "NONE":
+			continue
+		var layer_array: Array = FxCompositionScript.to_layers({"composition_id": "cost", "revision": 1, "status": "DRAFT", "final_passes": [composition_pass]})
+		if layer_array.is_empty():
+			continue
+		var entry := layer_cost(layer_array[0])
+		entry["pass_id"] = str(composition_pass.get("pass_id", ""))
+		entry["full_frame"] = true
+		passes.append(entry)
+		total += float(entry.get("cost", 0.0)) + 0.8
+		for operator_id in (entry.get("operator_costs", {}) as Dictionary).keys():
+			operator_costs[str(operator_id)] = float(operator_costs.get(str(operator_id), 0.0)) + float((entry["operator_costs"] as Dictionary)[operator_id])
+	var level := "LOW"
+	if total > 6.0:
+		level = "HIGH"
+	elif total > 3.0:
+		level = "MEDIUM"
+	return {"passes": passes, "total": total, "level": level, "operator_costs": _sorted_dictionary(operator_costs), "errors": []}
 
 static func _sorted_keys(values: Dictionary) -> Array:
 	var keys: Array = values.keys()

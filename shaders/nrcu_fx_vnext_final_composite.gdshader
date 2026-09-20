@@ -17,7 +17,7 @@ uniform float final_time_source = 0.0; // 0 = presentation, 1 = free-run
 uniform float final_operator_event_start = 0.0;
 uniform float final_operator_duration = 0.5;
 uniform float final_operator_mode = 0.0; // 0 tint, 1 speedlines_field
-uniform float final_operator_secondary_mode = 0.0;
+
 uniform float final_operator_strength = 0.0;
 uniform float final_operator_scale = 1.0;
 uniform float final_operator_speed = 1.0;
@@ -28,6 +28,9 @@ uniform float final_operator_distortion = 0.0;
 uniform vec2 final_operator_center = vec2(0.5, 0.5);
 uniform vec2 final_operator_axis = vec2(1.0, 0.0);
 uniform float final_operator_progress = 0.5;
+uniform float final_operator_progress_start = 0.0;
+uniform float final_operator_progress_end = 1.0;
+uniform float final_operator_progress_animated = 0.0;
 uniform float final_operator_polarity = 0.0; // 0 pull, 1 push
 uniform float final_operator_mix_mode = 0.0; // speedlines: 0 lines, 1 distortion, 2 combined
 uniform vec4 final_operator_color_a : source_color = vec4(0.25, 0.95, 1.0, 1.0);
@@ -89,7 +92,7 @@ vec4 speedlines_composite(vec2 uv, vec4 captured, float clock, float strength, f
 
 // Pattern families form the reveal mask; progress 0 is captured-only and
 // progress 1 is graphic-only, so the transition has defined endpoints.
-vec4 pattern_transition(vec2 uv, vec4 captured, float clock, float strength, float scale) {
+vec4 pattern_transition(vec2 uv, vec4 captured, float clock, float strength, float scale, float progress) {
     vec2 axis = normalize(final_operator_axis + vec2(EPS));
     vec2 cell = floor(uv * vec2(18.0, 10.0) * max(scale, 0.25));
     float family = final_operator_pattern_family;
@@ -105,11 +108,11 @@ vec4 pattern_transition(vec2 uv, vec4 captured, float clock, float strength, flo
         float angular = 0.5 + 0.5 * sin(dot(uv - vec2(0.5), axis) * 52.0 + clock * 2.0);
         pattern = mix(checker, angular, 0.42);
     }
-    float threshold = 1.0 - clamp(final_operator_progress, 0.0, 1.0);
+    float threshold = 1.0 - clamp(progress, 0.0, 1.0);
     float softness = max(final_operator_softness, 0.01);
     float reveal = smoothstep(threshold - softness, threshold + softness, pattern);
-    if (final_operator_progress <= 0.001) { reveal = 0.0; }
-    if (final_operator_progress >= 0.999) { reveal = 1.0; }
+    if (progress <= 0.001) { reveal = 0.0; }
+    if (progress >= 0.999) { reveal = 1.0; }
     float graphic_amount = reveal * clamp(strength, 0.0, 1.0);
     vec3 graphic = mix(final_operator_color_b.rgb, final_operator_color_a.rgb, pattern);
     return vec4(mix(captured.rgb, graphic, graphic_amount), captured.a);
@@ -141,23 +144,26 @@ float final_event_envelope(float clock) {
 	return 1.0 - smoothstep(0.0, 1.0, (p - 0.64) / 0.36);
 }
 
+float final_pattern_progress(float clock) {
+	if (final_operator_progress_animated < 0.5) {
+		return clamp(final_operator_progress, 0.0, 1.0);
+	}
+	float duration = final_operator_duration;
+	if (duration <= 0.0001) { return clamp(final_operator_progress_end, 0.0, 1.0); }
+	float p = clamp((clock - final_operator_event_start) / duration, 0.0, 1.0);
+	return mix(clamp(final_operator_progress_start, 0.0, 1.0), clamp(final_operator_progress_end, 0.0, 1.0), p);
+}
+
 void fragment() {
 	vec4 captured = texture(screen_tex, SCREEN_UV);
 	float amount = clamp(final_tint_amount, 0.0, 1.0);
 	float operator_strength = clamp(final_operator_strength, 0.0, 1.0);
 	float supplied_clock = mix(presentation_time, free_run_time, clamp(final_time_source, 0.0, 1.0));
 	operator_strength *= final_event_envelope(supplied_clock);
-	if (final_operator_mode > 3.5 && final_operator_mode < 4.5) {
-		float p = final_operator_duration <= 0.0001 ? 1.0 : (supplied_clock - final_operator_event_start) / final_operator_duration;
-		float vacuum_phase = smoothstep(0.04, 0.20, p) * (1.0 - smoothstep(0.58, 0.82, p));
-		float lines_phase = smoothstep(0.16, 0.36, p) * (1.0 - smoothstep(0.76, 0.98, p));
-		vec4 vacuum = vacuum_burst(SCREEN_UV, supplied_clock, operator_strength * vacuum_phase, final_operator_scale, captured);
-		vec4 lines = speedlines_composite(SCREEN_UV, vacuum, supplied_clock * max(final_operator_speed, 0.0), operator_strength * lines_phase, final_operator_scale);
-		COLOR = p <= 0.0 || p >= 1.0 ? captured : lines;
-	} else if (final_operator_mode > 2.5 && final_operator_mode < 3.5) {
-		COLOR = vacuum_burst(SCREEN_UV, supplied_clock, operator_strength, final_operator_scale, captured);
+	if (final_operator_mode > 2.5 && final_operator_mode < 3.5) {
+	    COLOR = vacuum_burst(SCREEN_UV, supplied_clock, operator_strength, final_operator_scale, captured);
 	} else if (final_operator_mode > 1.5 && final_operator_mode < 2.5) {
-		COLOR = pattern_transition(SCREEN_UV, captured, supplied_clock, operator_strength, final_operator_scale);
+	    COLOR = pattern_transition(SCREEN_UV, captured, supplied_clock, operator_strength, final_operator_scale, final_pattern_progress(supplied_clock));
 	} else if (final_operator_mode > 0.5 && final_operator_mode < 1.5) {
 		COLOR = speedlines_composite(SCREEN_UV, captured, supplied_clock * max(final_operator_speed, 0.0), operator_strength, final_operator_scale);
 	} else if (amount <= 0.00001) {

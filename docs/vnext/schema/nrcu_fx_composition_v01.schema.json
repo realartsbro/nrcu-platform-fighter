@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NRCU FX Composition v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "composition_id", "revision", "status", "final_passes"],
+  "properties": {
+    "schema": { "const": "NRCU_FX_COMPOSITION_V0_1" },
+    "composition_id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "status": { "enum": ["DRAFT", "PRODUCTION"] },
+    "metadata": { "type": "object" },
+    "final_passes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pass_id", "operator", "enabled", "event_start", "duration", "lane", "plane", "authority", "fx"],
+        "properties": {
+          "pass_id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string" },
+          "operator": { "enum": ["NONE", "speedlines_field", "pattern_transition", "vacuum_burst"] },
+          "enabled": { "type": "boolean" },
+          "event_start": { "type": "number", "minimum": 0 },
+          "duration": { "type": "number", "minimum": 0 },
+          "lane": { "const": "FINAL_COMPOSITE" },
+          "plane": { "const": "COMPOSITION_FOREGROUND" },
+          "authority": { "const": "COMPOSITION" },
+          "fx": { "type": "object" }
+        }
+      }
+    }
+  }
+}

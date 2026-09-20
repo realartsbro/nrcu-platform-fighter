@@ -240,6 +240,8 @@ func rebuild() -> void:
 	# ---- COMPOSITION -------------------------------------------------------
 	var comp_item := _add_group(root_item, "COMPOSITION")
 	var comp_entries := []
+	if runtime.registry.has_method("composition_context"):
+		comp_entries.append({"key": "composition", "ctx": runtime.registry.composition_context()})
 	for key in composition_keys:
 		comp_entries.append({"key": key, "ctx": registry.context_for_key(str(key))})
 	comp_entries.sort_custom(func(a, b): return str(a["ctx"].get("element_id", a["key"])) < str(b["ctx"].get("element_id", b["key"])))
