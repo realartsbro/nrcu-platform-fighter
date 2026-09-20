@@ -255,6 +255,21 @@ uniform float fx_dither_levels = 6.0;
 uniform float fx_dither_pixel = 2.0;
 uniform float fx_dither_space = 2.0;
 
+// Gold local operators. These operate on the layer-selected input
+// (ORIGINAL_SOURCE or an offscreen local stage), never on a fringe/RGB/dither
+// alias. Their phase is driven by the renderer-supplied clocks.
+uniform float gold_operator_mode = 0.0; // 0 NONE, 1 noise_erosion_border, 2 pixel_sort_smear
+uniform float gold_operator_strength = 0.0;
+uniform float gold_operator_scale = 1.0;
+uniform float gold_operator_speed = 1.0;
+uniform float gold_operator_threshold = 0.5;
+uniform float gold_operator_softness = 0.1;
+uniform float gold_operator_axis_x = 1.0;
+uniform float gold_operator_axis_y = 0.0;
+uniform float gold_operator_time_source = 0.0;
+uniform vec4 gold_operator_color_a : source_color = vec4(0.25, 0.95, 1.0, 1.0);
+uniform vec4 gold_operator_color_b : source_color = vec4(1.0, 0.35, 0.82, 1.0);
+
 const float EPS = 0.0001;
 
 // ============================ noise ============================
@@ -1381,6 +1396,46 @@ float fringe_coverage_v(float signal, vec2 uv, vec2 frag_px) {
 vec3 palette_a_color(){return palette_swap>0.5?fx_fringe_color_b.rgb:fx_fringe_color_a.rgb;}
 vec3 palette_b_color(){return palette_swap>0.5?fx_fringe_color_a.rgb:fx_fringe_color_b.rgb;}
 
+vec4 apply_gold_local_operator(vec4 source, vec2 uv, vec2 pres_px) {
+	float strength = clamp(gold_operator_strength, 0.0, 1.0);
+	float clock = mix(fx_time, free_time, clamp(gold_operator_time_source, 0.0, 1.0));
+	if (gold_operator_mode > 0.5 && gold_operator_mode < 1.5) {
+		// The signed distance is measured from the actual sampled alpha field.
+		// Transparent pixels outside the silhouette cannot create a rectangle or
+		// radial border because the scan fails closed at the source alpha edge.
+		float width = max(gold_operator_scale * 18.0, 1.0);
+		float distance_px = silhouette_distance_px(uv, width);
+		float border = 1.0 - smoothstep(0.0, width, abs(distance_px));
+		float noise = fbm(uv * (18.0 + gold_operator_scale * 12.0) + vec2(clock * gold_operator_speed, -clock * gold_operator_speed * 0.63));
+		float live = smoothstep(gold_operator_threshold - max(gold_operator_softness, 0.001), gold_operator_threshold + max(gold_operator_softness, 0.001), noise);
+		float coverage = clamp(border * live * strength, 0.0, 1.0);
+		vec3 border_color = mix(gold_operator_color_b.rgb, gold_operator_color_a.rgb, noise);
+		return vec4(mix(source.rgb, border_color, coverage), max(source.a, coverage * 0.82));
+	}
+	if (gold_operator_mode > 1.5 && gold_operator_mode < 2.5) {
+		// Directional luminance-run selection. Every candidate is read from the
+		// layer-selected input, so LAYER_BELOW/COMPOSITE_BELOW remain local.
+		vec2 axis = normalize(vec2(gold_operator_axis_x, gold_operator_axis_y) + vec2(EPS));
+		vec2 texel = 1.0 / max(source_rect.zw, vec2(1.0));
+		float stride = max(gold_operator_scale, 0.25) * 3.0;
+		vec4 selected = source;
+		float selected_key = dot(source.rgb, vec3(0.299, 0.587, 0.114));
+		for (int i = 1; i <= 6; i++) {
+			float distance = float(i) * stride;
+			vec4 forward = sample_source(uv + axis * texel * distance);
+			vec4 backward = sample_source(uv - axis * texel * distance);
+			float forward_key = dot(forward.rgb, vec3(0.299, 0.587, 0.114));
+			float backward_key = dot(backward.rgb, vec3(0.299, 0.587, 0.114));
+			if (forward_key > selected_key) { selected = forward; selected_key = forward_key; }
+			if (backward_key > selected_key) { selected = backward; selected_key = backward_key; }
+		}
+		float gate = smoothstep(gold_operator_threshold - max(gold_operator_softness, 0.001), gold_operator_threshold + max(gold_operator_softness, 0.001), selected_key);
+		float amount = strength * gate;
+		return vec4(mix(source.rgb, selected.rgb, amount), mix(source.a, max(source.a, selected.a), amount));
+	}
+	return source;
+}
+
 vec4 apply_layer_fx(vec4 input_src, vec2 layer_uv, vec2 pres_px){
     vec4 result=input_src;
 vec2 move_texel=geometry_texel();
@@ -1393,6 +1448,9 @@ vec2 move_texel=geometry_texel();
         base_uv=pixelate_uv(uv,source_pixel_size,source_pixel_dims);
     }
     vec4 src=sample_source(base_uv);
+    // Gold local operators own their output from the layer-selected source.
+    // The remaining legacy FX stages continue to compose after this pass.
+    src=apply_gold_local_operator(src,base_uv,pres_px);
     float source_opacity=clamp(base_opacity,0.0,1.0);
     float src_alpha=src.a*source_opacity;
     float mask=fx_effect_mask_value(uv);

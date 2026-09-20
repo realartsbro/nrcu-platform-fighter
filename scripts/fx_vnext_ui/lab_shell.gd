@@ -814,8 +814,19 @@ func _build_dock() -> void:
 	recipe_rows.name = "RecipeRows"
 	recipe_rows.add_theme_constant_override("separation", 6)
 	recipes_inner.add_child(recipe_rows)
+	var last_library_group := ""
 	for recipe in FxRecipesScript.list():
 		var recipe_data: Dictionary = recipe
+		var library_group := str(recipe_data.get("library_group", recipe_data.get("category", "RECIPES")))
+		if library_group != last_library_group:
+			var group_label := Label.new()
+			group_label.name = "RecipeGroup_%s" % library_group.replace(" ", "_").replace("/", "_")
+			group_label.text = library_group
+			group_label.add_theme_font_size_override("font_size", UiTokens.T_META)
+			group_label.add_theme_color_override("font_color", FxLabUiTokensScript.TEXT_MUTED)
+			group_label.custom_minimum_size.y = 22.0
+			recipe_rows.add_child(group_label)
+			last_library_group = library_group
 		var recipe_id := str(recipe_data.get("stable_id", ""))
 		var recipe_card := PanelContainer.new()
 		recipe_card.name = "RecipeCard_%s" % recipe_id
@@ -3962,6 +3973,7 @@ func _build_expert_fx(page: VBoxContainer, layer: Dictionary, layer_id: String, 
 		["PIXEL GRIDS", ["source_pixel_size", "source_pixel_units"]],
 		["PALETTE DETAIL", ["palette_strategy", "palette_lock_a", "palette_lock_b", "palette_swap", "palette_hue_offset", "palette_saturation", "palette_value"]],
 		["FINAL COMPOSITE", ["final_tint_amount", "final_tint_color"]],
+		["GOLD OPERATORS", ["operator", "operator_secondary", "operator_strength", "operator_scale", "operator_speed", "operator_threshold", "operator_softness", "operator_mix", "operator_axis_x", "operator_axis_y", "operator_pattern_mode", "operator_pattern_family", "operator_distortion", "operator_time_source", "operator_color_a", "operator_color_b"]],
 	]
 	var pending_checks: Array = []
 	for group in groups:

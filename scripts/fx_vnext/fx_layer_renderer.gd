@@ -257,9 +257,27 @@ func _build_final_entry(final_layers: Array, _options := {}) -> Dictionary:
 	material.shader = _final_shader
 	material.set_shader_parameter("final_tint_amount", clampf(amount, 0.0, 1.0) * clampf(opacity, 0.0, 1.0))
 	material.set_shader_parameter("final_tint_color", _color(fx.get("final_tint_color", [1.0, 1.0, 1.0, 1.0])))
+	var final_operator := str(fx.get("operator", "NONE"))
+	var secondary_operator := str(fx.get("operator_secondary", "NONE"))
+	var final_mode := _final_operator_index(final_operator)
+	if secondary_operator != "NONE":
+		final_mode = 4.0 # CLASH_OVERDRIVE: dedicated speedlines + vacuum composition
+	material.set_shader_parameter("final_operator_mode", final_mode)
+	material.set_shader_parameter("final_operator_secondary_mode", float(_final_operator_index(secondary_operator)))
+	material.set_shader_parameter("final_operator_strength", clampf(float(fx.get("operator_strength", 0.0)), 0.0, 1.0))
+	material.set_shader_parameter("final_operator_scale", maxf(float(fx.get("operator_scale", 1.0)), 0.25))
+	material.set_shader_parameter("final_operator_speed", maxf(float(fx.get("operator_speed", 1.0)), 0.0))
+	material.set_shader_parameter("final_operator_softness", clampf(float(fx.get("operator_softness", 0.1)), 0.0, 1.0))
+	material.set_shader_parameter("final_operator_pattern_mode", clampf(float(fx.get("operator_pattern_mode", 0.0)), 0.0, 1.0))
+	material.set_shader_parameter("final_operator_pattern_family", clampf(float(fx.get("operator_pattern_family", 0.0)), 0.0, 2.0))
+	material.set_shader_parameter("final_operator_distortion", clampf(float(fx.get("operator_distortion", 0.0)), 0.0, 1.0))
+	material.set_shader_parameter("final_operator_color_a", _color(fx.get("operator_color_a", [0.25, 0.95, 1.0, 1.0])))
+	material.set_shader_parameter("final_operator_color_b", _color(fx.get("operator_color_b", [1.0, 0.35, 0.82, 1.0])))
 	material.set_shader_parameter("presentation_time", _last_time)
 	material.set_shader_parameter("free_run_time", _last_free)
-	material.set_shader_parameter("final_time_source", 1.0 if str(fx.get("time_source", "PRESENTATION_TIME")) == "FREE_RUN" else 0.0)
+	material.set_shader_parameter("final_time_source", 1.0 if str(fx.get("operator_time_source", fx.get("time_source", "PRESENTATION_TIME"))) == "FREE_RUN" else 0.0)
+	material.set_shader_parameter("final_operator_event_start", float(fx.get("operator_event_start", 0.0)))
+	material.set_shader_parameter("final_operator_duration", maxf(float(fx.get("operator_duration", 0.5)), 0.0))
 	quad.material = material
 	var bbc := BackBufferCopy.new()
 	bbc.name = "vnext_final_bbc"
@@ -766,8 +784,12 @@ func _set_fx_uniforms(material: ShaderMaterial, fx, motion := {}, layer_id := ""
 		if v is String and not (v as String).strip_edges().is_valid_float():
 			# UI-07/08: legitimate asset-path strings (treatment/edge mask)
 			# must survive sanitizing — the texture loader below resolves
-			# them. Anything else non-numeric still falls back to default.
-			if str(key) != "treatment_mask_path" and str(key) != "edge_mask_path":
+			# them. Gold operator/time enums are canonical authoring data;
+			# preserve only the finite enum vocabulary rather than allowing
+			# arbitrary strings through the numeric uniform surface.
+			var string_key := str(key)
+			var allowed_enum := string_key in ["operator", "operator_secondary", "operator_time_source", "time_source"]
+			if not allowed_enum and string_key != "treatment_mask_path" and string_key != "edge_mask_path":
 				continue
 		if (v is float or v is int) and not is_finite(float(v)):
 			continue
@@ -828,6 +850,20 @@ func _set_fx_uniforms(material: ShaderMaterial, fx, motion := {}, layer_id := ""
 		"rgb_gradient": float(f.get("rgb_gradient", 0.0)), "rgb_gradient_balance": float(f.get("rgb_gradient_balance", 0.0)), "rgb_gradient_contrast": float(f.get("rgb_gradient_contrast", 1.0)), "geometry_units": float(f.get("geometry_units", 1.0)), "temporal_hold": float(f.get("temporal_hold", 0.0)),
 		"effect_mask_enabled": 1.0 if bool(f.get("effect_mask_enabled", false)) else 0.0, "effect_mask_invert": 1.0 if bool(f.get("effect_mask_invert", false)) else 0.0, "effect_mask_base": 1.0 if bool(f.get("effect_mask_base", false)) else 0.0, "effect_mask_threshold": float(f.get("effect_mask_threshold", 0.5)), "effect_mask_softness": float(f.get("effect_mask_softness", 0.10)),
 		"fx_time_source": 1.0 if str(f.get("time_source", "PRESENTATION_TIME")) == "FREE_RUN" else 0.0,
+		"gold_operator_mode": float(_local_operator_index(str(f.get("operator", "NONE")))),
+		"gold_operator_strength": clampf(float(f.get("operator_strength", 0.0)), 0.0, 1.0),
+		"gold_operator_scale": maxf(float(f.get("operator_scale", 1.0)), 0.25),
+		"gold_operator_speed": maxf(float(f.get("operator_speed", 1.0)), 0.0),
+		"gold_operator_threshold": clampf(float(f.get("operator_threshold", 0.5)), 0.0, 1.0),
+		"gold_operator_softness": clampf(float(f.get("operator_softness", 0.1)), 0.001, 1.0),
+		"gold_operator_axis_x": float(f.get("operator_axis_x", 1.0)),
+		"gold_operator_axis_y": float(f.get("operator_axis_y", 0.0)),
+		"gold_operator_pattern_mode": clampf(float(f.get("operator_pattern_mode", 0.0)), 0.0, 1.0),
+		"gold_operator_pattern_family": clampf(float(f.get("operator_pattern_family", 0.0)), 0.0, 2.0),
+		"gold_operator_distortion": clampf(float(f.get("operator_distortion", 0.0)), 0.0, 1.0),
+		"gold_operator_time_source": 1.0 if str(f.get("operator_time_source", f.get("time_source", "PRESENTATION_TIME"))) == "FREE_RUN" else 0.0,
+		"gold_operator_color_a": _color(f.get("operator_color_a", [0.25, 0.95, 1.0, 1.0])),
+		"gold_operator_color_b": _color(f.get("operator_color_b", [1.0, 0.35, 0.82, 1.0])),
 		"palette_strategy": float(f.get("palette_strategy", 0.0)), "palette_hue_offset": float(f.get("palette_hue_offset", 0.0)), "palette_saturation": float(f.get("palette_saturation", 1.0)), "palette_value": float(f.get("palette_value", 1.0)),
 		"palette_lock_a": 1.0 if bool(f.get("palette_lock_a", false)) else 0.0, "palette_lock_b": 1.0 if bool(f.get("palette_lock_b", false)) else 0.0,
 		"palette_swap": 1.0 if bool(f.get("palette_swap", false)) else 0.0, "palette_source_color": _vec3_color(f.get("palette_source_color", [0.5, 0.5, 0.5])),
@@ -1023,6 +1059,12 @@ func _mask_region_index(region: String) -> int:
 
 func _mask_space_index(space: String) -> int:
 	return ["SOURCE_SPACE", "LAYER_SPACE", "PRESENTATION_SPACE"].find(space)
+
+func _local_operator_index(operator_id: String) -> int:
+	return ["NONE", "noise_erosion_border", "pixel_sort_smear"].find(operator_id)
+
+func _final_operator_index(operator_id: String) -> int:
+	return ["NONE", "speedlines_field", "pattern_transition", "vacuum_burst"].find(operator_id)
 
 func _vec2(value) -> Vector2:
 	if value is Array and (value as Array).size() >= 2:

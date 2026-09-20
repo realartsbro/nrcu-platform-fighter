@@ -15,9 +15,16 @@ const ORGANIC_SIDE_FIELD := "ORGANIC_SIDE_FIELD"
 const EDGE_HALO := "EDGE_HALO"
 const RGB_TEAR := "RGB_TEAR"
 const DITHER_TREATMENT := "DITHER_TREATMENT"
+const KINETIC_RUSH := "KINETIC_RUSH"
+const PATTERN_CUT := "PATTERN_CUT"
+const LIVING_CONTOUR := "LIVING_CONTOUR"
+const SIGNAL_MELT := "SIGNAL_MELT"
+const VACUUM_CLASH := "VACUUM_CLASH"
+const CLASH_OVERDRIVE := "CLASH_OVERDRIVE"
 const HERO_RECIPE_IDS := [PRIMARY_FLAME_ENERGY, ORGANIC_SIDE_FIELD]
 const CURATED_RECIPE_IDS := [EDGE_HALO, RGB_TEAR, DITHER_TREATMENT]
-const RECIPE_IDS := HERO_RECIPE_IDS + CURATED_RECIPE_IDS
+const GOLD_RECIPE_IDS := [LIVING_CONTOUR, SIGNAL_MELT, KINETIC_RUSH, VACUUM_CLASH, PATTERN_CUT, CLASH_OVERDRIVE]
+const RECIPE_IDS := HERO_RECIPE_IDS + GOLD_RECIPE_IDS + CURATED_RECIPE_IDS
 
 static func recipe_ids() -> Array:
 	return RECIPE_IDS.duplicate()
@@ -182,6 +189,109 @@ static func validate_registry() -> Dictionary:
 
 static func _definition(recipe_id: String) -> Dictionary:
 	match recipe_id:
+		KINETIC_RUSH:
+			return _decorate({
+				"stable_id": KINETIC_RUSH,
+				"name": "Kinetic Rush",
+				"category": "Gold Recipe",
+				"description": "A full-frame radial speedline field for forward motion and clash escalation, authored as a real final-composite operator.",
+				"intent": "Kinetic final-frame acceleration",
+				"operator_ids": ["speedlines_field"],
+				"target_compatibility": {"target_roles": ["primary", "secondary", "side_field"], "element_roles": ["primary", "secondary", "side_field"], "allowed_planes": ["TARGET_OVERLAY"], "requires_fighter": false},
+				"advanced_access": true,
+				"macros": [{"id": "KINETIC_FIELD", "label": "Kinetic Field", "fields": ["fx.operator_strength", "fx.operator_scale", "fx.operator_speed", "fx.operator_time_source"]}],
+				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "approximation": "NONE"},
+				"layers": [{"instance_key": "kinetic_speedlines", "name": "Kinetic Speedlines", "type": "FX", "authored_fields": {
+					"layer.plane": "TARGET_OVERLAY", "layer.lane": "FINAL_COMPOSITE", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
+					"fx.operator": "speedlines_field", "fx.operator_strength": 0.72, "fx.operator_scale": 1.0, "fx.operator_speed": 1.25, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.final_tint_amount": 0.0,
+				}}],
+			})
+		PATTERN_CUT:
+			return _decorate({
+				"stable_id": PATTERN_CUT,
+				"name": "Pattern Cut",
+				"category": "Gold Recipe",
+				"description": "A clocked geometric cut that replaces frame-wide transition guesswork with a readable captured-frame pattern.",
+				"intent": "Patterned transition cut",
+				"operator_ids": ["pattern_transition"],
+				"target_compatibility": {"target_roles": ["primary", "secondary", "side_field"], "element_roles": ["primary", "secondary", "side_field"], "allowed_planes": ["TARGET_OVERLAY"], "requires_fighter": false},
+				"advanced_access": true,
+				"macros": [{"id": "PATTERN_CUT", "label": "Pattern Cut", "fields": ["fx.operator_strength", "fx.operator_scale", "fx.operator_speed", "fx.operator_pattern_family", "fx.operator_time_source", "fx.operator_color_a", "fx.operator_color_b"]}],
+				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "approximation": "NONE"},
+				"layers": [{"instance_key": "pattern_cut", "name": "Pattern Cut", "type": "FX", "authored_fields": {
+					"layer.plane": "TARGET_OVERLAY", "layer.lane": "FINAL_COMPOSITE", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
+					"fx.operator": "pattern_transition", "fx.operator_strength": 0.78, "fx.operator_scale": 1.0, "fx.operator_speed": 1.0, "fx.operator_pattern_family": 1.0, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.operator_color_a": [0.25, 0.95, 1.0, 1.0], "fx.operator_color_b": [1.0, 0.35, 0.82, 1.0], "fx.final_tint_amount": 0.0,
+				}}],
+			})
+		LIVING_CONTOUR:
+			return _decorate({
+				"stable_id": LIVING_CONTOUR,
+				"name": "Living Contour",
+				"category": "Gold Recipe",
+				"description": "A source-alpha-aware eroded contour with clocked noise breakup; transparent space remains transparent.",
+				"intent": "Living source contour",
+				"operator_ids": ["noise_erosion_border"],
+				"target_compatibility": {"target_roles": ["primary", "secondary", "side_field"], "element_roles": ["primary", "secondary", "side_field"], "allowed_planes": ["TARGET_OVERLAY", "TARGET_SOURCE"], "requires_fighter": false},
+				"advanced_access": true,
+				"macros": [{"id": "LIVING_CONTOUR", "label": "Living Contour", "fields": ["fx.operator_strength", "fx.operator_scale", "fx.operator_speed", "fx.operator_threshold", "fx.operator_time_source"]}],
+				"source_semantics": {"input": "ORIGINAL_SOURCE_ALPHA", "mask_source": "ORIGINAL_SOURCE_ALPHA", "approximation": "NONE"},
+				"layers": [{"instance_key": "living_contour", "name": "Living Contour", "type": "FX", "authored_fields": {
+					"layer.plane": "TARGET_OVERLAY", "layer.lane": "TARGET_LOCAL", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "ADD",
+					"mask.enabled": true, "mask.source": "ORIGINAL_SOURCE_ALPHA", "mask.region": "EDGE_BAND", "mask.space": "SOURCE_SPACE", "mask.width_px": 18.0, "mask.feather_px": 3.0,
+					"fx.operator": "noise_erosion_border", "fx.operator_strength": 0.84, "fx.operator_scale": 1.0, "fx.operator_speed": 1.1, "fx.operator_threshold": 0.48, "fx.operator_softness": 0.12, "fx.operator_time_source": "PRESENTATION_TIME",
+				}}],
+			})
+		SIGNAL_MELT:
+			return _decorate({
+				"stable_id": SIGNAL_MELT,
+				"name": "Signal Melt",
+				"category": "Gold Recipe",
+				"description": "A directional luminance-run smear that selects from the resolved local input instead of faking motion with RGB separation or dither.",
+				"intent": "Directional signal smear",
+				"operator_ids": ["pixel_sort_smear"],
+				"target_compatibility": {"target_roles": ["primary", "secondary", "side_field"], "element_roles": ["primary", "secondary", "side_field"], "allowed_planes": ["TARGET_OVERLAY", "TARGET_SOURCE"], "requires_fighter": false},
+				"advanced_access": true,
+				"macros": [{"id": "SIGNAL_MELT", "label": "Signal Melt", "fields": ["fx.operator_strength", "fx.operator_scale", "fx.operator_threshold", "fx.operator_axis_x", "fx.operator_axis_y", "fx.operator_time_source"]}],
+				"source_semantics": {"input": "LOCAL_RESOLVED_INPUT", "approximation": "NONE"},
+				"layers": [{"instance_key": "signal_melt", "name": "Signal Melt", "type": "FX", "authored_fields": {
+					"layer.plane": "TARGET_OVERLAY", "layer.lane": "TARGET_LOCAL", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
+					"fx.operator": "pixel_sort_smear", "fx.operator_strength": 0.76, "fx.operator_scale": 1.2, "fx.operator_threshold": 0.4, "fx.operator_softness": 0.16, "fx.operator_axis_x": 1.0, "fx.operator_axis_y": 0.0, "fx.operator_time_source": "PRESENTATION_TIME",
+				}}],
+			})
+		VACUUM_CLASH:
+			return _decorate({
+				"stable_id": VACUUM_CLASH,
+				"name": "Vacuum Clash",
+				"category": "Gold Recipe",
+				"description": "A radial inward pull and moving burst ring over the captured final frame for clash punctuation.",
+				"intent": "Radial clash vacuum",
+				"operator_ids": ["vacuum_burst"],
+				"target_compatibility": {"target_roles": ["primary", "secondary"], "element_roles": ["primary", "secondary"], "allowed_planes": ["TARGET_OVERLAY"], "requires_fighter": false},
+				"advanced_access": true,
+				"macros": [{"id": "VACUUM_CLASH", "label": "Vacuum Clash", "fields": ["fx.operator_strength", "fx.operator_scale", "fx.operator_speed", "fx.operator_time_source", "fx.operator_color_a", "fx.operator_color_b"]}],
+				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "approximation": "NONE"},
+				"layers": [{"instance_key": "vacuum_clash", "name": "Vacuum Clash", "type": "FX", "authored_fields": {
+					"layer.plane": "TARGET_OVERLAY", "layer.lane": "FINAL_COMPOSITE", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
+					"fx.operator": "vacuum_burst", "fx.operator_strength": 0.86, "fx.operator_scale": 1.0, "fx.operator_speed": 1.3, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.operator_color_a": [0.25, 0.95, 1.0, 1.0], "fx.operator_color_b": [1.0, 0.35, 0.82, 1.0], "fx.final_tint_amount": 0.0,
+				}}],
+			})
+		CLASH_OVERDRIVE:
+			return _decorate({
+				"stable_id": CLASH_OVERDRIVE,
+				"name": "Clash Overdrive",
+				"category": "Gold Recipe",
+				"description": "A deliberate final-composite combination of vacuum pull and radial speedline energy, kept as one authored lane.",
+				"intent": "Full-frame clash overdrive",
+				"operator_ids": ["speedlines_field", "vacuum_burst"],
+				"target_compatibility": {"target_roles": ["primary", "secondary"], "element_roles": ["primary", "secondary"], "allowed_planes": ["TARGET_OVERLAY"], "requires_fighter": false},
+				"advanced_access": true,
+				"macros": [{"id": "CLASH_OVERDRIVE", "label": "Clash Overdrive", "fields": ["fx.operator", "fx.operator_secondary", "fx.operator_strength", "fx.operator_scale", "fx.operator_speed", "fx.operator_time_source"]}],
+				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "composition": "SPEEDLINES_PLUS_VACUUM", "approximation": "NONE"},
+				"layers": [{"instance_key": "clash_overdrive", "name": "Clash Overdrive", "type": "FX", "authored_fields": {
+					"layer.plane": "TARGET_OVERLAY", "layer.lane": "FINAL_COMPOSITE", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
+					"fx.operator": "speedlines_field", "fx.operator_secondary": "vacuum_burst", "fx.operator_strength": 0.92, "fx.operator_scale": 1.1, "fx.operator_speed": 1.5, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.final_tint_amount": 0.0,
+				}}],
+			})
 		PRIMARY_FLAME_ENERGY:
 			return _decorate({
 				"stable_id": PRIMARY_FLAME_ENERGY,
@@ -341,6 +451,17 @@ static func _definition(recipe_id: String) -> Dictionary:
 
 static func _decorate(recipe: Dictionary) -> Dictionary:
 	var out := recipe.duplicate(true)
+	var group := "CHARACTER"
+	match str(out.get("stable_id", "")):
+		KINETIC_RUSH, VACUUM_CLASH:
+			group = "MOTION / IMPACT"
+		PATTERN_CUT:
+			group = "GRAPHIC TRANSITION"
+		CLASH_OVERDRIVE:
+			group = "SIGNATURE"
+		EDGE_HALO, RGB_TEAR, DITHER_TREATMENT:
+			group = "BASIC PRESETS"
+	out["library_group"] = group
 	var all_fields: Dictionary = {}
 	for raw_spec in out.get("layers", []):
 		var spec: Dictionary = raw_spec
@@ -403,7 +524,7 @@ static func _is_supported_field_path(path: String) -> bool:
 	if parts.size() < 2:
 		return false
 	if str(parts[0]) == "layer":
-		return parts.size() == 2 and str(parts[1]) in ["plane", "input", "blend_mode"]
+		return parts.size() == 2 and str(parts[1]) in ["plane", "lane", "input", "blend_mode"]
 	return str(parts[0]) in ["transform", "displacement", "mask", "fx", "motion"]
 
 static func _diff_paths(neutral: Dictionary, actual: Dictionary, prefix := "") -> Array:
@@ -415,7 +536,7 @@ static func _diff_paths(neutral: Dictionary, actual: Dictionary, prefix := "") -
 		if not actual.has(key):
 			continue
 		var path := key if prefix == "" else prefix + "." + key
-		if prefix == "" and key in ["plane", "input", "blend_mode"]:
+		if prefix == "" and key in ["plane", "lane", "input", "blend_mode"]:
 			path = "layer." + key
 		var before = neutral[key]
 		var after = actual[key]

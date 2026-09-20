@@ -116,6 +116,14 @@ static func neutral_fx() -> Dictionary:
 		"palette_swap": false, "palette_source_color": [0.5, 0.5, 0.5, 1.0],
 		"palette_hue_offset": 0.0, "palette_saturation": 1.0, "palette_value": 1.0,
 		"final_tint_amount": 0.0, "final_tint_color": [1.0, 1.0, 1.0, 1.0],
+		# Gold tranche operators are explicit canonical data, not aliases for
+		# fringe/RGB/dither. The renderer maps these names to dedicated shader
+		# branches and keeps the supplied clock contract intact.
+		"operator": "NONE", "operator_secondary": "NONE", "operator_strength": 0.0, "operator_scale": 1.0,
+		"operator_speed": 1.0, "operator_threshold": 0.5,
+		"operator_softness": 0.1, "operator_mix": 0.75, "operator_axis_x": 1.0, "operator_axis_y": 0.0, "operator_pattern_mode": 0.0, "operator_pattern_family": 0.0, "operator_distortion": 0.0,
+		"operator_time_source": "PRESENTATION_TIME", "operator_event_start": 0.0, "operator_duration": 0.5,
+		"operator_color_a": [0.25, 0.95, 1.0, 1.0], "operator_color_b": [1.0, 0.35, 0.82, 1.0],
 		"time_source": "PRESENTATION_TIME",
 	}
 
@@ -547,7 +555,9 @@ static func _validate_fx(fx, layer_id: String) -> Array:
 		"DRIVER_CENTER_Y", "DRIVER_SCALE", "DRIVER_STRETCH", "DRIVER_ANGLE", "DRIVER_SPEED", "DRIVER_DETAIL",
 		"DRIVER_FLOW", "flow_strength", "flow_center_x", "flow_center_y", "rgb_shift_amount", "rgb_shift_angle",
 		"rgb_shift_units", "rgb_shift_alpha", "temporal_hold", "palette_strategy", "palette_hue_offset",
-		"palette_saturation", "palette_value", "final_tint_amount"]:
+		"palette_saturation", "palette_value", "final_tint_amount",
+		"operator_strength", "operator_scale", "operator_speed", "operator_threshold", "operator_softness", "operator_mix",
+		"operator_axis_x", "operator_axis_y", "operator_pattern_mode", "operator_pattern_family", "operator_distortion", "operator_event_start", "operator_duration"]:
 		if f.has(key) and not _finite_number(f.get(key, null)):
 			errors.append("fx.%s: non-finite (layer %s)" % [key, layer_id])
 	for key in ["palette_lock_a", "palette_lock_b", "palette_swap"]:
@@ -557,7 +567,7 @@ static func _validate_fx(fx, layer_id: String) -> Array:
 		var source_color = f.get("palette_source_color", null)
 		if not (source_color is Array) or (source_color as Array).size() < 3 or not _finite_numbers(source_color as Array):
 			errors.append("fx.palette_source_color: expected finite color (layer %s)" % layer_id)
-	for key in ["fringe_color_a", "fringe_color_b", "final_tint_color"]:
+	for key in ["fringe_color_a", "fringe_color_b", "final_tint_color", "operator_color_a", "operator_color_b"]:
 		if not f.has(key):
 			continue
 		var color = f.get(key, null)
@@ -565,6 +575,12 @@ static func _validate_fx(fx, layer_id: String) -> Array:
 			errors.append("fx.%s: expected finite color (layer %s)" % [key, layer_id])
 	if f.has("time_source") and str(f.get("time_source", "")) not in TIME_SOURCES:
 		errors.append("fx.time_source: invalid (layer %s)" % layer_id)
+	if f.has("operator") and str(f.get("operator", "")) not in ["NONE", "speedlines_field", "pattern_transition", "noise_erosion_border", "pixel_sort_smear", "vacuum_burst"]:
+		errors.append("fx.operator: invalid (layer %s)" % layer_id)
+	if f.has("operator_secondary") and str(f.get("operator_secondary", "")) not in ["NONE", "speedlines_field", "pattern_transition", "vacuum_burst"]:
+		errors.append("fx.operator_secondary: invalid (layer %s)" % layer_id)
+	if f.has("operator_time_source") and str(f.get("operator_time_source", "")) not in TIME_SOURCES:
+		errors.append("fx.operator_time_source: invalid (layer %s)" % layer_id)
 	# MK-02/MK-04: treatment-mask and edge-mask asset intents are validated
 	# here; a missing required asset fails closed at apply time.
 	if bool(f.get("effect_mask_enabled", false)):
@@ -851,6 +867,22 @@ static func field_meta_more() -> Dictionary:
 		"palette_value": {"kind": "amount", "min": 0.0, "max": 2.0, "step": 0.05},
 		"final_tint_amount": {"kind": "amount", "min": 0.0, "max": 1.0, "step": 0.01, "unit": "final"},
 		"final_tint_color": {"kind": "color", "scope": "FINAL_COMPOSITE"},
+		"operator": {"kind": "option", "options": ["NONE", "speedlines_field", "pattern_transition", "noise_erosion_border", "pixel_sort_smear", "vacuum_burst"]},
+		"operator_secondary": {"kind": "option", "options": ["NONE", "speedlines_field", "pattern_transition", "vacuum_burst"]},
+		"operator_strength": {"kind": "amount", "min": 0.0, "max": 1.0, "step": 0.01},
+		"operator_scale": {"kind": "amount", "min": 0.25, "max": 4.0, "step": 0.05},
+		"operator_speed": {"kind": "amount", "min": 0.0, "max": 4.0, "step": 0.05},
+		"operator_threshold": {"kind": "amount", "min": 0.0, "max": 1.0, "step": 0.01},
+		"operator_softness": {"kind": "amount", "min": 0.001, "max": 1.0, "step": 0.01},
+		"operator_mix": {"kind": "amount", "min": 0.0, "max": 1.0, "step": 0.01},
+		"operator_axis_x": {"kind": "amount", "min": -1.0, "max": 1.0, "step": 0.01},
+		"operator_axis_y": {"kind": "amount", "min": -1.0, "max": 1.0, "step": 0.01},
+		"operator_pattern_mode": {"kind": "amount", "min": 0.0, "max": 1.0, "step": 1.0},
+		"operator_pattern_family": {"kind": "amount", "min": 0.0, "max": 2.0, "step": 1.0},
+		"operator_distortion": {"kind": "amount", "min": 0.0, "max": 1.0, "step": 0.01},
+		"operator_time_source": {"kind": "option", "options": ["PRESENTATION_TIME", "FREE_RUN"]},
+		"operator_color_a": {"kind": "color"},
+		"operator_color_b": {"kind": "color"},
 		"time_source": {"kind": "option", "options": ["PRESENTATION_TIME", "FREE_RUN"]},
 	}
 

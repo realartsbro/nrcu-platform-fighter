@@ -14,6 +14,7 @@ const LANES := ["TARGET_LOCAL", "FINAL_COMPOSITE", "DEFERRED_3D"]
 const TIME_SOURCES := ["PRESENTATION_TIME", "FREE_RUN"]
 const COST_CLASSES := ["NONE", "LOW", "MEDIUM", "HIGH", "DEFERRED"]
 const STATUSES := ["ADAPTER_ONLY", "SUPPORTED", "UNSUPPORTED", "DEFERRED"]
+const GOLD_OPERATOR_IDS := ["speedlines_field", "pattern_transition", "noise_erosion_border", "pixel_sort_smear", "vacuum_burst"]
 
 # Stable order is part of the contract. Do not derive this from Dictionary
 # iteration or from the order in which a shader happens to expose uniforms.
@@ -37,6 +38,7 @@ const NAMED_OPERATOR_IDS := [
 	"speedlines_field",
 	"pattern_transition",
 	"vacuum_burst",
+	"pixel_sort_smear",
 	"perimeter_flux",
 	"noise_erosion_border",
 	"contour_pulse",
@@ -126,13 +128,13 @@ static func validate_registry() -> Dictionary:
 		if str(row.get("scope", "")) == "LOCAL" and str(row.get("status", "")) not in ["ADAPTER_ONLY", "UNSUPPORTED"]:
 			errors.append("local operator has an invalid status: %s" % str(operator_id))
 		if str(row.get("scope", "")) == "FINAL_COMPOSITE":
-			var expected_final_status := "SUPPORTED" if operator_id == "final_composite" and final_composite_supported() else "UNSUPPORTED"
+			var expected_final_status := "SUPPORTED" if ((operator_id == "final_composite" and final_composite_supported()) or (operator_id in GOLD_OPERATOR_IDS and bool(row.get("authoring_reachable", false)) and bool(row.get("persistence_proven", false)) and bool(row.get("runtime_observable", false)))) else "UNSUPPORTED"
 			if str(row.get("status", "")) != expected_final_status:
-				errors.append("final-composite operator status is not truthful: %s" % str(operator_id))
+				errors.append("final-composite operator status is not truthful: %s" % operator_id)
 		if str(row.get("scope", "")) == "DEFERRED_3D" and str(row.get("status", "")) != "DEFERRED":
 			errors.append("3D operator must be classified DEFERRED: %s" % str(operator_id))
-		if str(row.get("status", "")) == "SUPPORTED" and operator_id != "final_composite":
-			errors.append("only final_composite may be SUPPORTED: %s" % str(operator_id))
+		if str(row.get("status", "")) == "SUPPORTED" and operator_id != "final_composite" and operator_id not in GOLD_OPERATOR_IDS:
+			errors.append("only final_composite may be SUPPORTED: %s" % operator_id)
 		if str(row.get("status", "")) in ["UNSUPPORTED", "DEFERRED"] and bool(row.get("runtime_observable", false)):
 			errors.append("unsupported/deferred operator claims runtime proof: %s" % str(operator_id))
 		if str(row.get("cost_class", "")) not in COST_CLASSES:
@@ -240,6 +242,12 @@ static func operator_ids_for_layer(layer: Dictionary) -> Array:
 	if bool(mask.get("enabled", false)):
 		ids.append("mask")
 	var fx: Dictionary = layer.get("fx", {}) if layer.get("fx", {}) is Dictionary else {}
+	var named_operator := str(fx.get("operator", "NONE"))
+	if named_operator != "" and named_operator != "NONE":
+		ids.append(named_operator)
+	var secondary_operator := str(fx.get("operator_secondary", "NONE"))
+	if secondary_operator != "" and secondary_operator != "NONE":
+		ids.append(secondary_operator)
 	if _active_base(fx):
 		ids.append("base_treatment")
 	if _active_grade(fx):
@@ -296,11 +304,12 @@ static func _build_registry() -> Dictionary:
 		_row("flow", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", "tests/fx_vnext_capability_parity_test.gd", "Flow/driver motion is local and clocked by supplied uniforms."),
 		_row("motion_envelope", "LOCAL", ["PRESENTATION_TIME"], true, true, true, true, "LOW", "tests/fx_vnext_temporal_model_test.gd#TM-03", "Motion envelopes modulate local adapter amounts; event authority remains presentation-owned."),
 		_row("manga_impact", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Global final-frame manga impact candidate; no dedicated implementation or runtime evidence exists in this repository.", "UNSUPPORTED"),
-		_row("speedlines_field", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Global final-frame speedlines field candidate; no dedicated implementation or runtime evidence exists in this repository.", "UNSUPPORTED"),
-		_row("pattern_transition", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Global frame transition candidate; no dedicated implementation or runtime evidence exists in this repository.", "UNSUPPORTED"),
-		_row("vacuum_burst", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Global final-frame vacuum burst candidate; no dedicated implementation or runtime evidence exists in this repository.", "UNSUPPORTED"),
+		_row("speedlines_field", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", "tests/fx_vnext_gold_tranche_test.gd#speedlines_field", "Dedicated radial speedlines field in the FINAL_COMPOSITE shader; driven by supplied presentation/free-run clocks.", "SUPPORTED"),
+		_row("pattern_transition", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", "tests/fx_vnext_gold_tranche_test.gd#pattern_transition", "Dedicated geometric pattern transition over the captured final frame; driven by supplied clocks.", "SUPPORTED"),
+		_row("vacuum_burst", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "HIGH", "tests/fx_vnext_gold_tranche_test.gd#vacuum_burst", "Dedicated radial screen-space vacuum warp and burst ring in FINAL_COMPOSITE.", "SUPPORTED"),
 		_row("perimeter_flux", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Frame/UV/circle-distance graphic candidate on a local input; it is not a source-silhouette perimeter solution.", "UNSUPPORTED"),
-		_row("noise_erosion_border", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Frame/UV/circle-distance erosion-border candidate on a local input; resolved silhouette semantics are not proven.", "UNSUPPORTED"),
+		_row("noise_erosion_border", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", "tests/fx_vnext_gold_tranche_test.gd#noise_erosion_border", "Dedicated local alpha-silhouette distance border with supplied-clock noise erosion; no rectangle/radial fallback.", "ADAPTER_ONLY"),
+		_row("pixel_sort_smear", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, true, true, true, "MEDIUM", "tests/fx_vnext_gold_tranche_test.gd#pixel_sort_smear", "Dedicated local-input directional luminance-run smear; it samples the resolved layer input rather than RGB separation or dither.", "ADAPTER_ONLY"),
 		_row("contour_pulse", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Local source-alpha contour pulse candidate; no implemented contour-aware pass or evidence exists here.", "UNSUPPORTED"),
 		_row("silhouette_extrude", "LOCAL", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Local source-alpha silhouette extrusion candidate; no implemented contour-aware pass or evidence exists here.", "UNSUPPORTED"),
 		_row("print_misregistration", "FINAL_COMPOSITE", ["PRESENTATION_TIME", "FREE_RUN"], true, false, false, false, "NONE", "tests/fx_vnext_operator_foundation_test.gd#supplemental_registry", "Global final-frame print misregistration candidate; no dedicated implementation or runtime evidence exists in this repository.", "UNSUPPORTED"),
