@@ -212,7 +212,7 @@ func rebuild() -> void:
 	var fighters_item := _add_group(root_item, "FIGHTERS")
 	var by_fighter: Dictionary = {}
 	for key in fighter_keys:
-		var ctx: Dictionary = registry.context_for_key(str(key))
+		var ctx: Dictionary = registry.context_for_target(str(key))
 		var fighter := str(ctx.get("fighter_id", ""))
 		if fighter == "":
 			continue
@@ -240,10 +240,10 @@ func rebuild() -> void:
 	# ---- COMPOSITION -------------------------------------------------------
 	var comp_item := _add_group(root_item, "COMPOSITION")
 	var comp_entries := []
-	if runtime.registry.has_method("composition_context"):
-		comp_entries.append({"key": "composition", "ctx": runtime.registry.composition_context()})
+	if runtime.registry.has_method("context_for_target"):
+		comp_entries.append({"key": "composition", "ctx": runtime.registry.context_for_target("composition")})
 	for key in composition_keys:
-		comp_entries.append({"key": key, "ctx": registry.context_for_key(str(key))})
+		comp_entries.append({"key": key, "ctx": registry.context_for_target(str(key))})
 	comp_entries.sort_custom(func(a, b): return str(a["ctx"].get("element_id", a["key"])) < str(b["ctx"].get("element_id", b["key"])))
 	_add_role_rows(comp_item, "", _filter_entries(comp_entries, "composition"))
 	var comp_shown := comp_entries.size() > 0
@@ -321,7 +321,7 @@ func _add_group(parent_item: TreeItem, label: String) -> TreeItem:
 
 func _add_target_row(parent_item: TreeItem, key: String, label: String) -> TreeItem:
 	var item := tree.create_item(parent_item)
-	var ctx: Dictionary = runtime.registry.context_for_key(key) if runtime != null and runtime.registry != null else {}
+	var ctx: Dictionary = runtime.registry.context_for_target(key) if runtime != null and runtime.registry != null else {}
 	var identity_label := _identity_label(label, ctx)
 	item.set_text(0, identity_label)
 	item.set_text(1, _badge_for(key))
@@ -343,7 +343,7 @@ func _identity_label(label: String, ctx: Dictionary) -> String:
 func _full_identity(key: String, side := "", ctx := {}) -> String:
 	var identity: Dictionary = ctx
 	if identity.is_empty() and runtime != null and runtime.registry != null:
-		identity = runtime.registry.context_for_key(key)
+		identity = runtime.registry.context_for_target(key)
 	var actual_side := side if side != "" else str(identity.get("visual_side", ""))
 	return "Target identity\nkey: %s\nfighter: %s\nrole: %s\nvisual side: %s\nelement: %s" % [
 		key,

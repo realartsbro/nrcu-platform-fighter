@@ -10,6 +10,7 @@ extends RefCounted
 # Pure data layer: no UI, no rendering.
 
 const FxLookScript := preload("res://scripts/fx_vnext/fx_look.gd")
+const FxCompositionScript := preload("res://scripts/fx_vnext/fx_composition.gd")
 
 var base_dir: String = "user://nrcu_fx_vnext_drafts"
 
@@ -121,6 +122,8 @@ static func check_structure(look) -> Array:
 # ---------------------------------------------------------------- target drafts
 
 func save_target(signature: String, look: Dictionary, base_revision: int, dirty := true) -> Dictionary:
+	if str(look.get("schema", "")) == FxCompositionScript.SCHEMA:
+		return save_composition(signature, look, base_revision, dirty)
 	var record := {
 		"kind": "target",
 		"target_signature": signature,
@@ -134,6 +137,60 @@ func save_target(signature: String, look: Dictionary, base_revision: int, dirty 
 
 func load_target(signature: String) -> Dictionary:
 	return _read_record(target_path(signature))
+
+func save_composition(signature: String, composition: Dictionary, base_revision: int, dirty := true) -> Dictionary:
+	var record := {
+		"kind": "composition",
+		"target_signature": signature,
+		"base_revision": int(base_revision),
+		"composition": composition,
+		"dirty": bool(dirty),
+		"updated_unix": int(Time.get_unix_time_from_system()),
+	}
+	var ok := _write_record(target_path(signature), record)
+	return {"ok": ok, "errors": [] if ok else ["cannot write composition draft for " + signature]}
+
+func load_composition(signature: String) -> Dictionary:
+	var path := target_path(signature)
+	if not FileAccess.file_exists(path):
+		return {"ok": false, "missing": true, "record": {}, "errors": []}
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return {"ok": false, "missing": false, "record": {}, "errors": ["draft unreadable: " + path]}
+	var parsed = JSON.parse_string(file.get_as_text())
+	file.close()
+	if not (parsed is Dictionary):
+		return {"ok": false, "missing": false, "record": {}, "errors": ["draft corrupt: " + path]}
+	var record: Dictionary = parsed
+	var composition = record.get("composition", null)
+	# Accept a composition document written through the generic target API as a
+	# compatibility path; composition authority still owns its interpretation.
+	if composition == null and record.get("look", null) is Dictionary:
+		var candidate: Dictionary = record["look"]
+		if str(candidate.get("schema", "")) == FxCompositionScript.SCHEMA:
+			composition = candidate
+	if not (composition is Dictionary):
+		return {"ok": false, "missing": false, "record": {}, "errors": ["composition draft has no composition: " + path]}
+	var struct_errors: Array = []
+	var comp: Dictionary = composition
+	if str(comp.get("schema", "")) != FxCompositionScript.SCHEMA:
+		struct_errors.append("composition draft has the wrong schema")
+	if str(comp.get("composition_id", "")) == "":
+		struct_errors.append("composition draft has no composition_id")
+	if not (comp.get("final_passes", null) is Array):
+		struct_errors.append("composition draft.final_passes is not an array")
+	else:
+		for raw_pass in comp["final_passes"]:
+			if not (raw_pass is Dictionary):
+				struct_errors.append("composition draft pass is not an object")
+	return {
+		"ok": true,
+		"missing": false,
+		"record": {"kind": "composition", "target_signature": str(record.get("target_signature", signature)), "base_revision": int(record.get("base_revision", 0)), "composition": comp, "dirty": bool(record.get("dirty", true)), "updated_unix": int(record.get("updated_unix", 0))},
+		"errors": [],
+		"struct_ok": struct_errors.is_empty(),
+		"struct_errors": struct_errors,
+	}
 
 func clear_target(signature: String) -> void:
 	var path := target_path(signature)

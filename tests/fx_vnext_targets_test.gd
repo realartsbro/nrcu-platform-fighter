@@ -49,6 +49,10 @@ func _init() -> void:
 	_check(sig_echo == "|ice_mage|echo|left|left||1v1|debug", "echo signature canonical", sig_echo)
 	var sig_mark: String = reg.signature_for_key("mark")
 	_check(sig_mark == "vs_mark||vs_mark||||1v1|debug", "mark signature canonical", sig_mark)
+	var composition_ctx: Dictionary = reg.context_for_target("composition")
+	_check(str(composition_ctx.get("element_id", "")) == "composition" and str(composition_ctx.get("element_role", "")) == "composition", "synthetic composition context is canonical", str(composition_ctx))
+	_check(reg.signature_for_context(composition_ctx) == "composition||composition||||1v1|debug", "synthetic composition signature is collision-safe", reg.signature_for_context(composition_ctx))
+	_check(reg.signature_for_key("composition") == reg.signature_for_context(composition_ctx), "composition key uses canonical context resolver")
 
 	# ---- multiplayer context: FFA_4 ----------------------------------------
 	var VSRequest := preload("res://scripts/vs_presentation_request.gd")

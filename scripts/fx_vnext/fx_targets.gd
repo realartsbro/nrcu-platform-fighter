@@ -197,12 +197,19 @@ func context_for_key(key: String) -> Dictionary:
 		context["element_id"] = "stage"
 	return context
 
-func signature_for_key(key: String) -> String:
-	var context := context_for_key(key)
+func context_for_target(key: String) -> Dictionary:
+	# One resolver for every target identity. "composition" is synthetic and
+	# must never fall through to the ordinary slot/node registry.
+	return composition_context() if key == "composition" else context_for_key(key)
+
+func signature_for_context(ctx: Dictionary) -> String:
 	var parts: Array = []
 	for field in SIGNATURE_ORDER:
-		parts.append(str(context.get(field, "")))
+		parts.append(str(ctx.get(field, "")))
 	return "|".join(parts)
+
+func signature_for_key(key: String) -> String:
+	return signature_for_context(context_for_target(key))
 
 # ---------------------------------------------------------------- slot semantics
 

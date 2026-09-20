@@ -1031,6 +1031,17 @@ func _update_advanced_scope_field(_field: String) -> void:
 func _refresh_scope_ui() -> void:
 	if assignment_scope_option == null or session == null:
 		return
+	if str(session.current_key) == "composition":
+		assignment_scope_option.visible = false
+		assignment_scope_count.visible = false
+		assignment_scope_advanced.visible = false
+		if assignment_scope_status != null:
+			assignment_scope_status.visible = true
+			assignment_scope_status.text = "Composition authority · Production revision %d" % int(session.base.get("revision", 0))
+			assignment_scope_status.tooltip_text = "Scene FX composition is not an assignment scope."
+		return
+	assignment_scope_option.visible = true
+	assignment_scope_count.visible = true
 	var modes: Array = FxSessionScript.ASSIGNMENT_SCOPE_MODES
 	var index := modes.find(str(session.assignment_scope_mode))
 	assignment_scope_option.select(maxi(0, index))
@@ -1044,7 +1055,7 @@ func _refresh_scope_ui() -> void:
 	var affected := 0
 	if runtime != null and runtime.registry != null and not selector.is_empty():
 		for key in runtime.registry.keys():
-			if FxResolverScript.selector_matches(selector, runtime.registry.context_for_key(str(key))):
+			if FxResolverScript.selector_matches(selector, runtime.registry.context_for_target(str(key))):
 				affected += 1
 	assignment_scope_count.text = "affects %d target%s" % [affected, "" if affected == 1 else "s"]
 	if assignment_scope_status != null:
@@ -1695,7 +1706,7 @@ func _select_browser_row(key: String) -> void:
 
 func _refresh_selection_ui() -> void:
 	var registry = runtime.registry
-	if selected_key == "" or not registry.slot_nodes.has(selected_key):
+	if selected_key == "" or (selected_key != "composition" and not registry.slot_nodes.has(selected_key)):
 		breadcrumb_label.text = "NO TARGET SELECTED"
 		if open_browser_button != null:
 			open_browser_button.visible = true
@@ -1719,7 +1730,7 @@ func _refresh_selection_ui() -> void:
 		_rebuild_layers_panel()
 		_rebuild_inspector()
 		return
-	var ctx: Dictionary = registry.context_for_key(selected_key)
+	var ctx: Dictionary = registry.context_for_target(selected_key)
 	breadcrumb_label.text = _breadcrumb(ctx)
 	if open_browser_button != null:
 		open_browser_button.visible = false
@@ -1775,6 +1786,14 @@ func _breadcrumb(ctx: Dictionary) -> String:
 	return str(ctx.get("element_id", "")).to_upper()
 
 func _status_badge_for(key: String) -> String:
+	# Composition is synthetic and has no assignment resolver status.
+	if key == "composition":
+		if session != null and str(session.current_key) == key:
+			return session.badge_text()
+		var loaded: Dictionary = production.load_composition() if production != null else {"ok": false}
+		if bool(loaded.get("ok", false)) and not (loaded.get("doc", {}) as Dictionary).is_empty():
+			return "◈ COMPOSITION / SCENE FX · rev%d" % int((loaded.get("doc", {}) as Dictionary).get("revision", 0))
+		return "◈ COMPOSITION / SCENE FX"
 	# Resolved through the shared resolver (specs/06 §10); briefly cached so
 	# browser rebuilds stay cheap. The open target uses the live session state.
 	if session != null and str(session.current_key) == key:
@@ -1787,7 +1806,7 @@ func _status_badge_for(key: String) -> String:
 		_badge_cache_at = now
 	if _badge_cache.has(key):
 		return str(_badge_cache[key])
-	var ctx: Dictionary = runtime.registry.context_for_key(key)
+	var ctx: Dictionary = runtime.registry.context_for_target(key)
 	var label := "○ UNASSIGNED"
 	var draft_signature: String = runtime.registry.signature_for_key(key)
 	if drafts != null and drafts.has_target(draft_signature):
@@ -1840,7 +1859,7 @@ func _open_session_for(key: String) -> void:
 	var registry = runtime.registry
 	if registry == null or (key != "composition" and not registry.slot_nodes.has(key)):
 		return
-	var ctx: Dictionary = registry.composition_context() if key == "composition" and registry.has_method("composition_context") else registry.context_for_key(key)
+	var ctx: Dictionary = registry.context_for_target(key)
 	# The session's scope builder keys off the canonical element_role id
 	# ("echo"/"primary"/"name"/"stage"/...), not the display role label.
 	var role := str(ctx.get("element_role", ""))
@@ -1899,10 +1918,15 @@ func _production_look_for(key: String) -> Dictionary:
 	# Effective Production style for one target through the shared resolver.
 	if production == null or runtime == null or runtime.registry == null:
 		return {}
+	if key == "composition":
+		var composition_loaded: Dictionary = production.load_composition()
+		if bool(composition_loaded.get("ok", false)) and not (composition_loaded.get("doc", {}) as Dictionary).is_empty():
+			return {"doc": composition_loaded["doc"], "look_id": "", "status": "COMPOSITION", "revision": int((composition_loaded["doc"] as Dictionary).get("revision", 0))}
+		return {}
 	var loaded_asg: Dictionary = production.load_assignments()
 	if not bool(loaded_asg.get("ok", false)):
 		return {}
-	var ctx: Dictionary = runtime.registry.context_for_key(key)
+	var ctx: Dictionary = runtime.registry.context_for_target(key)
 	var res: Dictionary = FxResolverScript.resolve(loaded_asg["doc"], ctx)
 	var status := str(res.get("status", ""))
 	if status != "ASSIGNED" and status != "AMBIGUOUS":
@@ -2705,7 +2729,8 @@ func _sync_actions() -> void:
 	if action_apply == null:
 		return
 	var has: bool = _session_ready() and selected_key != ""
-	var scope_valid: bool = has and not session.assignment_selector().is_empty()
+	var is_composition: bool = has and selected_key == "composition"
+	var scope_valid: bool = has and not is_composition and not session.assignment_selector().is_empty()
 	# No-target is a real authoring state, not a disabled target editor. Hide
 	# target-mutating rows entirely so the workspace cannot imply an action
 	# exists before a target is selected.
@@ -2714,18 +2739,25 @@ func _sync_actions() -> void:
 	if target_action_row3 != null:
 		target_action_row3.visible = has
 	action_save.disabled = not has
-	action_apply.disabled = not scope_valid or str(session.mode) == "SHARED_PROTECTED"
-	action_styling.disabled = not scope_valid
-	action_why.disabled = not has
-	var scope: String = session.assignment_scope_text() if has else ""
-	action_styling.text = ("STYLING " + ("ON" if session.styling_enabled else "OFF")) if has else "STYLING"
-	action_styling.tooltip_text = "Styling scope: " + scope if has else ""
+	action_apply.disabled = not has or str(session.mode) == "SHARED_PROTECTED"
+	var scope: String = session.assignment_scope_text() if scope_valid else ""
+	if action_styling != null:
+		action_styling.visible = not is_composition
+		action_styling.disabled = not scope_valid
 	if action_unassign != null:
+		action_unassign.visible = not is_composition
 		action_unassign.text = "UNASSIGN"
 		action_unassign.disabled = not scope_valid
 		action_unassign.tooltip_text = "Unassign scope: " + scope if scope_valid else "Choose a non-empty assignment scope"
-	action_apply.text = "UPDATE" if (has and str(session.base.get("kind", "")) == "production") else "APPLY"
-	if has:
+		action_why.disabled = not has
+		action_styling.text = ("STYLING " + ("ON" if session.styling_enabled else "OFF")) if has and not is_composition else "STYLING"
+	action_styling.tooltip_text = "Styling scope: " + scope if scope_valid else ""
+	if action_more_menu != null:
+		action_more_menu.visible = has and not is_composition
+	action_apply.text = "UPDATE" if (has and not is_composition and str(session.base.get("kind", "")) == "production") else "APPLY"
+	if has and is_composition:
+		action_apply.tooltip_text = "Commits the Scene FX composition revision"
+	elif has:
 		action_apply.tooltip_text = "Commits to assignment scope: " + session.assignment_scope_text()
 	else:
 		action_apply.tooltip_text = "Select a target and choose a non-empty assignment scope"

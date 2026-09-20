@@ -35,7 +35,8 @@ var role: String = ""
 
 # --- working state
 var look: Dictionary = {}
-var base: Dictionary = {} # {kind: unassigned|production|draft, look_id, revision, shared_count}
+var composition: Dictionary = {}
+var base: Dictionary = {} # {kind: unassigned|production|draft|composition, look_id, revision, shared_count}
 var mode: String = "NONE" # NONE | EDIT_UNASSIGNED | EDIT_PRODUCTION_UNIQUE | SHARED_PROTECTED | EDIT_SHARED_DRAFT
 var dirty: bool = false
 var stash_override: Callable = Callable()
@@ -87,6 +88,13 @@ func redo() -> bool:
 # ================================================================ draft revert
 
 func revert_draft() -> Dictionary:
+	if current_key == "composition":
+		if str(signature) != "":
+			drafts.clear_target(signature)
+		var reopened := _open_composition_target()
+		if bool(reopened.get("ok", false)):
+			dirty = false
+		return reopened
 	# G — Revert Draft returns to the assigned clean Look (or neutral).
 	# DR-05: the shared draft is cleared together with the target draft, so
 	# it can never silently reopen. DR-06: base/mode/revision are reconciled
@@ -127,6 +135,8 @@ func revert_draft() -> Dictionary:
 # ================================================================ library / assignment ops
 
 func unassign_target() -> Dictionary:
+	if current_key == "composition":
+		return {"ok": false, "errors": ["composition authority has no assignment"]}
 	# I — Unassign removes the binding for the user-selected assignment scope;
 	# the Look stays in the Library untouched.
 	if mode == "NONE":
@@ -228,6 +238,7 @@ func open_target(key: String, ctx: Dictionary, signature_: String, role_: String
 	_undo_stack = (inbound.get("undo", []) as Array).duplicate()
 	_redo_stack = (inbound.get("redo", []) as Array).duplicate()
 	look = {}
+	composition = {}
 	base = {}
 	mode = "NONE"
 	dirty = false
@@ -235,6 +246,9 @@ func open_target(key: String, ctx: Dictionary, signature_: String, role_: String
 	last_warnings = []
 	assignment_scope_mode = "CURRENT_OCCURRENCE"
 	assignment_selector_override = {}
+
+	if key == "composition":
+		return _open_composition_target()
 
 	var assignments: Dictionary = production.load_assignments()
 	resolution = FxResolverScript.resolve(assignments.get("doc", {}), context) if bool(assignments.get("ok", false)) else {"status": "BROKEN", "chain": []}
@@ -313,6 +327,78 @@ func open_target(key: String, ctx: Dictionary, signature_: String, role_: String
 	mode = "EDIT_UNASSIGNED"
 	return {"ok": true, "opened": "neutral", "errors": last_errors.duplicate()}
 
+func _composition_recipe_id(doc: Dictionary) -> String:
+	var metadata: Dictionary = doc.get("metadata", {}) if doc.get("metadata", {}) is Dictionary else {}
+	var recipe_id := str(metadata.get("recipe_id", ""))
+	if FxRecipesScript.is_composition_recipe(recipe_id):
+		return recipe_id
+	var composition_id := str(doc.get("composition_id", ""))
+	for candidate in FxRecipesScript.COMPOSITION_RECIPE_IDS:
+		if composition_id.begins_with("COMP_" + str(candidate) + "_"):
+			return str(candidate)
+	return ""
+
+func _composition_editor(doc: Dictionary) -> Dictionary:
+	var composition_doc: Dictionary = FxCompositionScript.materialize(doc)
+	var editor := FxLookScript.new_look(str(composition_doc.get("composition_id", "COMP_ACTIVE")), str(composition_doc.get("name", "Scene Composition")))
+	var metadata: Dictionary = composition_doc.get("metadata", {}) if composition_doc.get("metadata", {}) is Dictionary else {}
+	metadata = metadata.duplicate(true)
+	metadata["composition_authority"] = true
+	var recipe_id := _composition_recipe_id(composition_doc)
+	if recipe_id != "":
+		metadata["recipe_id"] = recipe_id
+	editor["metadata"] = metadata
+	var layers := FxCompositionScript.to_layers(composition_doc)
+	if not layers.is_empty():
+		editor["layers"] = layers
+	return FxLookScript.materialize(editor)
+
+func _open_composition_target() -> Dictionary:
+	# Composition is a separate authority boundary. Do not load assignments or
+	# ask the resolver which fighter Look happens to cover this synthetic target.
+	resolution = {"status": "COMPOSITION", "authority": "composition", "chain": []}
+	styling_enabled = true
+	var draft_loaded: Dictionary = drafts.load_composition(signature)
+	if bool(draft_loaded.get("ok", false)):
+		if not bool(draft_loaded.get("struct_ok", false)):
+			last_errors.append("composition draft structurally invalid; kept on disk, opening authority instead: " + str(draft_loaded.get("struct_errors", [])))
+		else:
+			var record: Dictionary = draft_loaded["record"]
+			var production_loaded: Dictionary = production.load_composition()
+			var production_revision := int((production_loaded.get("doc", {}) as Dictionary).get("revision", 0)) if bool(production_loaded.get("ok", false)) else 0
+			var draft_revision := int(record.get("base_revision", 0))
+			var draft_dirty := bool(record.get("dirty", true))
+			# Explicit dirty work remains the author's authority even when
+			# Production advanced while the editor was closed. Clean snapshots are
+			# only eligible while they are not stale.
+			if draft_dirty or production_revision <= draft_revision:
+				composition = FxCompositionScript.materialize(record["composition"])
+				look = _composition_editor(composition)
+				base = {"kind": "composition_draft", "authority": "draft", "look_id": "", "composition_id": str(composition.get("composition_id", "")), "revision": draft_revision, "shared_count": 0}
+				mode = "EDIT_COMPOSITION"
+				dirty = draft_dirty
+				return {"ok": true, "opened": "draft", "errors": []}
+			last_errors.append("clean composition draft is older than Production rev%d; opening current authority" % production_revision)
+
+	var loaded: Dictionary = production.load_composition()
+	if bool(loaded.get("ok", false)) and not (loaded.get("doc", {}) as Dictionary).is_empty():
+		composition = FxCompositionScript.materialize(loaded["doc"])
+		look = _composition_editor(composition)
+		base = {"kind": "composition", "authority": "production", "look_id": "", "composition_id": str(composition.get("composition_id", "")), "revision": int(composition.get("revision", 1)), "shared_count": 0}
+		mode = "EDIT_COMPOSITION"
+		dirty = false
+		return {"ok": true, "opened": "production", "errors": last_errors.duplicate()}
+
+	# A blank composition is still composition-owned state, never a fighter
+	# neutral Look. It becomes persistable once a composition recipe is chosen.
+	composition = FxCompositionScript.new_document("COMP_ACTIVE", "Scene Composition")
+	composition["metadata"] = {"composition_authority": true}
+	look = _composition_editor(composition)
+	base = {"kind": "composition", "authority": "neutral", "look_id": "", "composition_id": "COMP_ACTIVE", "revision": 0, "shared_count": 0}
+	mode = "EDIT_COMPOSITION"
+	dirty = false
+	return {"ok": true, "opened": "neutral", "errors": last_errors.duplicate()}
+
 func _breadcrumb_name() -> String:
 	var selector := assignment_selector()
 	var parts: Array = []
@@ -329,6 +415,8 @@ func _breadcrumb_name() -> String:
 # ================================================================ scope
 
 func set_assignment_scope(mode_: String, custom_selector: Dictionary = {}) -> Dictionary:
+	if current_key == "composition":
+		return {"ok": false, "errors": ["composition authority has no assignment scope"]}
 	var normalized_mode := str(mode_).to_upper()
 	if not ASSIGNMENT_SCOPE_MODES.has(normalized_mode):
 		return {"ok": false, "errors": ["unknown assignment scope: " + normalized_mode]}
@@ -345,6 +433,8 @@ func _context_selector() -> Dictionary:
 	return FxResolverScript.normalize_selector(selector)
 
 func assignment_selector() -> Dictionary:
+	if current_key == "composition":
+		return {}
 	var exact := _context_selector()
 	match assignment_scope_mode:
 		"CURRENT_OCCURRENCE": return exact
@@ -357,6 +447,8 @@ func assignment_selector() -> Dictionary:
 	return exact
 
 func assignment_scope_text() -> String:
+	if current_key == "composition":
+		return "COMPOSITION / SCENE FX"
 	var selector := assignment_selector()
 	var labels := {
 		"CURRENT_OCCURRENCE": "CURRENT OCCURRENCE / EXACT TARGET",
@@ -439,10 +531,33 @@ func edit(mutator: Callable) -> Dictionary:
 	if result is Dictionary and not bool((result as Dictionary).get("ok", true)):
 		return result
 	look = FxLookScript.materialize(look)
+	if current_key == "composition":
+		_sync_composition_from_editor()
 	var check: Dictionary = FxLookScript.validate(look)
 	last_warnings = check["errors"] if not bool(check["ok"]) else []
 	dirty = true
 	return {"ok": true, "errors": [], "warnings": last_warnings.duplicate()}
+
+func _sync_composition_from_editor() -> void:
+	if current_key != "composition":
+		return
+	var recipe_id := _composition_recipe_id(look)
+	if not FxRecipesScript.is_composition_recipe(recipe_id):
+		return
+	var built := FxRecipesScript.instantiate_composition(recipe_id, "active", look.get("layers", []))
+	if not bool(built.get("ok", false)):
+		return
+	var doc: Dictionary = built.get("doc", {})
+	doc["composition_id"] = str(composition.get("composition_id", doc.get("composition_id", "COMP_%s_active" % recipe_id)))
+	doc["name"] = str(look.get("name", composition.get("name", "Scene Composition")))
+	var metadata: Dictionary = composition.get("metadata", {}) if composition.get("metadata", {}) is Dictionary else {}
+	metadata = metadata.duplicate(true)
+	metadata["composition_authority"] = true
+	metadata["recipe_id"] = recipe_id
+	doc["metadata"] = metadata
+	doc["revision"] = int(base.get("revision", composition.get("revision", 1)))
+	doc["status"] = "DRAFT"
+	composition = FxCompositionScript.materialize(doc)
 
 func stash() -> Dictionary:
 	if stash_override.is_valid():
@@ -450,6 +565,11 @@ func stash() -> Dictionary:
 	# Auto-stash (specs/10 §2) — crash-safe editor work, never Production.
 	if base.get("kind", "") == "production" and int(base.get("shared_count", 0)) > 1 and mode == "EDIT_SHARED_DRAFT":
 		return drafts.save_shared(str(base["look_id"]), int(base["revision"]), look, dirty)
+	if current_key == "composition":
+		_sync_composition_from_editor()
+		if str(signature) == "":
+			return {"ok": false, "errors": ["no target signature"]}
+		return drafts.save_composition(signature, composition, int(base.get("revision", 0)), dirty)
 	if str(signature) == "":
 		return {"ok": false, "errors": ["no target signature"]}
 	return drafts.save_target(signature, look, int(base.get("revision", 0)), dirty)
@@ -478,6 +598,7 @@ func close_target() -> void:
 	signature = ""
 	role = ""
 	look = {}
+	composition = {}
 	base = {}
 	mode = "NONE"
 	dirty = false
@@ -519,13 +640,20 @@ func apply(look_id_override := "") -> Dictionary:
 	# Composition authority has no fighter assignment selector. Its Production
 	# transaction writes the explicit composition document, never a target Look.
 	if current_key == "composition":
-		var composition_recipe_id := str((look.get("metadata", {}) as Dictionary).get("recipe_id", ""))
+		var composition_recipe_id := _composition_recipe_id(look)
 		if not FxRecipesScript.is_composition_recipe(composition_recipe_id):
 			return {"ok": false, "errors": ["composition target requires a composition-owned recipe"]}
 		var built_composition := FxRecipesScript.instantiate_composition(composition_recipe_id, "active", look.get("layers", []))
 		if not bool(built_composition.get("ok", false)):
 			return {"ok": false, "errors": built_composition.get("errors", [])}
 		var composition_doc: Dictionary = built_composition.get("doc", {})
+		composition_doc["composition_id"] = str(composition.get("composition_id", composition_doc.get("composition_id", "COMP_%s_active" % composition_recipe_id)))
+		composition_doc["name"] = str(composition.get("name", composition_doc.get("name", "Scene Composition")))
+		var composition_metadata: Dictionary = composition.get("metadata", {}) if composition.get("metadata", {}) is Dictionary else {}
+		composition_metadata = composition_metadata.duplicate(true)
+		composition_metadata["composition_authority"] = true
+		composition_metadata["recipe_id"] = composition_recipe_id
+		composition_doc["metadata"] = composition_metadata
 		var existing_composition: Dictionary = production.load_composition()
 		var composition_revision := 1
 		if bool(existing_composition.get("ok", false)) and not (existing_composition.get("doc", {}) as Dictionary).is_empty():
@@ -536,11 +664,18 @@ func apply(look_id_override := "") -> Dictionary:
 		if not bool(composition_apply.get("ok", false)):
 			last_errors = composition_apply.get("errors", [])
 			return composition_apply
-		look = FxLookScript.materialize(look)
+		var persisted_composition: Dictionary = production.load_composition()
+		if not bool(persisted_composition.get("ok", false)):
+			last_errors = persisted_composition.get("errors", ["composition apply could not be re-read"])
+			return {"ok": false, "errors": last_errors}
+		composition = FxCompositionScript.materialize(persisted_composition["doc"])
+		look = _composition_editor(composition)
+		base = {"kind": "composition", "authority": "production", "look_id": "", "composition_id": str(composition.get("composition_id", "")), "revision": int(composition.get("revision", composition_revision)), "shared_count": 0}
 		last_errors = []
 		dirty = false
-		mode = "EDIT_PRODUCTION_UNIQUE"
-		return {"ok": true, "errors": [], "composition_revision": composition_revision, "revision": composition_revision}
+		mode = "EDIT_COMPOSITION"
+		drafts.save_composition(signature, composition, int(composition.get("revision", composition_revision)), false)
+		return {"ok": true, "errors": [], "composition_revision": int(composition.get("revision", composition_revision)), "revision": int(composition.get("revision", composition_revision))}
 	# R3 §9: if an intentionally disabled binding still covers this scope, say so
 	# — applying will create an active binding that takes precedence over it.
 	var disabled_notice := _disabled_binding_notice()
@@ -599,6 +734,8 @@ func apply(look_id_override := "") -> Dictionary:
 	return {"ok": true, "errors": [], "look_id": final_id, "revision": revision}
 
 func make_unique() -> Dictionary:
+	if current_key == "composition":
+		return {"ok": false, "errors": ["composition authority has no shared Look"]}
 	if mode != "SHARED_PROTECTED":
 		return {"ok": false, "errors": ["Make Unique is only needed for shared Looks"]}
 	var original_id := str(base.get("look_id", ""))
@@ -639,6 +776,8 @@ func _disabled_binding_notice() -> String:
 	return ""
 
 func edit_shared() -> Dictionary:
+	if current_key == "composition":
+		return {"ok": false, "errors": ["composition authority has no shared Look"]}
 	# Opens (or creates) the shared draft for the current shared Look revision.
 	if mode != "SHARED_PROTECTED":
 		return {"ok": false, "errors": ["not in shared-protected state"]}
@@ -655,6 +794,8 @@ func edit_shared() -> Dictionary:
 # ================================================================ styling on/off
 
 func set_styling(enabled: bool) -> Dictionary:
+	if current_key == "composition":
+		return {"ok": false, "errors": ["composition authority has no styling assignment"]}
 	if mode == "NONE":
 		return {"ok": false, "errors": ["no target open"]}
 	var assignments: Dictionary = production.load_assignments()
@@ -691,6 +832,8 @@ func effective_look_id() -> String:
 	return str(resolution.get("look_id", "")) if str(resolution.get("status", "")) in ["ASSIGNED", "AMBIGUOUS"] else ""
 
 func badge_text() -> String:
+	if current_key == "composition":
+		return "◈ COMPOSITION / SCENE FX" + (" · DRAFT" if dirty else "")
 	var effective := str(resolution.get("status", "UNASSIGNED"))
 	var suffix := " · DRAFT" if dirty else ""
 	# R3 §23 fix: a resolution that merely POINTS at a look whose file is gone
@@ -716,6 +859,8 @@ func badge_text() -> String:
 	return "○ UNASSIGNED"
 
 func status_detail() -> String:
+	if current_key == "composition":
+		return "COMPOSITION / SCENE FX\nComposition revision: %d\nAuthority: %s" % [int(base.get("revision", 0)), str(base.get("authority", "neutral")).to_upper()]
 	var lines: Array = []
 	var effective := str(resolution.get("status", "UNASSIGNED"))
 	if effective == "ASSIGNED" or effective == "AMBIGUOUS":
@@ -731,6 +876,8 @@ func status_detail() -> String:
 	return "\n".join(lines)
 
 func why() -> Array:
+	if current_key == "composition":
+		return ["COMPOSITION / SCENE FX", "Production revision: %d" % int(base.get("revision", 0)), "Assignment scope does not apply."]
 	# specs/06 §10: explain the winning match in human terms.
 	var lines: Array = []
 	var assignments: Dictionary = production.load_assignments()
