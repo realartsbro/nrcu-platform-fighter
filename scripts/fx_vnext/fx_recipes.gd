@@ -28,6 +28,28 @@ const RECIPE_IDS := HERO_RECIPE_IDS + GOLD_RECIPE_IDS + CURATED_RECIPE_IDS
 const FxCompositionScript := preload("res://scripts/fx_vnext/fx_composition.gd")
 const COMPOSITION_RECIPE_IDS := [KINETIC_RUSH, PATTERN_CUT, VACUUM_CLASH, CLASH_OVERDRIVE]
 
+# Gold macro option domains are deliberately keyed by recipe, macro, and
+# canonical field. A value from one operator domain must never be reused as a
+# value in another domain (for example, PULL/PUSH is not a pattern family).
+const MACRO_OPTION_MAPS := {
+	"KINETIC_RUSH": {
+		"DISTORTION": {"fx.operator_mix_mode": {"LINES": 0.0, "DISTORTION": 1.0, "COMBINED": 2.0}},
+	},
+	"SIGNAL_MELT": {
+		"CHROMATIC_SPLIT": {"fx.operator_mix_mode": {"LINES": 0.0, "DISTORTION": 1.0, "COMBINED": 2.0}},
+	},
+	"CLASH_OVERDRIVE": {
+		"DISTORTION": {"fx.operator_mix_mode": {"LINES": 0.0, "DISTORTION": 1.0, "COMBINED": 2.0}},
+		"GRAPHIC_BREAKUP": {"fx.operator_pattern_family": {"GRID": 0.0, "DIAGONAL": 1.0, "ANGULAR": 2.0}},
+	},
+	"PATTERN_CUT": {
+		"PATTERN": {"fx.operator_pattern_family": {"GRID": 0.0, "DIAGONAL": 1.0, "ANGULAR": 2.0}},
+	},
+	"VACUUM_CLASH": {
+		"POLARITY": {"fx.operator_polarity": {"PULL": 0.0, "PUSH": 1.0}},
+	},
+}
+
 static func recipe_ids() -> Array:
 	return RECIPE_IDS.duplicate()
 
@@ -69,7 +91,12 @@ static func instantiate(recipe_id: String, instance_key: String) -> Dictionary:
 		if fixed_layers.is_empty():
 			errors.append("%s: failed to materialize" % str(spec.get("instance_key", "layer")))
 		else:
-			layers.append(fixed_layers[0])
+			# A few Gold fields predate the shared neutral table. Restore only the
+			# recipe's declared canonical values after generic materialization so the
+			# recipe remains lossless without adding a second creative state store.
+			var fixed_layer: Dictionary = fixed_layers[0]
+			_restore_authored_fields(fixed_layer, spec)
+			layers.append(fixed_layer)
 	if not errors.is_empty():
 		return {"ok": false, "errors": errors, "layers": layers}
 	var result := {
@@ -77,11 +104,21 @@ static func instantiate(recipe_id: String, instance_key: String) -> Dictionary:
 		"errors": [],
 		"recipe_id": recipe_id,
 		"instance_key": key,
+		"recipe_instance_id": key,
 		"layers": layers,
 		"layer_ids": layers.map(func(layer): return str((layer as Dictionary).get("layer_id", ""))),
+		"pass_ids": [],
+	}
+	result["membership"] = {
+		"recipe_id": recipe_id,
+		"recipe_instance_id": key,
+		"layer_ids": result["layer_ids"].duplicate(),
+		"pass_ids": [],
 	}
 	if COMPOSITION_RECIPE_IDS.has(recipe_id):
 		result["composition"] = instantiate_composition(recipe_id, key, layers)
+		result["pass_ids"] = (result["composition"].get("pass_ids", []) as Array).duplicate()
+		(result["membership"] as Dictionary)["pass_ids"] = result["pass_ids"].duplicate()
 	return result
 
 static func is_composition_recipe(recipe_id: String) -> bool:
@@ -134,67 +171,283 @@ static func instantiate_look(recipe_id: String, look_id: String, look_name: Stri
 	look["metadata"]["recipe_macros"] = recipe.get("macros", []).duplicate(true)
 	look["metadata"]["recipe_target_compatibility"] = recipe.get("target_compatibility", {}).duplicate(true)
 	look["metadata"]["source_semantics"] = recipe.get("source_semantics", {}).duplicate(true)
+	# Provenance is membership-only. Creative values stay in canonical layers
+	# (and composition passes); this index only records which ids belong to the
+	# recipe instance so later macros cannot fan out to sibling instances.
+	look["metadata"]["recipe_instances"] = [(result.get("membership", {}) as Dictionary).duplicate(true)]
 	look = FxLookScript.materialize(look)
+	for raw_layer in result.get("layers", []):
+		var recipe_layer: Dictionary = raw_layer
+		var canonical_layer: Dictionary = FxLookScript.find_layer(look, str(recipe_layer.get("layer_id", "")))
+		if not canonical_layer.is_empty():
+			for raw_spec in recipe.get("layers", []):
+				var spec: Dictionary = raw_spec
+				if deterministic_layer_id(recipe_id, instance_key, str(spec.get("instance_key", ""))) == str(recipe_layer.get("layer_id", "")):
+					_restore_authored_fields(canonical_layer, spec)
+					break
 	var validation := FxLookScript.validate_input(look)
 	if not bool(validation.get("ok", false)):
 		return {"ok": false, "errors": validation.get("errors", []), "layers": result["layers"], "look": look}
 	result["look"] = look
 	return result
 
-static func apply_macro(doc: Dictionary, recipe_id: String, macro_id: String, value) -> bool:
-	# Apply an intent value to the authored canonical fields of every matching
-	# recipe layer. Advanced fields remain the sole source of truth after this
-	# mapping and therefore round-trip through the normal session transaction.
+static func apply_macro(doc: Dictionary, recipe_id: String, arg3, arg4, arg5 = null) -> bool:
+	# New callers pass (recipe_id, recipe_instance_id, macro_id, value). The
+	# legacy four-argument form remains for existing single-instance Looks, but
+	# it is resolved through membership metadata when available.
 	var recipe := _definition(recipe_id)
-	if recipe.is_empty():
+	if recipe.is_empty() or not (doc is Dictionary):
 		return false
-	var macro: Dictionary = {}
-	for raw_macro in recipe.get("macros", []):
-		if str((raw_macro as Dictionary).get("id", "")) == macro_id:
-			macro = raw_macro
-			break
+	var explicit_instance := arg5 != null
+	var instance_selector = arg3
+	var macro_id := ""
+	var macro_value
+	if explicit_instance:
+		# Also accept the append-compatible form (macro_id, value,
+		# recipe_instance_id) so integrations can migrate without a flag day.
+		if _has_macro(recipe, str(arg3)):
+			macro_id = str(arg3)
+			macro_value = arg4
+			instance_selector = arg5
+		else:
+			macro_id = str(arg4)
+			macro_value = arg5
+	else:
+		macro_id = str(arg3)
+		macro_value = arg4
+	var macro: Dictionary = _find_macro(recipe, macro_id)
 	if macro.is_empty():
 		return false
+
+	var membership := _resolve_membership(doc, recipe_id, instance_selector, explicit_instance)
+	var selected_layer_ids: Dictionary = _id_set(membership.get("layer_ids", []))
+	var selected_pass_ids: Dictionary = _id_set(membership.get("pass_ids", []))
+	if explicit_instance and selected_layer_ids.is_empty() and selected_pass_ids.is_empty():
+		return false
+
 	var mapping: Dictionary = macro.get("mapping", {})
-	for raw_layer in doc.get("layers", []):
-		if not (raw_layer is Dictionary):
+	if mapping.is_empty():
+		return false
+	var staged_layers: Array = (doc.get("layers", []) as Array).duplicate(true)
+	var staged_passes: Array = (doc.get("final_passes", []) as Array).duplicate(true)
+	var layer_changed := false
+	var pass_changed := false
+	var changed_layer_indexes: Array = []
+	var changed_pass_indexes: Array = []
+	for index in range(staged_layers.size()):
+		if not (staged_layers[index] is Dictionary):
 			continue
-		var layer: Dictionary = raw_layer
+		var layer: Dictionary = staged_layers[index]
+		var layer_id := str(layer.get("layer_id", ""))
+		if explicit_instance and not selected_layer_ids.has(layer_id):
+			continue
+		if not explicit_instance and not selected_layer_ids.is_empty() and not selected_layer_ids.has(layer_id):
+			continue
 		for raw_path in mapping.keys():
 			var path := str(raw_path)
 			var rule: Dictionary = mapping[raw_path] if mapping[raw_path] is Dictionary else {}
 			var source := str(rule.get("source", "value"))
-			var mapped = _macro_mapped_value(layer, path, rule, source, value)
-			if mapped != null:
-				_set_field(layer, path, mapped)
+			var mapped = _macro_mapped_value(layer, path, rule, source, macro_value, recipe_id, macro_id)
+			if mapped == null or not _set_field(layer, path, mapped):
+				return false
+		layer_changed = true
+		changed_layer_indexes.append(index)
+		staged_layers[index] = layer
+	for index in range(staged_passes.size()):
+		if not (staged_passes[index] is Dictionary):
+			continue
+		var final_pass: Dictionary = staged_passes[index]
+		var pass_id := str(final_pass.get("pass_id", ""))
+		if explicit_instance and not selected_pass_ids.has(pass_id):
+			continue
+		if not explicit_instance and not selected_pass_ids.is_empty() and not selected_pass_ids.has(pass_id):
+			continue
+		for raw_path in mapping.keys():
+			var path := str(raw_path)
+			var rule: Dictionary = mapping[raw_path] if mapping[raw_path] is Dictionary else {}
+			var source := str(rule.get("source", "value"))
+			var mapped = _macro_mapped_value(final_pass, path, rule, source, macro_value, recipe_id, macro_id)
+			if mapped == null or not _set_field(final_pass, path, mapped):
+				return false
+			pass_changed = true
+		changed_pass_indexes.append(index)
+		staged_passes[index] = final_pass
+	if not layer_changed and not pass_changed:
+		return false
+	var live_layers: Array = doc.get("layers", [])
+	for index in changed_layer_indexes:
+		_replace_dictionary_in_place(live_layers[index] as Dictionary, staged_layers[index] as Dictionary)
+	if doc.has("final_passes"):
+		var live_passes: Array = doc.get("final_passes", [])
+		for index in changed_pass_indexes:
+			_replace_dictionary_in_place(live_passes[index] as Dictionary, staged_passes[index] as Dictionary)
 	return true
 
-static func _macro_mapped_value(layer: Dictionary, path: String, rule: Dictionary, source: String, value):
+static func _replace_dictionary_in_place(target: Dictionary, source: Dictionary) -> void:
+	for raw_key in target.keys():
+		if not source.has(raw_key):
+			target.erase(raw_key)
+	for raw_key in source.keys():
+		if target.has(raw_key) and target[raw_key] is Dictionary and source[raw_key] is Dictionary:
+			_replace_dictionary_in_place(target[raw_key] as Dictionary, source[raw_key] as Dictionary)
+		else:
+			target[raw_key] = source[raw_key].duplicate(true) if source[raw_key] is Array or source[raw_key] is Dictionary else source[raw_key]
+
+static func _has_macro(recipe: Dictionary, macro_id: String) -> bool:
+	return not _find_macro(recipe, macro_id).is_empty()
+
+static func _find_macro(recipe: Dictionary, macro_id: String) -> Dictionary:
+	for raw_macro in recipe.get("macros", []):
+		if str((raw_macro as Dictionary).get("id", "")) == macro_id:
+			return (raw_macro as Dictionary).duplicate(true)
+	return {}
+
+static func _resolve_membership(doc: Dictionary, recipe_id: String, selector, explicit_instance: bool) -> Dictionary:
+	if selector is Dictionary:
+		var supplied: Dictionary = (selector as Dictionary).duplicate(true)
+		if supplied.has("instance_id") and not supplied.has("recipe_instance_id"):
+			supplied["recipe_instance_id"] = supplied["instance_id"]
+		return supplied
+	var selector_id := str(selector).strip_edges()
+	if selector_id.begins_with(recipe_id + ":"):
+		selector_id = selector_id.substr(recipe_id.length() + 1)
+	var matching: Array = []
+	var metadata = doc.get("metadata", {})
+	if metadata is Dictionary:
+		matching.append_array(_membership_entries((metadata as Dictionary).get("recipe_instances", [])))
+	matching.append_array(_membership_entries(doc.get("recipe_instances", [])))
+	var resolved: Dictionary = {}
+	for raw_entry in matching:
+		if not (raw_entry is Dictionary):
+			continue
+		var entry: Dictionary = raw_entry
+		if str(entry.get("recipe_id", recipe_id)) != recipe_id:
+			continue
+		var entry_id := str(entry.get("recipe_instance_id", entry.get("instance_id", "")))
+		if explicit_instance and entry_id != selector_id:
+			continue
+		for key in ["layer_ids", "pass_ids"]:
+			var ids: Array = entry.get(key, []) if entry.get(key, []) is Array else []
+			var current: Array = resolved.get(key, [])
+			for raw_id in ids:
+				if str(raw_id) not in current:
+					current.append(str(raw_id))
+			resolved[key] = current
+		if explicit_instance:
+			break
+	if explicit_instance and resolved.is_empty():
+		return _derived_membership(recipe_id, selector_id)
+	if not resolved.is_empty():
+		return resolved
+	if explicit_instance:
+		return _derived_membership(recipe_id, selector_id)
+	return {}
+
+static func _membership_entries(raw_entries) -> Array:
+	if raw_entries is Array:
+		return (raw_entries as Array).duplicate(true)
+	if raw_entries is Dictionary:
+		var out: Array = []
+		for raw_key in (raw_entries as Dictionary).keys():
+			var entry = (raw_entries as Dictionary)[raw_key]
+			if entry is Dictionary:
+				var copy: Dictionary = (entry as Dictionary).duplicate(true)
+				if not copy.has("recipe_instance_id"):
+					copy["recipe_instance_id"] = str(raw_key)
+				out.append(copy)
+		return out
+	return []
+
+static func _derived_membership(recipe_id: String, instance_id: String) -> Dictionary:
+	var out := {"recipe_id": recipe_id, "recipe_instance_id": instance_id, "layer_ids": [], "pass_ids": []}
+	var recipe := _definition(recipe_id)
+	if recipe.is_empty():
+		return out
+	for raw_spec in recipe.get("layers", []):
+		var spec: Dictionary = raw_spec
+		(out["layer_ids"] as Array).append(deterministic_layer_id(recipe_id, instance_id, str(spec.get("instance_key", "layer"))))
+	if COMPOSITION_RECIPE_IDS.has(recipe_id):
+		for index in range((recipe.get("layers", []) as Array).size()):
+			(out["pass_ids"] as Array).append(deterministic_layer_id(recipe_id, instance_id, "composition_pass_%d" % index))
+		(out["pass_ids"] as Array).append(deterministic_layer_id(recipe_id, instance_id, "composition_neutral"))
+	return out
+
+static func _id_set(ids) -> Dictionary:
+	var out: Dictionary = {}
+	if ids is Array:
+		for raw_id in ids:
+			out[str(raw_id)] = true
+	return out
+
+static func _macro_mapped_value(_layer: Dictionary, path: String, rule: Dictionary, source: String, value, recipe_id: String, macro_id: String):
 	if source == "anchor":
-		return str(value)
+		var anchor := str(value)
+		return anchor if anchor in ["CUSTOM", "TARGET_CENTER", "VS_MARK", "LEFT_FIGHTER", "RIGHT_FIGHTER"] else null
 	if source == "clock":
-		return str(value)
-	if source == "mode":
+		var clock := str(value)
+		return clock if clock in ["PRESENTATION_TIME", "FREE_RUN"] else null
+	if source == "option" or source == "mode":
+		var options := _macro_option_map(recipe_id, macro_id, path)
+		if options.is_empty():
+			return null
 		if value is String:
-			return ["LINES", "DISTORTION", "COMBINED"].find(str(value)) if ["LINES", "DISTORTION", "COMBINED"].has(str(value)) else 0.0
-		return roundi(clampf(float(value), 0.0, 1.0) * 2.0)
-	if source == "option":
-		if value is String:
-			var options := ["GRID", "DIAGONAL", "ANGULAR", "PULL", "PUSH"]
-			var found := options.find(str(value))
-			return float(maxi(found, 0))
-		return roundi(clampf(float(value), 0.0, 1.0) * 2.0)
-	if rule.get("axis", "") != "":
-		var angle := clampf(float(value), 0.0, 1.0) * TAU
-		return cos(angle) if str(rule.get("axis", "")) == "x" else sin(angle)
-	var number := clampf(float(value), 0.0, 1.0)
-	if rule.has("min") or rule.has("max"):
-		return lerpf(float(rule.get("min", 0.0)), float(rule.get("max", 1.0)), number)
-	var leaf := path.get_slice(".", path.get_slice_count(".") - 1)
-	var meta: Dictionary = FxLookScript.field_meta_all().get(leaf, {})
-	if meta.has("min") or meta.has("max"):
-		return lerpf(float(meta.get("min", 0.0)), float(meta.get("max", 1.0)), number)
-	return number
+			return float(options[value]) if options.has(str(value)) else null
+		var numeric = _number_or_null(value)
+		if numeric == null:
+			return null
+		for raw_canonical in options.values():
+			if is_equal_approx(float(raw_canonical), float(numeric)):
+				return float(raw_canonical)
+		return null
+	var number = _number_or_null(value)
+	if number == null:
+		return null
+	var normalized := clampf(float(number), 0.0, 1.0)
+	var mapped := normalized
+	if rule.has("threshold"):
+		var threshold = _number_or_null(rule.get("threshold"))
+		if threshold == null:
+			return null
+		# Threshold mappings are discrete and inclusive at the declared boundary.
+		mapped = 1.0 if normalized >= float(threshold) else 0.0
+	elif rule.has("min") or rule.has("max"):
+		var min_value = _number_or_null(rule.get("min", 0.0))
+		var max_value = _number_or_null(rule.get("max", 1.0))
+		if min_value == null or max_value == null:
+			return null
+		mapped = lerpf(float(min_value), float(max_value), normalized)
+	if rule.has("axis"):
+		var axis := str(rule.get("axis", ""))
+		var angle := normalized * TAU
+		if axis == "x":
+			mapped = cos(angle)
+		elif axis == "y":
+			mapped = sin(angle)
+		else:
+			return null
+	if rule.has("scale"):
+		var scale = _number_or_null(rule.get("scale"))
+		if scale == null:
+			return null
+		# Scale is a post-map gain. Thus scale=0.45 at value=1.0 is 0.45,
+		# while min/max remains an explicit range before that gain.
+		mapped *= float(scale)
+	return mapped
+
+static func _macro_option_map(recipe_id: String, macro_id: String, path: String) -> Dictionary:
+	var recipe_map: Dictionary = MACRO_OPTION_MAPS.get(recipe_id, {})
+	var macro_map: Dictionary = recipe_map.get(macro_id, {}) if recipe_map.get(macro_id, {}) is Dictionary else {}
+	var options = macro_map.get(path, {})
+	return (options as Dictionary).duplicate(true) if options is Dictionary else {}
+
+static func _number_or_null(value):
+	if value == null or value is bool or value is Array or value is Dictionary:
+		return null
+	if value is String:
+		var text := (value as String).strip_edges()
+		return text.to_float() if text.is_valid_float() else null
+	var number := float(value)
+	return number if is_finite(number) else null
 
 static func deterministic_layer_id(recipe_id: String, instance_key: String, layer_key: String) -> String:
 	# Slugs remain readable in the layer panel. The bounded digest prevents
@@ -306,10 +559,10 @@ static func _definition(recipe_id: String) -> Dictionary:
 				"macros": [
 					{"id": "ENERGY", "label": "Energy", "fields": ["fx.operator_strength", "fx.operator_distortion"], "mapping": {"fx.operator_strength": {"source": "value"}, "fx.operator_distortion": {"source": "value", "scale": 0.45}}},
 					{"id": "DENSITY", "label": "Density", "fields": ["fx.operator_scale", "fx.operator_pattern_mode"], "mapping": {"fx.operator_scale": {"source": "value", "min": 0.5, "max": 2.5}, "fx.operator_pattern_mode": {"source": "value", "threshold": 0.72}}},
-					{"id": "FOCUS", "label": "Focus", "fields": ["fx.operator_center_x", "fx.operator_center_y"], "mapping": {"fx.operator_anchor": {"source": "anchor"}}},
+					{"id": "FOCUS", "label": "Focus", "fields": ["fx.operator_anchor"], "mapping": {"fx.operator_anchor": {"source": "anchor"}}},
 					{"id": "DIRECTION", "label": "Direction", "fields": ["fx.operator_axis_x", "fx.operator_axis_y"], "mapping": {"fx.operator_axis_x": {"source": "value", "axis": "x"}, "fx.operator_axis_y": {"source": "value", "axis": "y"}}},
-					{"id": "DISTORTION", "label": "Distortion", "fields": ["fx.operator_distortion", "fx.operator_mix_mode"], "mapping": {"fx.operator_distortion": {"source": "value"}, "fx.operator_mix_mode": {"source": "mode"}}},
-					{"id": "MOTION", "label": "Motion", "fields": ["fx.operator_speed", "fx.operator_time_source"], "mapping": {"fx.operator_speed": {"source": "value", "min": 0.0, "max": 3.0}, "fx.operator_time_source": {"source": "clock"}}},
+					{"id": "DISTORTION", "label": "Distortion", "fields": ["fx.operator_mix_mode"], "mapping": {"fx.operator_mix_mode": {"source": "mode"}}},
+					{"id": "MOTION", "label": "Motion", "fields": ["fx.operator_time_source"], "mapping": {"fx.operator_time_source": {"source": "clock"}}},
 				],
 				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "approximation": "NONE"},
 				"layers": [{"instance_key": "kinetic_speedlines", "name": "Kinetic Speedlines", "type": "FX", "authored_fields": {
@@ -329,16 +582,16 @@ static func _definition(recipe_id: String) -> Dictionary:
 				"advanced_access": true,
 				"macros": [
 					{"id": "PROGRESS", "label": "Progress", "fields": ["fx.operator_progress_start", "fx.operator_progress_end"], "mapping": {"fx.operator_progress_start": {"source": "value", "min": 0.0, "max": 1.0}, "fx.operator_progress_end": {"source": "value", "min": 0.0, "max": 1.0}}},
-					{"id": "PATTERN", "label": "Pattern", "fields": ["fx.operator_pattern_family", "fx.operator_pattern_mode"], "mapping": {"fx.operator_pattern_family": {"source": "option"}, "fx.operator_pattern_mode": {"source": "value"}}},
-					{"id": "DIRECTION", "label": "Direction", "fields": ["fx.operator_axis_x", "fx.operator_axis_y"], "mapping": {"fx.operator_axis_x": {"source": "value"}, "fx.operator_axis_y": {"source": "value"}}},
+					{"id": "PATTERN", "label": "Pattern", "fields": ["fx.operator_pattern_family"], "mapping": {"fx.operator_pattern_family": {"source": "option"}}},
+					{"id": "DIRECTION", "label": "Direction", "fields": ["fx.operator_axis_x", "fx.operator_axis_y"], "mapping": {"fx.operator_axis_x": {"source": "value", "axis": "x"}, "fx.operator_axis_y": {"source": "value", "axis": "y"}}},
 					{"id": "SCALE", "label": "Scale", "fields": ["fx.operator_scale"], "mapping": {"fx.operator_scale": {"source": "value", "min": 0.5, "max": 3.0}}},
 					{"id": "FEATHER", "label": "Feather", "fields": ["fx.operator_softness"], "mapping": {"fx.operator_softness": {"source": "value", "min": 0.01, "max": 0.5}}},
-					{"id": "MOTION", "label": "Motion", "fields": ["fx.operator_speed", "fx.operator_time_source"], "mapping": {"fx.operator_speed": {"source": "value", "min": 0.0, "max": 3.0}, "fx.operator_time_source": {"source": "clock"}}},
+					{"id": "MOTION", "label": "Motion", "fields": ["fx.operator_time_source"], "mapping": {"fx.operator_time_source": {"source": "clock"}}},
 				],
 				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "approximation": "NONE"},
 				"layers": [{"instance_key": "pattern_cut", "name": "Pattern Cut", "type": "FX", "authored_fields": {
 					"layer.plane": "COMPOSITION_FOREGROUND", "layer.lane": "FINAL_COMPOSITE", "layer.authority": "COMPOSITION", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
-					"fx.operator": "pattern_transition", "fx.operator_strength": 0.78, "fx.operator_scale": 1.0, "fx.operator_speed": 1.0, "fx.operator_pattern_family": 1.0, "fx.operator_progress": 0.0, "fx.operator_progress_start": 0.0, "fx.operator_progress_end": 1.0, "fx.operator_progress_mode": "EVENT_LINEAR", "fx.operator_axis_x": 1.0, "fx.operator_axis_y": 0.18, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.operator_color_a": [0.25, 0.95, 1.0, 1.0], "fx.operator_color_b": [1.0, 0.35, 0.82, 1.0], "fx.final_tint_amount": 0.0,
+					"fx.operator": "pattern_transition", "fx.operator_strength": 0.78, "fx.operator_scale": 1.0, "fx.operator_speed": 1.0, "fx.operator_softness": 0.1, "fx.operator_pattern_family": 1.0, "fx.operator_progress": 0.0, "fx.operator_progress_start": 0.0, "fx.operator_progress_end": 1.0, "fx.operator_progress_mode": "EVENT_LINEAR", "fx.operator_axis_x": 1.0, "fx.operator_axis_y": 0.18, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.operator_color_a": [0.25, 0.95, 1.0, 1.0], "fx.operator_color_b": [1.0, 0.35, 0.82, 1.0], "fx.final_tint_amount": 0.0,
 				}}],
 			})
 		LIVING_CONTOUR:
@@ -356,14 +609,14 @@ static func _definition(recipe_id: String) -> Dictionary:
 					{"id": "EDGE_DEPTH", "label": "Edge Depth", "fields": ["mask.width_px", "mask.feather_px"], "mapping": {"mask.width_px": {"source": "value"}, "mask.feather_px": {"source": "value", "scale": 0.25}}},
 					{"id": "BREAKUP", "label": "Breakup", "fields": ["fx.operator_threshold"], "mapping": {"fx.operator_threshold": {"source": "value"}}},
 					{"id": "TURBULENCE", "label": "Turbulence", "fields": ["fx.operator_scale", "fx.operator_speed"], "mapping": {"fx.operator_scale": {"source": "value"}, "fx.operator_speed": {"source": "value"}}},
-					{"id": "DRIFT", "label": "Drift", "fields": ["fx.operator_axis_x", "fx.operator_axis_y"], "mapping": {"fx.operator_axis_x": {"source": "value"}, "fx.operator_axis_y": {"source": "value"}}},
-					{"id": "INTENSITY", "label": "Intensity", "fields": ["fx.operator_strength", "fx.operator_time_source"], "mapping": {"fx.operator_strength": {"source": "value"}, "fx.operator_time_source": {"source": "clock"}}},
+					{"id": "DRIFT", "label": "Drift", "fields": ["fx.operator_axis_x", "fx.operator_axis_y"], "mapping": {"fx.operator_axis_x": {"source": "value", "axis": "x"}, "fx.operator_axis_y": {"source": "value", "axis": "y"}}},
+					{"id": "INTENSITY", "label": "Intensity", "fields": ["fx.operator_strength"], "mapping": {"fx.operator_strength": {"source": "value"}}},
 				],
 				"source_semantics": {"input": "ORIGINAL_SOURCE_ALPHA", "mask_source": "ORIGINAL_SOURCE_ALPHA", "approximation": "NONE"},
 				"layers": [{"instance_key": "living_contour", "name": "Living Contour", "type": "FX", "authored_fields": {
 					"layer.plane": "TARGET_OVERLAY", "layer.lane": "TARGET_LOCAL", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "ADD",
 					"mask.enabled": true, "mask.source": "ORIGINAL_SOURCE_ALPHA", "mask.region": "EDGE_BAND", "mask.space": "SOURCE_SPACE", "mask.width_px": 18.0, "mask.feather_px": 3.0,
-					"fx.operator": "noise_erosion_border", "fx.operator_strength": 0.84, "fx.operator_scale": 1.0, "fx.operator_speed": 1.1, "fx.operator_threshold": 0.48, "fx.operator_softness": 0.12, "fx.operator_time_source": "PRESENTATION_TIME",
+					"fx.operator": "noise_erosion_border", "fx.operator_strength": 0.84, "fx.operator_scale": 1.0, "fx.operator_speed": 1.1, "fx.operator_threshold": 0.48, "fx.operator_softness": 0.12, "fx.operator_axis_x": 1.0, "fx.operator_axis_y": 0.0, "fx.operator_time_source": "PRESENTATION_TIME",
 				}}],
 			})
 		SIGNAL_MELT:
@@ -380,14 +633,14 @@ static func _definition(recipe_id: String) -> Dictionary:
 					{"id": "MELT", "label": "Melt", "fields": ["fx.operator_strength", "fx.operator_scale"], "mapping": {"fx.operator_strength": {"source": "value"}, "fx.operator_scale": {"source": "value", "min": 0.5, "max": 4.0}}},
 					{"id": "THRESHOLD", "label": "Threshold", "fields": ["fx.operator_threshold"], "mapping": {"fx.operator_threshold": {"source": "value"}}},
 					{"id": "SOFTNESS", "label": "Softness", "fields": ["fx.operator_softness"], "mapping": {"fx.operator_softness": {"source": "value", "min": 0.01, "max": 0.5}}},
-					{"id": "DIRECTION", "label": "Direction", "fields": ["fx.operator_axis_x", "fx.operator_axis_y"], "mapping": {"fx.operator_axis_x": {"source": "value"}, "fx.operator_axis_y": {"source": "value"}}},
+					{"id": "DIRECTION", "label": "Direction", "fields": ["fx.operator_axis_x", "fx.operator_axis_y"], "mapping": {"fx.operator_axis_x": {"source": "value", "axis": "x"}, "fx.operator_axis_y": {"source": "value", "axis": "y"}}},
 					{"id": "TURBULENCE", "label": "Turbulence", "fields": ["fx.operator_speed"], "mapping": {"fx.operator_speed": {"source": "value", "min": 0.0, "max": 3.0}}},
 					{"id": "CHROMATIC_SPLIT", "label": "Chromatic Split", "fields": ["fx.operator_mix_mode"], "mapping": {"fx.operator_mix_mode": {"source": "mode"}}},
 				],
 				"source_semantics": {"input": "LOCAL_RESOLVED_INPUT", "approximation": "NONE"},
 				"layers": [{"instance_key": "signal_melt", "name": "Signal Melt", "type": "FX", "authored_fields": {
 					"layer.plane": "TARGET_OVERLAY", "layer.lane": "TARGET_LOCAL", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
-					"fx.operator": "pixel_sort_smear", "fx.operator_strength": 0.98, "fx.operator_scale": 2.4, "fx.operator_threshold": 0.32, "fx.operator_softness": 0.08, "fx.operator_axis_x": 1.0, "fx.operator_axis_y": 0.0, "fx.operator_time_source": "PRESENTATION_TIME",
+					"fx.operator": "pixel_sort_smear", "fx.operator_strength": 0.98, "fx.operator_scale": 2.4, "fx.operator_speed": 1.0, "fx.operator_threshold": 0.32, "fx.operator_softness": 0.08, "fx.operator_mix_mode": 0.0, "fx.operator_axis_x": 1.0, "fx.operator_axis_y": 0.0, "fx.operator_time_source": "PRESENTATION_TIME",
 				}}],
 			})
 		VACUUM_CLASH:
@@ -410,7 +663,7 @@ static func _definition(recipe_id: String) -> Dictionary:
 				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "approximation": "NONE"},
 				"layers": [{"instance_key": "vacuum_clash", "name": "Vacuum Clash", "type": "FX", "authored_fields": {
 					"layer.plane": "COMPOSITION_FOREGROUND", "layer.lane": "FINAL_COMPOSITE", "layer.authority": "COMPOSITION", "layer.input": "ORIGINAL_SOURCE", "layer.blend_mode": "NORMAL",
-					"fx.operator": "vacuum_burst", "fx.operator_anchor": "VS_MARK", "fx.operator_strength": 0.86, "fx.operator_scale": 1.0, "fx.operator_speed": 1.3, "fx.operator_center_x": 0.5, "fx.operator_center_y": 0.5, "fx.operator_polarity": 0.0, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.operator_color_a": [0.25, 0.95, 1.0, 1.0], "fx.operator_color_b": [1.0, 0.35, 0.82, 1.0], "fx.final_tint_amount": 0.0,
+					"fx.operator": "vacuum_burst", "fx.operator_anchor": "VS_MARK", "fx.operator_strength": 0.86, "fx.operator_scale": 1.0, "fx.operator_speed": 1.3, "fx.operator_distortion": 0.0, "fx.operator_center_x": 0.5, "fx.operator_center_y": 0.5, "fx.operator_polarity": 0.0, "fx.operator_time_source": "PRESENTATION_TIME", "fx.operator_event_start": 0.0, "fx.operator_duration": 0.5, "fx.operator_color_a": [0.25, 0.95, 1.0, 1.0], "fx.operator_color_b": [1.0, 0.35, 0.82, 1.0], "fx.final_tint_amount": 0.0,
 				}}],
 			})
 		CLASH_OVERDRIVE:
@@ -425,9 +678,9 @@ static func _definition(recipe_id: String) -> Dictionary:
 				"advanced_access": true,
 				"macros": [
 					{"id": "IMPACT", "label": "Impact", "fields": ["fx.operator_strength"], "mapping": {"fx.operator_strength": {"source": "value"}}},
-					{"id": "DIRECTION", "label": "Direction", "fields": ["fx.operator_axis_x", "fx.operator_axis_y"], "mapping": {"fx.operator_axis_x": {"source": "value"}, "fx.operator_axis_y": {"source": "value"}}},
-					{"id": "GRAPHIC_BREAKUP", "label": "Graphic Breakup", "fields": ["fx.operator_pattern_family", "fx.operator_progress_start", "fx.operator_progress_end"], "mapping": {"fx.operator_pattern_family": {"source": "option"}, "fx.operator_progress_start": {"source": "value"}, "fx.operator_progress_end": {"source": "value"}}},
-					{"id": "DISTORTION", "label": "Distortion", "fields": ["fx.operator_distortion", "fx.operator_mix_mode"], "mapping": {"fx.operator_distortion": {"source": "value"}, "fx.operator_mix_mode": {"source": "mode"}}},
+					{"id": "DIRECTION", "label": "Direction", "fields": ["fx.operator_axis_x", "fx.operator_axis_y"], "mapping": {"fx.operator_axis_x": {"source": "value", "axis": "x"}, "fx.operator_axis_y": {"source": "value", "axis": "y"}}},
+					{"id": "GRAPHIC_BREAKUP", "label": "Graphic Breakup", "fields": ["fx.operator_pattern_family"], "mapping": {"fx.operator_pattern_family": {"source": "option"}}},
+					{"id": "DISTORTION", "label": "Distortion", "fields": ["fx.operator_mix_mode"], "mapping": {"fx.operator_mix_mode": {"source": "mode"}}},
 					{"id": "DURATION", "label": "Duration", "fields": ["fx.operator_duration"], "mapping": {"fx.operator_duration": {"source": "value", "min": 0.1, "max": 3.0}}},
 				],
 				"source_semantics": {"input": "FINAL_COMPOSITE_CAPTURE", "composition": "VACUUM_SPEEDLINES_PATTERN", "approximation": "NONE"},
@@ -641,6 +894,11 @@ static func authored_field_paths_from_recipe(recipe: Dictionary) -> Array:
 				seen[text] = true
 				out.append(text)
 	return out
+
+static func _restore_authored_fields(layer: Dictionary, spec: Dictionary) -> void:
+	var authored: Dictionary = spec.get("authored_fields", {})
+	for raw_path in authored.keys():
+		_set_field(layer, str(raw_path), authored[raw_path])
 
 static func _set_field(layer: Dictionary, path: String, value) -> bool:
 	if not _is_supported_field_path(path):
